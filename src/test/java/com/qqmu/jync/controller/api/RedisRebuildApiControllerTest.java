@@ -15,6 +15,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.projection.redis.RedisRebuildService;
 
 /**
@@ -27,6 +28,7 @@ class RedisRebuildApiControllerTest {
 
     @Autowired private MockMvc mvc;
     @MockitoBean private RedisRebuildService service;
+    @MockitoBean private ProjectService projectService;
 
     @Test
     void rebuildReturnsTheCountsTheButtonReports() throws Exception {

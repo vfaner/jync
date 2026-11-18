@@ -80,6 +80,9 @@ class MigrationConnectionViewTest {
         form.setVerifyTls(true);
         form.setConnectTimeoutMs(5000);
         form.setRequestTimeoutMs(60000);
+        // The form is only rendered after the controller has loaded the connection and
+        // checked its owner; an unstubbed findById would take the redirect path instead.
+        when(service.findById(3L)).thenReturn(java.util.Optional.of(connection()));
         when(service.formFor(3L)).thenReturn(form);
 
         String page = mvc.perform(get("/migrations/connections/3/edit").with(asAdmin()))

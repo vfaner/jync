@@ -14,6 +14,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
 import com.qqmu.jync.service.metrics.MetricsRange;
 import com.qqmu.jync.service.metrics.ProjectMetricsView;
@@ -51,6 +52,7 @@ public class ProjectPerformanceController {
             flash.addFlashAttribute("error", "error.project.not.found");
             return "redirect:/projects";
         }
+        AccessGuard.current().requireEditable(project.getOwnerUsername());
         model.addAttribute("project", project);
         model.addAttribute("metricsRange", MetricsRange.parse(range).key());
         // Both ends of the pipeline, so the header says which databases these numbers describe.
@@ -69,9 +71,11 @@ public class ProjectPerformanceController {
     @ResponseBody
     public ResponseEntity<ProjectMetricsView> metrics(@PathVariable Long id,
                                                       @RequestParam(required = false) String range) {
-        if (projectService.findById(id).isEmpty()) {
+        Project project = projectService.findById(id).orElse(null);
+        if (project == null) {
             return ResponseEntity.notFound().build();
         }
+        AccessGuard.current().requireEditable(project.getOwnerUsername());
         ProjectMetricsView view = metricsQueryService.project(id, MetricsRange.parse(range));
         return ResponseEntity.ok(view);
     }

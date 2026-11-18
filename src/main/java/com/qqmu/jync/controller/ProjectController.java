@@ -184,6 +184,7 @@ public class ProjectController {
     @GetMapping("/{id}/edit")
     public String editForm(@PathVariable Long id, Model model, RedirectAttributes flash) {
         return projectService.findById(id).map(project -> {
+            AccessGuard.current().requireEditable(project.getOwnerUsername());
             model.addAttribute("project", project);
             // The service refuses an endpoint switch while running; the form shows the same
             // verdict up front so the user does not fill in a whole edit that cannot save.
@@ -631,6 +632,7 @@ public class ProjectController {
         try {
             var project = projectService.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+            AccessGuard.current().requireEditable(project.getOwnerUsername());
             // 运行中的项目不允许改配置:改完要下次启动才生效,运行中改完看不到反馈。
             // 前端 fieldset 已经 disabled,这层是防直接 POST 的兜底。
             if (Boolean.TRUE.equals(project.getEnabled())) {
@@ -904,6 +906,7 @@ public class ProjectController {
         try {
             var project = projectService.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+            AccessGuard.current().requireEditable(project.getOwnerUsername());
             if (Boolean.TRUE.equals(project.getEnabled())) {
                 flash.addFlashAttribute("error", "error.project.stop.before.config");
                 return "redirect:/projects/" + id;
@@ -954,6 +957,7 @@ public class ProjectController {
         try {
             var project = projectService.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+            AccessGuard.current().requireEditable(project.getOwnerUsername());
             if (Boolean.TRUE.equals(project.getEnabled())) {
                 flash.addFlashAttribute("error", "error.project.stop.before.config");
                 return "redirect:/projects/" + id;

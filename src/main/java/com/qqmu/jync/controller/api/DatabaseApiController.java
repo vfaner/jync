@@ -18,6 +18,7 @@ import com.qqmu.jync.dto.DatabaseConfigForm;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DatabaseHealthService;
@@ -59,8 +60,14 @@ public class DatabaseApiController {
             @RequestParam(defaultValue = "") String ids,
             @RequestParam(defaultValue = "false") boolean refresh) {
         List<DatabaseConfig> configs = new ArrayList<>();
+        AccessGuard guard = AccessGuard.current();
         for (Long id : parseIds(ids)) {
-            service.findById(id).ifPresent(configs::add);
+            service.findById(id).ifPresent(config -> {
+                // Every listed connection must be the caller's: one foreign id in the list
+                // would probe a database this account may not see.
+                guard.requireEditable(config.getOwnerUsername());
+                configs.add(config);
+            });
         }
         List<Map<String, Object>> body = new ArrayList<>();
         if (configs.isEmpty()) {
@@ -112,6 +119,9 @@ public class DatabaseApiController {
     /** Tests a saved connection. */
     @PostMapping("/{id}/test")
     public ResponseEntity<Map<String, Object>> test(@PathVariable Long id) {
+        DatabaseConfig config = service.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.connection.not.found"));
+        AccessGuard.current().requireEditable(config.getOwnerUsername());
         return ResponseEntity.ok(describe(service.test(id)));
     }
 
@@ -157,6 +167,8 @@ public class DatabaseApiController {
      */
     @GetMapping("/{id}/tables")
     public ResponseEntity<Map<String, Object>> tables(@PathVariable Long id) {
+        service.findById(id).ifPresent(config ->
+                AccessGuard.current().requireEditable(config.getOwnerUsername()));
         Map<String, Object> body = new LinkedHashMap<>();
         try {
             ConnectionCatalogService.Tables tables = catalogService.listTables(id);

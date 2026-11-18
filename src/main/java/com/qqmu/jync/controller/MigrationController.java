@@ -129,6 +129,7 @@ public class MigrationController {
             flash.addFlashAttribute("error", "error.migration.not.found");
             return "redirect:/migrations/" + type;
         }
+        AccessGuard.current().requireEditable(task.getOwnerUsername());
         model.addAttribute("task", formFor(task));
         addFormOptions(model, resolved, handler, storedOptions(task, handler),
                 task.getOwnerUsername());
@@ -228,6 +229,8 @@ public class MigrationController {
         if (taskForType(resolved, id, flash) == null) {
             return "redirect:/migrations/" + type;
         }
+        // submit() has no actor of its own: the caller must qualify before it runs.
+        taskService.requireEditable(id, AccessGuard.current());
         try {
             if (taskService.submit(id, MigrationRunTrigger.MANUAL)) {
                 flash.addFlashAttribute("message", "msg.migration.started");

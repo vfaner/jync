@@ -15,6 +15,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.metrics.DbMetricsView;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
 import com.qqmu.jync.service.metrics.MetricsRange;
@@ -57,6 +58,7 @@ public class DatabasePerformanceController {
             flash.addFlashAttribute("error", "error.connection.missing");
             return "redirect:/databases";
         }
+        AccessGuard.current().requireEditable(config.getOwnerUsername());
         MetricsRange window = MetricsRange.parse(range);
         DbMetricsView view = metricsQueryService.database(id, window);
         model.addAttribute("config", config);
@@ -72,9 +74,11 @@ public class DatabasePerformanceController {
     @ResponseBody
     public ResponseEntity<DbMetricsView> metrics(@PathVariable Long id,
                                                  @RequestParam(required = false) String range) {
-        if (databaseConfigService.findById(id).isEmpty()) {
+        DatabaseConfig config = databaseConfigService.findById(id).orElse(null);
+        if (config == null) {
             return ResponseEntity.notFound().build();
         }
+        AccessGuard.current().requireEditable(config.getOwnerUsername());
         return ResponseEntity.ok(metricsQueryService.database(id, MetricsRange.parse(range)));
     }
 

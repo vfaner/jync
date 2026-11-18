@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.qqmu.jync.service.ProjectService;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.cdc.CdcNotHolderException;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
@@ -50,9 +52,11 @@ public class CdcApiController {
     private static final String SERVER_ID_COLLISION_MARKER = "collides";
 
     private final CdcOperationsService operations;
+    private final ProjectService projectService;
 
-    public CdcApiController(CdcOperationsService operations) {
+    public CdcApiController(CdcOperationsService operations, ProjectService projectService) {
         this.operations = operations;
+        this.projectService = projectService;
     }
 
     /**
@@ -62,6 +66,11 @@ public class CdcApiController {
      */
     @GetMapping("/{id}/cdc-probe")
     public ResponseEntity<Map<String, Object>> probe(@PathVariable Long id) {
+        try {
+            projectService.requireEditable(id, AccessGuard.current());
+        } catch (IllegalArgumentException e) {
+            return badRequest(e);
+        }
         CdcProbeResult result;
         try {
             result = operations.probeProject(id);
@@ -95,6 +104,11 @@ public class CdcApiController {
      */
     @PostMapping("/{id}/cdc-rebaseline")
     public ResponseEntity<Map<String, Object>> rebaseline(@PathVariable Long id) {
+        try {
+            projectService.requireEditable(id, AccessGuard.current());
+        } catch (IllegalArgumentException e) {
+            return badRequest(e);
+        }
         boolean restarted;
         try {
             restarted = operations.rebaseline(id);

@@ -12,6 +12,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationConnectionForm;
+import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
 import com.qqmu.jync.model.MigrationConnectionKind;
 import com.qqmu.jync.service.migration.MigrationConnectionService;
@@ -45,6 +46,10 @@ public class MigrationConnectionController {
     @GetMapping("/{id}/edit")
     public String editForm(@PathVariable Long id, Model model, RedirectAttributes flash) {
         try {
+            MigrationConnection connection = service.findById(id)
+                    .orElseThrow(() -> new IllegalArgumentException(
+                            "error.migration.connection.missing"));
+            AccessGuard.current().requireEditable(connection.getOwnerUsername());
             model.addAttribute("form", service.formFor(id));
             addChoices(model);
             return "migration-connection-form";

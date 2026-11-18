@@ -17,6 +17,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.TablePreviewService;
 import com.qqmu.jync.service.TablePreviewService.Side;
 
@@ -33,6 +34,7 @@ class PreviewApiControllerTest {
 
     @Autowired private MockMvc mvc;
     @MockitoBean private TablePreviewService tablePreviewService;
+    @MockitoBean private ProjectService projectService;
 
     private static TablePreview preview() {
         return new TablePreview("source", "Source DB", "PUBLIC", "ORDERS",

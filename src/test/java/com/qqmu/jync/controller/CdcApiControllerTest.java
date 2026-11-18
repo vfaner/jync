@@ -19,6 +19,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.service.cdc.CdcNotHolderException;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcProbeResult;
 import com.qqmu.jync.service.cdc.CdcRestartFailedException;
@@ -39,6 +40,7 @@ class CdcApiControllerTest {
 
     @Autowired private MockMvc mvc;
     @MockitoBean private CdcOperationsService operations;
+    @MockitoBean private ProjectService projectService;
 
     /** 5 过 2 败(SERVER_ID 冲突 + 权限缺失),与 CdcOperationsServiceTest 同款样本。 */
     private static CdcProbeResult fivePassTwoFail() {

@@ -86,6 +86,7 @@ public class EtlBatchController {
             flash.addFlashAttribute("error", "error.etl.batch.not.found");
             return "redirect:/etl";
         }
+        AccessGuard.current().requireEditable(batch.getOwnerUsername());
         List<EtlTask> members = etlBatchService.members(id);
         Map<Long, Boolean> memberRunning = new HashMap<>();
         for (EtlTask member : members) {
@@ -152,6 +153,8 @@ public class EtlBatchController {
     @PostMapping("/{id}/run")
     public String runNow(@PathVariable Long id, RedirectAttributes flash) {
         try {
+            // submit() has no actor of its own: the caller must qualify before it runs.
+            etlBatchService.requireEditable(id, AccessGuard.current());
             if (etlBatchService.submit(id)) {
                 flash.addFlashAttribute("message", "msg.etl.batch.started");
             } else {

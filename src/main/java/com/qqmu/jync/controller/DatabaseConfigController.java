@@ -66,6 +66,7 @@ public class DatabaseConfigController {
     @GetMapping("/{id}/edit")
     public String editForm(@PathVariable Long id, Model model, RedirectAttributes flash) {
         return service.findById(id).map(config -> {
+            AccessGuard.current().requireEditable(config.getOwnerUsername());
             model.addAttribute("config", config);
             model.addAttribute("typeGroups", DatabaseCategory.values());
             model.addAttribute("families", FAMILIES);

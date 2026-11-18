@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,6 +45,10 @@ public class MigrationApiController {
             body.put("success", true);
             body.put("count", indices.size());
             body.put("indices", indices);
+        } catch (AccessDeniedException e) {
+            // An ownership refusal is not a probe result: answering 200 would tell the caller
+            // the endpoint worked and hide the denial from the shared 403 contract.
+            throw e;
         } catch (RuntimeException e) {
             body.put("success", false);
             body.put("message", e.getMessage());
@@ -67,6 +72,8 @@ public class MigrationApiController {
     public Map<String, Object> testSaved(@PathVariable Long id) {
         try {
             return result(service.test(id, AccessGuard.current()), null);
+        } catch (AccessDeniedException e) {
+            throw e;
         } catch (RuntimeException e) {
             return failure(e.getMessage());
         }

@@ -39,7 +39,7 @@ import com.qqmu.jync.service.metrics.MetricsRange;
 import com.qqmu.jync.service.metrics.ProjectMetricsView;
 
 /**
- * The task performance page is open to every signed-in account and carries only this task's
+ * The task performance page is open to the two write roles (the filter chain keeps viewers out) and carries only this task
  * own curves. The process resources used to sit here too; they describe the JVM every task
  * shares, so they moved to the dashboard — one card, one poll, instead of one copy per project.
  */
@@ -57,7 +57,7 @@ class ProjectPerformanceViewTest {
     void aViewerSeesThroughput() throws Exception {
         givenProject();
 
-        String html = page(UserRole.VIEWER);
+        String html = page(UserRole.ADMIN);
 
         assertThat(html).contains("id=\"chart-rows\"")
                 .contains("data-metrics-url=\"/projects/1/metrics\"");
@@ -68,7 +68,7 @@ class ProjectPerformanceViewTest {
     void neitherRoleGetsAProcessBlockOnTheProjectPage() throws Exception {
         givenProject();
 
-        for (UserRole role : UserRole.values()) {
+        for (UserRole role : List.of(UserRole.ADMIN, UserRole.OPS)) {
             String html = page(role);
             assertThat(html).as(role.name())
                     .doesNotContain("id=\"process-block\"")
@@ -80,7 +80,7 @@ class ProjectPerformanceViewTest {
     void thePageTellsTheScriptWhereToPoll() throws Exception {
         givenProject();
 
-        String html = page(UserRole.VIEWER);
+        String html = page(UserRole.ADMIN);
 
         assertThat(html).contains("data-metrics-url=\"/projects/1/metrics\"");
         assertThat(html).contains("data-range=");
@@ -94,7 +94,7 @@ class ProjectPerformanceViewTest {
     void theLagCardAndChartAskTheScriptForDurationUnits() throws Exception {
         givenProject();
 
-        String html = page(UserRole.VIEWER);
+        String html = page(UserRole.ADMIN);
 
         assertThat(html).containsPattern("data-current=\"lag\"[^>]*data-format=\"duration\"");
         assertThat(html).containsPattern("data-chart=\"lag\"[^>]*data-duration=\"true\"");
@@ -108,7 +108,7 @@ class ProjectPerformanceViewTest {
     void theStatusChipCarriesTheLocalizedLabelsForTheScript() throws Exception {
         givenProject();
 
-        String html = page(UserRole.VIEWER);
+        String html = page(UserRole.ADMIN);
 
         assertThat(html).contains("data-running=")
                 .contains("data-stopped=")
@@ -123,7 +123,7 @@ class ProjectPerformanceViewTest {
     void theChangePanelsArePositionedHosts() throws Exception {
         givenProject();
 
-        String html = page(UserRole.VIEWER);
+        String html = page(UserRole.ADMIN);
 
         assertThat(html).contains("class=\"chart-host\" data-chart-share")
                 .contains("class=\"chart-host\" data-chart-hot");
@@ -137,7 +137,7 @@ class ProjectPerformanceViewTest {
     void theJsonCarriesNoProcessSeriesForEitherRole() throws Exception {
         givenProject();
 
-        for (UserRole role : UserRole.values()) {
+        for (UserRole role : List.of(UserRole.ADMIN, UserRole.OPS)) {
             mvc.perform(get("/projects/1/metrics?range=1h").with(as(role)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.series[*].key", hasItem("rows")))
@@ -150,7 +150,7 @@ class ProjectPerformanceViewTest {
     void theRangeParameterReachesTheQuery() throws Exception {
         givenProject();
 
-        mvc.perform(get("/projects/1/metrics?range=7d").with(as(UserRole.VIEWER)))
+        mvc.perform(get("/projects/1/metrics?range=7d").with(as(UserRole.ADMIN)))
                 .andExpect(status().isOk());
 
         org.mockito.Mockito.verify(metricsService)
@@ -177,6 +177,7 @@ class ProjectPerformanceViewTest {
         Project project = new Project();
         project.setId(1L);
         project.setName("orders-sync");
+        project.setOwnerUsername("ops");
         project.setSourceDbId(2L);
         project.setTargetDbId(3L);
         when(projectService.findById(1L)).thenReturn(Optional.of(project));
@@ -201,7 +202,7 @@ class ProjectPerformanceViewTest {
     private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
         user.setId(1L);
-        user.setUsername(role == UserRole.ADMIN ? "admin" : "view");
+        user.setUsername(role == UserRole.ADMIN ? "admin" : "ops");
         user.setPasswordHash("not-checked-here");
         user.setRole(role);
         com.qqmu.jync.service.auth.SyncUserDetails principal =

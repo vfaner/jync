@@ -16,6 +16,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.dto.TableContentAudit;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.sync.ContentAuditRunner;
 
 /**
@@ -31,6 +32,7 @@ class ContentAuditApiControllerTest {
 
     @Autowired private MockMvc mvc;
     @MockitoBean private ContentAuditRunner contentAuditRunner;
+    @MockitoBean private ProjectService projectService;
 
     @Test
     void controllerReturnsContentAuditJson() throws Exception {

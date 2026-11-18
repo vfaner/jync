@@ -24,6 +24,7 @@ import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.repository.AlertStateRepository;
 import com.qqmu.jync.repository.ChangeLogRepository;
@@ -106,7 +107,11 @@ class ProjectRedisValidationTest {
         });
         lenient().when(contextFactory.parseConfig(any(Project.class)))
                 .thenAnswer(i -> new SyncConfig());
-        lenient().when(redisTargetRepository.existsById(REDIS_TARGET_ID)).thenReturn(true);
+        // The policy loads the target row now (its owner is checked), not just its existence.
+        RedisTarget target = new RedisTarget();
+        target.setId(REDIS_TARGET_ID);
+        lenient().when(redisTargetRepository.findById(REDIS_TARGET_ID))
+                .thenReturn(Optional.of(target));
         lenient().when(databaseConfigRepository.findById(SOURCE_ID))
                 .thenReturn(Optional.of(source(DatabaseType.MYSQL)));
     }

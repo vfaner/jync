@@ -108,6 +108,7 @@ public class EtlController {
             flash.addFlashAttribute("error", "error.etl.not.found");
             return "redirect:/etl";
         }
+        AccessGuard.current().requireEditable(task.getOwnerUsername());
         model.addAttribute("task", task);
         addFormOptions(model, task);
         return "etl-form";
@@ -130,6 +131,10 @@ public class EtlController {
     @PostMapping("/precheck")
     public String precheck(@ModelAttribute("task") EtlTask task, Model model) {
         try {
+            if (task.getId() != null) {
+                // The form names an existing task: rehearsal must be the task owner's too.
+                etlTaskService.requireEditable(task.getId(), AccessGuard.current());
+            }
             EtlPrecheckResult result = precheckService.check(task);
             model.addAttribute("precheck", result);
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -154,6 +159,8 @@ public class EtlController {
     @PostMapping("/{id}/run")
     public String runNow(@PathVariable Long id, RedirectAttributes flash) {
         try {
+            // submit() has no actor of its own: the caller must qualify before it runs.
+            etlTaskService.requireEditable(id, AccessGuard.current());
             if (etlTaskService.submit(id)) {
                 flash.addFlashAttribute("message", "msg.etl.started");
             } else {

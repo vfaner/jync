@@ -46,6 +46,8 @@ public class RedisTargetController {
     @GetMapping("/{id}/edit")
     public String editForm(@PathVariable Long id, Model model, RedirectAttributes flash) {
         try {
+            service.find(id).ifPresent(target ->
+                    AccessGuard.current().requireEditable(target.getOwnerUsername()));
             model.addAttribute("form", service.formFor(id));
             return "redis-target-form";
         } catch (IllegalArgumentException e) {

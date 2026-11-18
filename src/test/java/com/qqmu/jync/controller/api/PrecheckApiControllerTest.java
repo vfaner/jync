@@ -16,6 +16,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.dto.PrecheckReport;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.sync.SyncPrecheckService;
 
 /**
@@ -30,6 +31,7 @@ class PrecheckApiControllerTest {
 
     @Autowired private MockMvc mvc;
     @MockitoBean private SyncPrecheckService precheckService;
+    @MockitoBean private ProjectService projectService;
 
     @Test
     void returnsTheReportWithEveryCheckField() throws Exception {

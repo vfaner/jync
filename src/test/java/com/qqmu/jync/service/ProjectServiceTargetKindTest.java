@@ -25,6 +25,7 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.service.projection.redis.RedisValueFormat;
 import com.qqmu.jync.repository.AlertStateRepository;
@@ -91,6 +92,15 @@ class ProjectServiceTargetKindTest {
                 redisPolicy);
         lenient().when(projectRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         lenient().when(taskStore.find(any())).thenReturn(Optional.empty());
+        // The save path now reads the target row back to check its owner, so the policy mock
+        // must answer with a row instead of the mock default null.
+        lenient().when(redisPolicy.requireTarget(any())).thenAnswer(i -> {
+            Project project = i.getArgument(0);
+            RedisTarget target = new RedisTarget();
+            target.setId(project.getTargetRedisId());
+            target.setName("redis-" + project.getTargetRedisId());
+            return target;
+        });
     }
 
     @Test

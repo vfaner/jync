@@ -11,7 +11,9 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.qqmu.jync.dto.TableRowCount;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.TablePreviewService;
+import com.qqmu.jync.service.auth.AccessGuard;
 
 /**
  * Exact row counts for one table, used by the detail page's on-demand check.
@@ -24,14 +26,18 @@ import com.qqmu.jync.service.TablePreviewService;
 public class RowCountApiController {
 
     private final TablePreviewService tablePreviewService;
+    private final ProjectService projectService;
 
-    public RowCountApiController(TablePreviewService tablePreviewService) {
+    public RowCountApiController(TablePreviewService tablePreviewService,
+                                 ProjectService projectService) {
         this.tablePreviewService = tablePreviewService;
+        this.projectService = projectService;
     }
 
     @GetMapping("/{id}/row-count")
     public ResponseEntity<Map<String, Object>> rowCount(@PathVariable Long id,
                                                         @RequestParam String table) {
+        projectService.requireEditable(id, AccessGuard.current());
         TableRowCount counts = tablePreviewService.rowCount(id, table);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);

@@ -12,8 +12,10 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.TablePreviewService;
 import com.qqmu.jync.service.TablePreviewService.Side;
+import com.qqmu.jync.service.auth.AccessGuard;
 
 /**
  * Read-only preview of one synced table.
@@ -27,15 +29,19 @@ import com.qqmu.jync.service.TablePreviewService.Side;
 public class PreviewApiController {
 
     private final TablePreviewService tablePreviewService;
+    private final ProjectService projectService;
 
-    public PreviewApiController(TablePreviewService tablePreviewService) {
+    public PreviewApiController(TablePreviewService tablePreviewService,
+                                ProjectService projectService) {
         this.tablePreviewService = tablePreviewService;
+        this.projectService = projectService;
     }
 
     @GetMapping("/{id}/preview")
     public ResponseEntity<Map<String, Object>> preview(@PathVariable Long id,
                                                        @RequestParam String table,
                                                        @RequestParam(defaultValue = "source") String side) {
+        projectService.requireEditable(id, AccessGuard.current());
         TablePreview preview = tablePreviewService.preview(id, table, parseSide(side));
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);

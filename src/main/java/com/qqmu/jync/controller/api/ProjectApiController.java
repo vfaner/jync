@@ -102,8 +102,8 @@ public class ProjectApiController {
     /**
      * Admin override: drops the project's sync lease whoever holds it.
      *
-     * <p>POST endpoints are already ADMIN-only in the filter chain, so no extra role check
-     * here. The action is audited in the change log by the service.
+     * <p>The filter chain admits ADMIN and OPS; ownership is checked in ProjectService. The
+     * action is audited in the change log by the service.
      */
     @PostMapping("/{id}/force-unlock")
     public ResponseEntity<Map<String, Object>> forceUnlock(@PathVariable Long id) {
@@ -118,6 +118,7 @@ public class ProjectApiController {
     @GetMapping("/{id}/cursor-candidates")
     public ResponseEntity<Map<String, Object>> cursorCandidates(@PathVariable Long id,
                                                                 @RequestParam String table) {
+        projectService.requireEditable(id, AccessGuard.current());
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("columns", projectService.listCursorCandidates(id, table));
@@ -128,6 +129,7 @@ public class ProjectApiController {
     @GetMapping("/{id}/columns")
     public ResponseEntity<Map<String, Object>> tableColumns(@PathVariable Long id,
                                                             @RequestParam String table) {
+        projectService.requireEditable(id, AccessGuard.current());
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("columns", projectService.listTableColumns(id, table));

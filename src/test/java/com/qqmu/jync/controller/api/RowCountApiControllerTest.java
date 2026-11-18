@@ -13,6 +13,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.dto.TableRowCount;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.TablePreviewService;
 
 /**
@@ -27,6 +28,7 @@ class RowCountApiControllerTest {
 
     @Autowired private MockMvc mvc;
     @MockitoBean private TablePreviewService tablePreviewService;
+    @MockitoBean private ProjectService projectService;
 
     @Test
     void returnsBothSideCounts() throws Exception {
