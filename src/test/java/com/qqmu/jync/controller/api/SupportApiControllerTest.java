@@ -38,8 +38,7 @@ class SupportApiControllerTest {
 
     @Test
     void aiOffIsA200StreamWithAnErrorEventNotA403() throws Exception {
-        when(providers.isAssistAvailable()).thenReturn(false);
-
+        // activeProvider() is empty by default on the mock: no provider, no tools, no call.
         MvcResult result = mvc.perform(post("/api/support/chat").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"message\":\"hi\",\"history\":[]}"))
@@ -56,7 +55,6 @@ class SupportApiControllerTest {
 
     @Test
     void aBusyUserGets409() throws Exception {
-        when(providers.isAssistAvailable()).thenReturn(true);
         when(providers.activeProvider()).thenReturn(Optional.of(new AiProvider()));
         when(assistant.tryStart("admin")).thenReturn(false);
 
@@ -68,7 +66,6 @@ class SupportApiControllerTest {
 
     @Test
     void aNormalAnswerIsStreamedAndAlwaysEndsWithDone() throws Exception {
-        when(providers.isAssistAvailable()).thenReturn(true);
         when(providers.activeProvider()).thenReturn(Optional.of(new AiProvider()));
         when(assistant.tryStart("admin")).thenReturn(true);
         Mockito.doAnswer(invocation -> {

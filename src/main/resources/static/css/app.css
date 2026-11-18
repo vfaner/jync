@@ -2204,6 +2204,9 @@ a.type-card:focus-visible {
 }
 .support-draft strong { display: block; margin-bottom: 4px; }
 .support-draft p { margin: 0 0 10px; color: var(--ink-soft); font-size: 13px; }
+.support-draft-field { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; }
+.support-draft-label { flex: 0 0 auto; min-width: 2.5em; color: var(--ink-mute); }
+.support-draft-field span + span { color: var(--ink); word-break: break-word; }
 
 .support-form { display: flex; align-items: flex-end; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: var(--bg); }
 .support-input {

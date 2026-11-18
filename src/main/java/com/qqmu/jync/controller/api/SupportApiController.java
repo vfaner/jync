@@ -62,7 +62,8 @@ public class SupportApiController {
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@RequestBody SupportChatRequest request) {
-        if (!providers.isAssistAvailable() || providers.activeProvider().isEmpty()) {
+        // activeProvider() is empty when the deployment switch or the saved switch is off.
+        if (providers.activeProvider().isEmpty()) {
             return oneShot("error.ai.disabled");
         }
         AccessGuard actor = AccessGuard.current();
@@ -101,13 +102,12 @@ public class SupportApiController {
         return emitter;
     }
 
+    /** No model call behind it, so it is written before the handler returns (buffered by Spring). */
     private SseEmitter oneShot(String messageKey) {
         SseEmitter emitter = new SseEmitter(1_000L);
-        executor.execute(() -> {
-            SseSink sink = new SseSink(emitter);
-            sink.error(messageKey);
-            sink.doneAndComplete();
-        });
+        SseSink sink = new SseSink(emitter);
+        sink.error(messageKey);
+        sink.doneAndComplete();
         return emitter;
     }
 

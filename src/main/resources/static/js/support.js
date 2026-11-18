@@ -18,9 +18,7 @@
     disabled: root.getAttribute('data-label-disabled') || 'AI is off',
     busy: root.getAttribute('data-label-busy') || 'Still answering',
     used: root.getAttribute('data-label-used') || 'Opened',
-    expired: root.getAttribute('data-label-expired') || 'Draft expired',
     openForm: root.getAttribute('data-label-open') || 'Open form',
-    send: root.getAttribute('data-label-send') || 'Send',
     restore: root.getAttribute('data-label-restore') || 'Restore',
     network: root.getAttribute('data-label-network') || 'Network error'
   };
@@ -34,6 +32,7 @@
   var resize = root.querySelector('[data-role="support-resize"]');
   var sendBtn = root.querySelector('[data-role="support-send"]');
   var busy = false;
+  var unusable = false;
 
   // 工具名是 snake_case，property 名会把 data-tool- 后的连字符大写，所以按属性名查。
   function toolLabel(name) {
@@ -122,6 +121,8 @@
     log.appendChild(el);
     log.scrollTop = log.scrollHeight;
     if (key === 'error.ai.disabled') {
+      // 页面加载后管理员关掉了 AI：本次之内的输入框保持锁定，重载后整块不再渲染。
+      unusable = true;
       input.disabled = true;
       sendBtn.disabled = true;
     }
@@ -133,9 +134,22 @@
     var title = document.createElement('strong');
     title.textContent = data.title || '';
     card.appendChild(title);
-    if (data.summary) {
+    // 服务端给的是 labelKey，界面语言由 layout 的 JyncMessages 决定。
+    (data.fields || []).forEach(function (field) {
+      var row = document.createElement('div');
+      row.className = 'support-draft-field';
+      var label = document.createElement('span');
+      label.className = 'support-draft-label';
+      label.textContent = window.JyncUI ? window.JyncUI.t(field.labelKey || '') : '';
+      var value = document.createElement('span');
+      value.textContent = field.value || '';
+      row.appendChild(label);
+      row.appendChild(value);
+      card.appendChild(row);
+    });
+    if (!data.fields || !data.fields.length) {
       var summary = document.createElement('p');
-      summary.textContent = data.summary;
+      summary.textContent = data.summary || '';
       card.appendChild(summary);
     }
     var link = document.createElement('a');
@@ -198,7 +212,7 @@
 
   function submit() {
     var text = (input.value || '').trim();
-    if (!text || busy) return;
+    if (!text || busy || unusable) return;
     input.value = '';
     input.style.height = '';
     appendBubble('user', text);
@@ -266,9 +280,9 @@
       }
       if (answer) remember('assistant', answer);
       busy = false;
-      sendBtn.disabled = false;
-      input.disabled = false;
-      input.focus();
+      sendBtn.disabled = unusable;
+      input.disabled = unusable;
+      if (!unusable) input.focus();
     });
   }
 
@@ -288,7 +302,11 @@
   root.querySelector('[data-role="support-close"]').addEventListener('click', close);
   maxBtn.setAttribute('data-label-max', maxBtn.getAttribute('aria-label') || '');
   maxBtn.addEventListener('click', toggleMax);
-  root.querySelector('[data-role="support-drag"]').addEventListener('dblclick', toggleMax);
+  root.querySelector('[data-role="support-drag"]').addEventListener('dblclick', function (e) {
+    // 双击标题空白处切换最大化；落在按钮上的双击交给按钮自己。
+    if (e.target.closest && e.target.closest('button')) return;
+    toggleMax();
+  });
   root.querySelector('[data-role="support-new"]').addEventListener('click', function () {
     log.innerHTML = '';
     save({ turns: [], draftUsed: null });

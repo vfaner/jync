@@ -115,7 +115,7 @@ public class SupportAssistantService {
             List<AiChatClient.ToolSpec> tools = specs();
             boolean toolMode = !tools.isEmpty();
             boolean announcedFallback = false;
-            AiChatClient.ToolCall draftCall = null;
+            boolean drafted = false;
             String draftResult = null;
 
             for (int round = 0; round < MAX_ROUNDS; round++) {
@@ -174,7 +174,7 @@ public class SupportAssistantService {
                     sink.tool(call.name(), "support.tool." + call.name());
                     String output = registry.execute(call.name(), call.argumentsJson(), ctx);
                     if ("draft_project".equals(call.name())) {
-                        draftCall = call;
+                        drafted = true;
                         draftResult = output;
                     }
                     turns.add(AiChatClient.Turn.toolResult(call.id(), output));
@@ -185,7 +185,7 @@ public class SupportAssistantService {
                 }
             }
 
-            if (draftCall != null && draftResult != null) {
+            if (drafted && draftResult != null) {
                 emitDraft(draftResult, sink);
             }
         } catch (RuntimeException e) {
