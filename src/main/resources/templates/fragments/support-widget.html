@@ -14,6 +14,7 @@
      th:data-label-used="#{support.draft.used}"
      th:data-label-open="#{support.draft.open}"
      th:data-label-restore="#{support.restore}"
+     th:data-label-greeting="#{support.greeting}"
      th:data-label-network="#{error.network}"
      th:data-tool-list_projects="#{support.tool.list_projects}"
      th:data-tool-project_status="#{support.tool.project_status}"
@@ -51,12 +52,11 @@
       </span>
     </header>
 
-    <div class="support-log" data-role="support-log" aria-live="polite"
-         th:attr="data-empty=#{support.placeholder}"></div>
+    <div class="support-log" data-role="support-log" aria-live="polite"></div>
 
     <form class="support-form" data-role="support-form">
       <textarea class="support-input" data-role="support-input" rows="1" maxlength="4000"
-                th:placeholder="#{support.placeholder}"></textarea>
+                th:placeholder="#{support.input.placeholder}"></textarea>
       <button type="submit" class="support-send" data-role="support-send"
               th:aria-label="#{support.send}" th:title="#{support.send}">
         <svg class="ico"><use href="#send"/></svg>

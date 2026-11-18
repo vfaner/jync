@@ -20,6 +20,7 @@
     used: root.getAttribute('data-label-used') || 'Opened',
     openForm: root.getAttribute('data-label-open') || 'Open form',
     restore: root.getAttribute('data-label-restore') || 'Restore',
+    greeting: root.getAttribute('data-label-greeting') || '',
     network: root.getAttribute('data-label-network') || 'Network error'
   };
 
@@ -72,6 +73,16 @@
   function toggleMax() {
     var max = !root.classList.contains('is-max');
     root.classList.toggle('is-max', max);
+    if (max) {
+      // 最大化由样式表的 inset 接管；内联 left/top 会压过它，先清掉（位置留在会话状态里）。
+      panel.style.left = '';
+      panel.style.top = '';
+      panel.style.right = '';
+      panel.style.bottom = '';
+    } else {
+      var s = state();
+      if (s.x != null && s.y != null) place(s.x, s.y);
+    }
     setMaxLabel(max);
     save({ max: max });
   }
@@ -85,6 +96,24 @@
     return el;
   }
 
+  // 首次打开（或点「新会话」后）的欢迎语；只作提示，不计入会话轮次。
+  function showGreeting() {
+    if (!labels.greeting || log.children.length) return;
+    appendBubble('assistant', labels.greeting).classList.add('support-greeting');
+  }
+
+  // 拖动后的位置记录在 left/top，默认位置仍是右下角的 right/bottom。
+  function place(x, y) {
+    var w = panel.offsetWidth;
+    var h = panel.offsetHeight;
+    x = Math.max(0, Math.min(x, Math.max(0, window.innerWidth - w)));
+    y = Math.max(0, Math.min(y, Math.max(0, window.innerHeight - h)));
+    panel.style.left = x + 'px';
+    panel.style.top = y + 'px';
+    panel.style.right = 'auto';
+    panel.style.bottom = 'auto';
+  }
+
   function restore() {
     var s = state();
     if (s.open) open();
@@ -93,9 +122,11 @@
       panel.style.width = s.w + 'px';
       panel.style.height = s.h + 'px';
     }
+    if (!s.max && s.x != null && s.y != null) place(s.x, s.y);
     (s.turns || []).forEach(function (turn) {
       appendBubble(turn.role, turn.text);
     });
+    if (!(s.turns || []).length) showGreeting();
     if (s.draftUsed) markDraftUsed(s.draftUsed);
   }
 
@@ -286,10 +317,13 @@
     });
   }
 
-  // 输入框随内容长高，最多 6 行。
+  // 输入框随内容长高，最多 6 行；未到上限时隐藏滚动条，避免 scrollHeight 取整
+  // 比行高少 1px 就让一字输入也冒出滚动条。+2 是给亚像素行高留的冗余。
   input.addEventListener('input', function () {
     input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 144) + 'px';
+    var needed = input.scrollHeight;
+    input.style.height = Math.min(needed + 2, 144) + 'px';
+    input.style.overflowY = needed + 2 > 144 ? 'auto' : 'hidden';
   });
   input.addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -310,6 +344,7 @@
   root.querySelector('[data-role="support-new"]').addEventListener('click', function () {
     log.innerHTML = '';
     save({ turns: [], draftUsed: null });
+    showGreeting();
     input.focus();
   });
 
@@ -320,13 +355,47 @@
     else close();
   });
 
-  // 左上角拖拽调大小（面板贴右下，向左上拉伸）。
+  // 标题栏拖动整个面板；落在按钮上不拖，最大化时由样式接管。
+  var moving = false, moved = false;
+  var moveStartX = 0, moveStartY = 0, moveOriginX = 0, moveOriginY = 0;
+  var dragArea = root.querySelector('[data-role="support-drag"]');
+  dragArea.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || (e.target.closest && e.target.closest('button'))) return;
+    if (root.classList.contains('is-max')) return;
+    var rect = panel.getBoundingClientRect();
+    moving = true; moved = false;
+    moveStartX = e.clientX; moveStartY = e.clientY;
+    moveOriginX = rect.left; moveOriginY = rect.top;
+    dragArea.setPointerCapture(e.pointerId);
+  });
+  dragArea.addEventListener('pointermove', function (e) {
+    if (!moving) return;
+    var dx = e.clientX - moveStartX;
+    var dy = e.clientY - moveStartY;
+    // 3px 以内视为点击，避免双击最大化时面板抖动。
+    if (!moved && Math.abs(dx) + Math.abs(dy) < 3) return;
+    moved = true;
+    place(moveOriginX + dx, moveOriginY + dy);
+  });
+  dragArea.addEventListener('pointerup', function () {
+    if (!moving) return;
+    moving = false;
+    if (moved) {
+      var rect = panel.getBoundingClientRect();
+      save({ x: Math.round(rect.left), y: Math.round(rect.top) });
+    }
+  });
+  dragArea.addEventListener('pointercancel', function () { moving = false; });
+
+  // 左上角拖拽调大小：默认右下角锚定时向左上拉伸；拖动过面板时同步移动 left/top。
   var dragging = false;
-  var startX = 0, startY = 0, startW = 0, startH = 0;
+  var startX = 0, startY = 0, startW = 0, startH = 0, startLeft = 0, startTop = 0;
   resize.addEventListener('pointerdown', function (e) {
     dragging = true;
     startX = e.clientX; startY = e.clientY;
-    startW = panel.offsetWidth; startH = panel.offsetHeight;
+    var rect = panel.getBoundingClientRect();
+    startW = rect.width; startH = rect.height;
+    startLeft = rect.left; startTop = rect.top;
     resize.setPointerCapture(e.pointerId);
     e.preventDefault();
   });
@@ -336,7 +405,14 @@
     var h = Math.max(420, Math.min(window.innerHeight - 32, startH + (startY - e.clientY)));
     panel.style.width = w + 'px';
     panel.style.height = h + 'px';
-    save({ w: w, h: h });
+    var patch = { w: w, h: h };
+    if (panel.style.left) {
+      place(startLeft + (startW - w), startTop + (startH - h));
+      var rect = panel.getBoundingClientRect();
+      patch.x = Math.round(rect.left);
+      patch.y = Math.round(rect.top);
+    }
+    save(patch);
   });
   resize.addEventListener('pointerup', function () { dragging = false; });
   resize.addEventListener('pointercancel', function () { dragging = false; });
