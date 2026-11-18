@@ -18,6 +18,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.bulk.BulkPlan;
 import com.qqmu.jync.dto.bulk.BulkPlanRequest;
@@ -107,7 +108,7 @@ public class BulkPlanService {
      *
      * @throws IllegalArgumentException with a message key the page knows how to translate
      */
-    public BulkPlan plan(BulkPlanRequest request) {
+    public BulkPlan plan(BulkPlanRequest request, AccessGuard actor) {
         if (request == null || request.sourceDbId() == null || request.targetDbId() == null) {
             throw new IllegalArgumentException("error.project.bulk.source.not.found");
         }
@@ -262,14 +263,14 @@ public class BulkPlanService {
      *
      * @return the number of tasks created
      */
-    public int create(BulkPlanRequest request) {
+    public int create(BulkPlanRequest request, AccessGuard actor) {
         // The plan is computed BEFORE the transaction opens: reading the listing (and up
         // to two minutes of exact counting) then holds no metadata-database connection,
         // and — just as important — the duplicate-name check stays milliseconds away from
         // the inserts. A read-then-insert window stretched to minutes let two concurrent
         // creates both pass the check and write duplicate names; there is no unique
         // constraint on Project.name, and a later edit of such a pair fails on findByName.
-        BulkPlan plan = plan(request);
+        BulkPlan plan = plan(request, actor);
         return transactions.execute(status -> {
             for (TaskPlan task : plan.tasks()) {
                 if (projectRepository.findByName(task.name()).isPresent()) {
@@ -282,13 +283,13 @@ public class BulkPlanService {
                 project.setName(task.name());
                 project.setSourceDbId(request.sourceDbId());
                 project.setTargetDbId(request.targetDbId());
-                Project saved = projectService.save(project);
+                Project saved = projectService.save(project, actor);
 
                 SyncConfig config = new SyncConfig();
                 config.setObjectSelectionExplicit(true);
                 config.setTables(new LinkedHashSet<>(task.tables().stream()
                         .map(TableEntry::name).toList()));
-                projectService.saveConfig(saved.getId(), config, request.captureStrategy());
+                projectService.saveConfig(saved.getId(), config, request.captureStrategy(), actor);
             }
             log.info("Bulk create: {} task(s) from '{}'.'{}' to '{}'", plan.tasks().size(),
                     plan.sourceName(), plan.schema(), plan.targetName());

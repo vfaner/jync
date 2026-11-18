@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.audit.AuditDetail;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -84,20 +85,14 @@ public class DatabaseConfigService {
      *
      * <p>The password is encrypted before storage. An empty password on an update means "keep
      * the existing one", so the edit form never has to round-trip the secret to the browser.
+     *
+     * <p>{@code rawMinerPassword} follows the same contract — encrypted before storage;
+     * null/blank on update keeps the existing secret. The miner credentials only matter for
+     * Oracle CDB sources using LOGMINER_CDC; every other type ignores them.
      */
     @Transactional
-    public DatabaseConfig save(DatabaseConfig config, String rawPassword) {
-        return save(config, rawPassword, null);
-    }
-
-    /**
-     * P0-2 variant: {@code rawMinerPassword} follows the same contract as
-     * {@code rawPassword} — encrypted before storage; null/blank on update keeps the
-     * existing secret. The miner credentials only matter for Oracle CDB sources using
-     * LOGMINER_CDC; every other type ignores them.
-     */
-    @Transactional
-    public DatabaseConfig save(DatabaseConfig config, String rawPassword, String rawMinerPassword) {
+    public DatabaseConfig save(DatabaseConfig config, String rawPassword,
+                               String rawMinerPassword, AccessGuard actor) {
         validate(config);
         boolean isNew = config.getId() == null;
         // The mining account exists only for an Oracle source: every other type/role hides
@@ -114,6 +109,10 @@ public class DatabaseConfigService {
         if (config.getId() != null) {
             DatabaseConfig existing = repository.findById(config.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.connection.not.found"));
+            actor.requireEditable(existing.getOwnerUsername());
+            // Ownership is never the form's to set: a crafted POST must not move the resource
+            // to another account, and an edit must not blank it either.
+            config.setOwnerUsername(existing.getOwnerUsername());
             // Saving evicts the cached pool. Under a running project that means the next
             // acquisition in an in-flight cycle switches host/credentials mid-run, and a CDC
             // consumer keeps its old config snapshot until restarted — the UI would claim a
@@ -153,6 +152,7 @@ public class DatabaseConfigService {
             }
             config.setCreatedAt(existing.getCreatedAt());
         } else {
+            config.setOwnerUsername(actor.username());
             config.setPassword(cryptoUtil.encrypt(rawPassword));
             if (minerApplicable && rawMinerPassword != null && !rawMinerPassword.isEmpty()) {
                 config.setMinerPassword(cryptoUtil.encrypt(rawMinerPassword));
@@ -263,12 +263,13 @@ public class DatabaseConfigService {
      * error at sync time, so the check happens here where it can be explained.
      */
     @Transactional
-    public void delete(Long id) {
+    public void delete(Long id, AccessGuard actor) {
         // findById rather than existsById: the audit entry should name what was destroyed.
         DatabaseConfig victim = repository.findById(id)
                 // deleteById on a missing row throws EmptyResultDataAccessException, which a
                 // double-clicked or two-tab delete would surface as a 500.
                 .orElseThrow(() -> new IllegalArgumentException("error.connection.missing"));
+        actor.requireEditable(victim.getOwnerUsername());
         List<Project> dependents = projectRepository.findBySourceDbIdOrTargetDbId(id, id);
         if (!dependents.isEmpty()) {
             throw new IllegalStateException("error.connection.in.use:" + joinNames(dependents));

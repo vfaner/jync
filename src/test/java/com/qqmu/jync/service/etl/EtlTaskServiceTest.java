@@ -20,6 +20,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlRun;
@@ -62,7 +63,7 @@ class EtlTaskServiceTest {
     void saveRejectsTheSameConnectionOnBothSides() {
         stubConnections(1L, 1L);
 
-        assertThatThrownBy(() -> service.save(form(1L, 1L)))
+        assertThatThrownBy(() -> service.save(form(1L, 1L), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.same.database");
         verify(taskRepository, never()).save(any());
@@ -81,7 +82,7 @@ class EtlTaskServiceTest {
         when(databaseConfigService.findById(1L)).thenReturn(Optional.of(source));
         when(databaseConfigService.findById(2L)).thenReturn(Optional.of(target));
 
-        assertThatThrownBy(() -> service.save(form(1L, 2L)))
+        assertThatThrownBy(() -> service.save(form(1L, 2L), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.target.readOnly");
         verify(taskRepository, never()).save(any());
@@ -93,7 +94,7 @@ class EtlTaskServiceTest {
         EtlTask task = form(1L, 2L);
         task.setWriteMode(EtlWriteMode.RANGE_OVERWRITE);
 
-        assertThatThrownBy(() -> service.save(task))
+        assertThatThrownBy(() -> service.save(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.range.required");
     }
@@ -104,7 +105,7 @@ class EtlTaskServiceTest {
         EtlTask task = form(1L, 2L);
         task.setWriteMode(EtlWriteMode.UPSERT);
 
-        assertThatThrownBy(() -> service.save(task))
+        assertThatThrownBy(() -> service.save(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.upsertKey.required");
         verify(taskRepository, never()).save(any());
@@ -117,7 +118,7 @@ class EtlTaskServiceTest {
         task.setWriteMode(EtlWriteMode.UPSERT);
         task.setUpsertKeyColumns("id; DROP TABLE dst");
 
-        assertThatThrownBy(() -> service.save(task))
+        assertThatThrownBy(() -> service.save(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.upsertKey.invalid");
         verify(taskRepository, never()).save(any());
@@ -131,7 +132,7 @@ class EtlTaskServiceTest {
         task.setUpsertKeyColumns("tenant_id, id");
         when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.save(task);
+        service.save(task, AccessGuard.system());
 
         ArgumentCaptor<EtlTask> saved = ArgumentCaptor.forClass(EtlTask.class);
         verify(taskRepository).save(saved.capture());
@@ -144,7 +145,7 @@ class EtlTaskServiceTest {
         EtlTask task = form(1L, 2L);
         task.setCronExpression("every minute");
 
-        assertThatThrownBy(() -> service.save(task))
+        assertThatThrownBy(() -> service.save(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.cron.invalid");
     }
@@ -167,7 +168,7 @@ class EtlTaskServiceTest {
         edit.setCronExpression(" ");
         edit.setName("renamed");
 
-        assertThatThrownBy(() -> service.save(edit))
+        assertThatThrownBy(() -> service.save(edit, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.cron.required");
         verify(taskRepository, never()).save(any());
@@ -185,7 +186,7 @@ class EtlTaskServiceTest {
         existing.setCronExpression("every minute");
         when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
 
-        assertThatThrownBy(() -> service.setEnabled(5L, true))
+        assertThatThrownBy(() -> service.setEnabled(5L, true, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.cron.invalid");
         verify(taskRepository, never()).save(any());
@@ -198,7 +199,7 @@ class EtlTaskServiceTest {
         task.setWriteMode(EtlWriteMode.APPEND);
         task.setResumeKeyColumn("id; DROP TABLE dst");
 
-        assertThatThrownBy(() -> service.save(task))
+        assertThatThrownBy(() -> service.save(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.resumeKey.invalid");
     }
@@ -215,7 +216,7 @@ class EtlTaskServiceTest {
         task.setResumeKeyColumn("id; DROP TABLE dst");
         when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.save(task);
+        service.save(task, AccessGuard.system());
 
         verify(taskRepository).save(any());
     }
@@ -230,7 +231,7 @@ class EtlTaskServiceTest {
         EtlTask edit = form(1L, 2L);
         edit.setId(5L);
         edit.setSourceSql("SELECT id, name FROM src");
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(checkpointStore).clear(5L);
     }
@@ -246,7 +247,7 @@ class EtlTaskServiceTest {
         edit.setId(5L);
         edit.setSourceSql("SELECT id FROM src");
         edit.setName("renamed");
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(checkpointStore, never()).clear(eq(5L));
     }
@@ -268,7 +269,7 @@ class EtlTaskServiceTest {
         edit.setId(5L);
         edit.setSourceSql("SELECT id, name FROM src");
 
-        assertThatThrownBy(() -> service.save(edit))
+        assertThatThrownBy(() -> service.save(edit, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.running.extraction");
         verify(taskRepository, never()).save(any());
@@ -289,7 +290,7 @@ class EtlTaskServiceTest {
         edit.setSourceSql("SELECT id FROM src");
         edit.setName("renamed");
 
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(taskRepository).save(any());
         guard.release(5L);

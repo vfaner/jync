@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.ColumnRule;
@@ -243,8 +244,8 @@ public class ProjectController {
             // The clone is created and its settings copied in one transaction; a failure
             // leaves neither an empty project nor a half-initialized one behind.
             Project saved = copyFrom != null
-                    ? projectService.saveAsClone(project, copyFrom)
-                    : projectService.save(project);
+                    ? projectService.saveAsClone(project, copyFrom, AccessGuard.current())
+                    : projectService.save(project, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.project.saved");
             return "redirect:/projects/" + saved.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -716,7 +717,7 @@ public class ProjectController {
             }
 
             CaptureStrategy before = config.getCaptureStrategyOrDefault();
-            projectService.saveConfig(id, config, strategyParam);
+            projectService.saveConfig(id, config, strategyParam, AccessGuard.current());
             // A real switch gets its own confirmation copy: the C2 side effects (reload,
             // consumer start/stop) make it more than a settings save. The page must also
             // re-render: the CDC panel and the full-compare banner follow the saved
@@ -915,7 +916,7 @@ public class ProjectController {
                 return "redirect:/projects/" + id;
             }
             config.getColumnRules().add(rule);
-            projectService.saveConfig(id, config);
+            projectService.saveConfig(id, config, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.columnrule.saved");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -941,7 +942,7 @@ public class ProjectController {
                 return "redirect:/projects/" + id;
             }
             config.getColumnRules().remove(index);
-            projectService.saveConfig(id, config);
+            projectService.saveConfig(id, config, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.columnrule.saved");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -1032,7 +1033,7 @@ public class ProjectController {
                             @RequestParam(required = false) String cursorColumn,
                             RedirectAttributes flash) {
         try {
-            projectService.saveCursorColumn(id, tableName, cursorColumn);
+            projectService.saveCursorColumn(id, tableName, cursorColumn, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.cursor.saved");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -1043,7 +1044,7 @@ public class ProjectController {
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
         try {
-            projectService.delete(id);
+            projectService.delete(id, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.project.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());

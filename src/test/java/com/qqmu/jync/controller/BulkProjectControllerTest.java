@@ -169,7 +169,7 @@ class BulkProjectControllerTest {
                 .thenReturn(List.of(oracle));
         when(databaseConfigService.findByRole(ConnectionRole.TARGET))
                 .thenReturn(List.of());
-        when(bulkPlanService.plan(any())).thenReturn(samplePlan());
+        when(bulkPlanService.plan(any(), any())).thenReturn(samplePlan());
 
         mvc.perform(post("/projects/bulk/preview").with(csrf())
                         .param("sourceDbId", "1")
@@ -185,7 +185,7 @@ class BulkProjectControllerTest {
     @Test
     void thePreviewSendsTheSubmittedValuesAndRendersThePlan() throws Exception {
         BulkPlan plan = samplePlan();
-        when(bulkPlanService.plan(any())).thenReturn(plan);
+        when(bulkPlanService.plan(any(), any())).thenReturn(plan);
 
         mvc.perform(post("/projects/bulk/preview").with(csrf())
                         .param("sourceDbId", "1")
@@ -203,7 +203,7 @@ class BulkProjectControllerTest {
                 .andExpect(content().string(not(containsString("<span>Unknown</span>"))));
 
         ArgumentCaptor<BulkPlanRequest> captor = ArgumentCaptor.forClass(BulkPlanRequest.class);
-        verify(bulkPlanService).plan(captor.capture());
+        verify(bulkPlanService).plan(captor.capture(), any());
         assertThat(captor.getValue()).isEqualTo(
                 new BulkPlanRequest(1L, 2L, 3, "批量任务", null, true));
     }
@@ -218,7 +218,7 @@ class BulkProjectControllerTest {
                                 new TableEntry("audit", null, null, StatsSource.NONE)),
                         1_000L)),
                 2, 1_000L, 1, true, false, false, false);
-        when(bulkPlanService.plan(any())).thenReturn(plan);
+        when(bulkPlanService.plan(any(), any())).thenReturn(plan);
 
         mvc.perform(post("/projects/bulk/preview").with(csrf())
                         .param("sourceDbId", "1")
@@ -233,7 +233,7 @@ class BulkProjectControllerTest {
 
     @Test
     void aPlanWithoutAnyStatisticsSaysSo() throws Exception {
-        when(bulkPlanService.plan(any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
+        when(bulkPlanService.plan(any(), any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
                 List.of(new TaskPlan("批量任务-01",
                         List.of(new TableEntry("orders", null, null, StatsSource.NONE)),
                         0L)),
@@ -255,7 +255,7 @@ class BulkProjectControllerTest {
         // Exact counting was requested and still produced nothing (the source refuses
         // COUNT(*), or every table vanished between listing and counting). Telling the user
         // to tick the box they ticked reads as a bug in the page.
-        when(bulkPlanService.plan(any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
+        when(bulkPlanService.plan(any(), any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
                 List.of(new TaskPlan("批量任务-01",
                         List.of(new TableEntry("orders", null, null, StatsSource.NONE)),
                         0L)),
@@ -280,7 +280,7 @@ class BulkProjectControllerTest {
     void exactCountsSuppressTheNoCatalogWarning() throws Exception {
         // Exact counting already filled every size; the catalog warning would contradict
         // the numbers in the table right below it.
-        when(bulkPlanService.plan(any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
+        when(bulkPlanService.plan(any(), any())).thenReturn(new BulkPlan("源库", "目标库", "shop",
                 List.of(new TaskPlan("批量任务-01",
                         List.of(new TableEntry("orders", 42L, null, StatsSource.EXACT)),
                         42L)),
@@ -299,7 +299,7 @@ class BulkProjectControllerTest {
 
     @Test
     void aRejectedPreviewStaysOnTheFormWithTheError() throws Exception {
-        when(bulkPlanService.plan(any()))
+        when(bulkPlanService.plan(any(), any()))
                 .thenThrow(new IllegalArgumentException("error.project.bulk.no.tables"));
 
         mvc.perform(post("/projects/bulk/preview").with(csrf())
@@ -314,7 +314,7 @@ class BulkProjectControllerTest {
 
     @Test
     void createRedirectsToTheListWithASuccessBanner() throws Exception {
-        when(bulkPlanService.create(any())).thenReturn(3);
+        when(bulkPlanService.create(any(), any())).thenReturn(3);
 
         mvc.perform(post("/projects/bulk/create").with(csrf())
                         .param("sourceDbId", "1")
@@ -328,7 +328,7 @@ class BulkProjectControllerTest {
 
     @Test
     void aRejectedCreateRedirectsToTheWizardWithTheError() throws Exception {
-        when(bulkPlanService.create(any()))
+        when(bulkPlanService.create(any(), any()))
                 .thenThrow(new IllegalArgumentException(
                         "error.project.bulk.name.duplicate:批量任务-01"));
 
@@ -366,7 +366,7 @@ class BulkProjectControllerTest {
 
     @Test
     void aRejectedExportRedirectsToTheWizardWithTheError() throws Exception {
-        when(bulkPlanService.plan(any()))
+        when(bulkPlanService.plan(any(), any()))
                 .thenThrow(new IllegalArgumentException("error.project.bulk.source.failed"));
 
         mvc.perform(post("/projects/bulk/export").with(csrf())
@@ -382,7 +382,7 @@ class BulkProjectControllerTest {
     @Test
     void theExportIsAnAttachmentWithABomAndLocalizedHeader() throws Exception {
         BulkPlan plan = samplePlan();
-        when(bulkPlanService.plan(any())).thenReturn(plan);
+        when(bulkPlanService.plan(any(), any())).thenReturn(plan);
         when(bulkPlanService.toCsv(eq(plan), any())).thenReturn("﻿header\r\nrow\r\n");
 
         mvc.perform(post("/projects/bulk/export").with(csrf())

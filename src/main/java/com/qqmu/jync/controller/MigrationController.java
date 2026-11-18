@@ -20,6 +20,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationRunTrigger;
@@ -150,7 +151,7 @@ public class MigrationController {
         form.setType(resolved);
         ObjectNode submitted = formOptions(request);
         try {
-            MigrationTask saved = taskService.save(form, submitted);
+            MigrationTask saved = taskService.save(form, submitted, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.migration.saved");
             return "redirect:/migrations/" + typeKey + "/" + saved.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -247,7 +248,7 @@ public class MigrationController {
         if (taskForType(resolved, id, flash) == null) {
             return "redirect:/migrations/" + type;
         }
-        if (taskService.cancel(id)) {
+        if (taskService.cancel(id, AccessGuard.current())) {
             flash.addFlashAttribute("message", "msg.migration.cancelling");
         } else {
             flash.addFlashAttribute("error", "error.migration.not.running");
@@ -278,7 +279,7 @@ public class MigrationController {
             return "redirect:/migrations/" + type;
         }
         try {
-            taskService.delete(id);
+            taskService.delete(id, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.migration.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -296,7 +297,7 @@ public class MigrationController {
             return "redirect:/migrations/" + type;
         }
         try {
-            taskService.setEnabled(id, enabled);
+            taskService.setEnabled(id, enabled, AccessGuard.current());
             flash.addFlashAttribute("message",
                     enabled ? "msg.migration.enabled" : "msg.migration.disabled");
         } catch (IllegalArgumentException | IllegalStateException e) {

@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.dto.bulk.BulkPlan;
 import com.qqmu.jync.dto.bulk.BulkPlanRequest;
@@ -77,7 +78,7 @@ public class BulkProjectController {
         BulkPlanRequest request = new BulkPlanRequest(sourceDbId, targetDbId, taskCount,
                 namePrefix, blankToNull(captureStrategy), exactStats);
         try {
-            model.addAttribute("plan", bulkPlanService.plan(request));
+            model.addAttribute("plan", bulkPlanService.plan(request, AccessGuard.current()));
         } catch (IllegalArgumentException e) {
             // Re-render the form with the submitted values so the user fixes one field
             // instead of retyping the whole request.
@@ -98,7 +99,7 @@ public class BulkProjectController {
                          RedirectAttributes flash) {
         try {
             bulkPlanService.create(new BulkPlanRequest(sourceDbId, targetDbId, taskCount,
-                    namePrefix, blankToNull(captureStrategy), exactStats));
+                    namePrefix, blankToNull(captureStrategy), exactStats), AccessGuard.current());
             flash.addFlashAttribute("message", "msg.project.bulk.created");
             return "redirect:/projects";
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -124,7 +125,8 @@ public class BulkProjectController {
                          RedirectAttributes flash) {
         try {
             BulkPlan plan = bulkPlanService.plan(new BulkPlanRequest(sourceDbId, targetDbId,
-                    taskCount, namePrefix, blankToNull(captureStrategy), exactStats));
+                    taskCount, namePrefix, blankToNull(captureStrategy), exactStats),
+                    AccessGuard.current());
             byte[] body = bulkPlanService.toCsv(plan, csvLabels())
                     .getBytes(StandardCharsets.UTF_8);
             return ResponseEntity.ok()

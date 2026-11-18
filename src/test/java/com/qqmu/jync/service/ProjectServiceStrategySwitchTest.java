@@ -23,6 +23,7 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -134,7 +135,7 @@ class ProjectServiceStrategySwitchTest {
         pg.setType(DatabaseType.POSTGRESQL);
         when(databaseConfigRepository.findById(5L)).thenReturn(Optional.of(pg));
 
-        assertThatThrownBy(() -> service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC"))
+        assertThatThrownBy(() -> service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.cdc.not.mysql");
         verify(projectRepository, never()).save(any());   // 配置不落库
@@ -145,7 +146,7 @@ class ProjectServiceStrategySwitchTest {
     void switchPollingToCdcRunsFullC2Sequence() {
         mysqlProject("{\"captureStrategy\":\"POLLING\"}");
 
-        service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC");
+        service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC", AccessGuard.system());
 
         InOrder order = inOrder(scheduler, stateWriter, positionStore, taskStore, cdcManager);
         // 先 join 再删位点。启用状态下也一样:停用分支早就有这一步(见下一个用例),启用
@@ -176,7 +177,7 @@ class ProjectServiceStrategySwitchTest {
         Project project = mysqlProject("{\"captureStrategy\":\"POLLING\"}");
         project.setEnabled(false);
 
-        service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC");
+        service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC", AccessGuard.system());
 
         InOrder order = inOrder(scheduler, stateWriter, positionStore, taskStore, cdcManager);
         // 本节点可能还残留刚被停用的旧消费者:必须先 join 再删位点,否则它停机时会把
@@ -198,7 +199,7 @@ class ProjectServiceStrategySwitchTest {
     void switchCdcToPollingStopsConsumerAndKeepsPosition() {
         mysqlProject("{\"captureStrategy\":\"BINLOG_CDC\"}");
 
-        service.saveConfig(1L, new SyncConfig(), "POLLING");
+        service.saveConfig(1L, new SyncConfig(), "POLLING", AccessGuard.system());
 
         InOrder order = inOrder(cdcManager, stateWriter, scheduler);
         order.verify(cdcManager).ensureStopped(1L);       // 先停流(同步 join)
@@ -224,7 +225,7 @@ class ProjectServiceStrategySwitchTest {
         when(conn.createStatement()).thenReturn(st);
         when(dataSourceManager.getConnection(any())).thenReturn(conn);
 
-        service.saveConfig(1L, new SyncConfig(), "POLLING");
+        service.saveConfig(1L, new SyncConfig(), "POLLING", AccessGuard.system());
 
         // 顺序要紧:槽是 active 时 DROP 会被服务器拒(55006),必须先停消费者。
         InOrder order = inOrder(cdcManager, st);
@@ -238,7 +239,7 @@ class ProjectServiceStrategySwitchTest {
     void switchingBinlogAwayNeverTouchesTheSource() throws Exception {
         mysqlProject("{\"captureStrategy\":\"BINLOG_CDC\"}");
 
-        service.saveConfig(1L, new SyncConfig(), "POLLING");
+        service.saveConfig(1L, new SyncConfig(), "POLLING", AccessGuard.system());
 
         verify(dataSourceManager, never()).getConnection(any());
     }
@@ -247,7 +248,7 @@ class ProjectServiceStrategySwitchTest {
     void sameStrategySaveDoesNotTriggerSwitchSideEffects() {
         mysqlProject("{\"captureStrategy\":\"POLLING\"}");
 
-        service.saveConfig(1L, new SyncConfig(), "POLLING");
+        service.saveConfig(1L, new SyncConfig(), "POLLING", AccessGuard.system());
 
         verify(cdcManager, never()).ensureStarted(any());
         verify(cdcManager, never()).ensureStopped(anyLong());
@@ -266,7 +267,7 @@ class ProjectServiceStrategySwitchTest {
         // FAIL_ON_UNKNOWN_PROPERTIES),本用例防止任何一层将来退化。
         mysqlProject("{\"captureStrategy\":\"BINLOG_CDC\",\"futureFlag\":true}");
 
-        service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC");
+        service.saveConfig(1L, new SyncConfig(), "BINLOG_CDC", AccessGuard.system());
 
         verify(positionStore, never()).delete(anyLong());
         verify(taskStore, never()).markCdcRunning(anyLong());

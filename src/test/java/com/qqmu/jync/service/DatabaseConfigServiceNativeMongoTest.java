@@ -15,6 +15,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -66,7 +67,7 @@ class DatabaseConfigServiceNativeMongoTest {
         when(cryptoUtil.encrypt(any())).thenReturn("enc");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(c, "secret");
+        DatabaseConfig saved = service.save(c, "secret", null, AccessGuard.system());
 
         assertThat(saved.getPort()).isEqualTo(27017);
         assertThat(saved.getCustomDriver()).isNull();
@@ -78,7 +79,7 @@ class DatabaseConfigServiceNativeMongoTest {
     void aNativeConnectionsCannotBeATarget() {
         DatabaseConfig c = nativeMongo(ConnectionRole.TARGET);
 
-        assertThatThrownBy(() -> service.save(c, "secret"))
+        assertThatThrownBy(() -> service.save(c, "secret", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.mongodb.native.sourceOnly");
         verify(repository, never()).save(any());
@@ -90,7 +91,7 @@ class DatabaseConfigServiceNativeMongoTest {
         c.setDatabaseName(null);
         c.setCustomUrl("mongodb://mongo.internal:27018");
 
-        assertThatThrownBy(() -> service.save(c, "secret"))
+        assertThatThrownBy(() -> service.save(c, "secret", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.mongodb.native.database.required");
         verify(repository, never()).save(any());
@@ -101,7 +102,7 @@ class DatabaseConfigServiceNativeMongoTest {
         DatabaseConfig c = nativeMongo(ConnectionRole.SOURCE);
         c.setCustomUrl("jdbc:mongodb://mongo.internal/shop");
 
-        assertThatThrownBy(() -> service.save(c, "secret"))
+        assertThatThrownBy(() -> service.save(c, "secret", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.mongodb.uri.invalid");
     }

@@ -110,7 +110,7 @@ class ProjectControllerConfigAjaxTest {
     void ajaxSaveReportsAValidationFailureAsLocalizedJsonBadRequest() throws Exception {
         stubStoppedProject();
         doThrow(new IllegalArgumentException("error.project.cron.invalid"))
-                .when(projectService).saveConfig(eq(1L), any(SyncConfig.class), isNull());
+                .when(projectService).saveConfig(eq(1L), any(SyncConfig.class), isNull(), any());
 
         mvc.perform(post("/projects/1/config").with(csrf())
                         .header("X-Jync-Ajax", "1")

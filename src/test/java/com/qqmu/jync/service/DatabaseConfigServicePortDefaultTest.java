@@ -10,6 +10,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -56,16 +57,16 @@ class DatabaseConfigServicePortDefaultTest {
 
     @Test
     void sqlServerBlankPortIsSavedBlank() {
-        DatabaseConfig saved = service.save(config(DatabaseType.SQLSERVER, null), null);
+        DatabaseConfig saved = service.save(config(DatabaseType.SQLSERVER, null), null, null, AccessGuard.system());
 
         assertThat(saved.getPort()).isNull();
     }
 
     @Test
     void otherPresetsStillGetTheirDefaultPortWhenBlank() {
-        assertThat(service.save(config(DatabaseType.MYSQL, null), null).getPort())
+        assertThat(service.save(config(DatabaseType.MYSQL, null), null, null, AccessGuard.system()).getPort())
                 .isEqualTo(3306);
-        assertThat(service.save(config(DatabaseType.ORACLE, null), null).getPort())
+        assertThat(service.save(config(DatabaseType.ORACLE, null), null, null, AccessGuard.system()).getPort())
                 .isEqualTo(1521);
     }
 }

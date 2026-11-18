@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.RedisTargetForm;
 import com.qqmu.jync.service.projection.redis.RedisTargetService;
 import com.qqmu.jync.service.projection.redis.VerifyResult;
@@ -58,7 +59,7 @@ public class RedisTargetController {
                        @RequestParam(required = false) String rawPassword,
                        RedirectAttributes flash) {
         try {
-            service.save(form, rawPassword);
+            service.save(form, rawPassword, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.redis.target.saved");
             return "redirect:/redis/targets";
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -72,7 +73,7 @@ public class RedisTargetController {
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
         try {
-            service.delete(id);
+            service.delete(id, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.redis.target.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());

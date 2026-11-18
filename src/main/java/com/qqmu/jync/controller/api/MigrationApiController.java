@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.service.migration.MigrationConnectionService;
 import com.qqmu.jync.service.migration.connection.MigrationConnectionTestResult;
@@ -39,7 +40,7 @@ public class MigrationApiController {
         Map<String, Object> body = new LinkedHashMap<>();
         try {
             List<MigrationDiscoveryItem> indices =
-                    service.listIndices(connectionId, pattern);
+                    service.listIndices(connectionId, pattern, AccessGuard.current());
             body.put("success", true);
             body.put("count", indices.size());
             body.put("indices", indices);
@@ -65,7 +66,7 @@ public class MigrationApiController {
     @PostMapping("/connections/{id}/test")
     public Map<String, Object> testSaved(@PathVariable Long id) {
         try {
-            return result(service.test(id), null);
+            return result(service.test(id, AccessGuard.current()), null);
         } catch (RuntimeException e) {
             return failure(e.getMessage());
         }

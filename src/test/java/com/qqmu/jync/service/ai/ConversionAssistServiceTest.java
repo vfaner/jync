@@ -19,6 +19,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
@@ -111,7 +112,7 @@ class ConversionAssistServiceTest {
 
     private SyncConfig savedConfig() {
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(anyLong(), captor.capture());
+        verify(projectService).saveConfig(anyLong(), captor.capture(), any());
         return captor.getValue();
     }
 
@@ -119,7 +120,7 @@ class ConversionAssistServiceTest {
     @DisplayName("a saved override lands under the key the sync path reads")
     void anOverrideIsKeyedTheWayTheSyncPathLooksItUp() {
         service.saveOverride(1L, "PROCEDURE", "GET_TOTAL",
-                "CREATE PROCEDURE GET_TOTAL() BEGIN END");
+                "CREATE PROCEDURE GET_TOTAL() BEGIN END", AccessGuard.system());
 
         // StructureSyncService calls config.ddlOverride("PROCEDURE", name). Any other key here
         // would store the statement where nothing ever reads it.
@@ -131,7 +132,7 @@ class ConversionAssistServiceTest {
     @DisplayName("a function's override folds onto the PROCEDURE key")
     void aFunctionFoldsOntoTheProcedureKey() {
         service.saveOverride(1L, "FUNCTION", "CALC_TAX",
-                "CREATE FUNCTION CALC_TAX() RETURNS INT RETURN 1");
+                "CREATE FUNCTION CALC_TAX() RETURNS INT RETURN 1", AccessGuard.system());
 
         // The sync path does not distinguish the two; it looks up PROCEDURE for both. Storing
         // FUNCTION:CALC_TAX would be invisible to it.
@@ -147,7 +148,7 @@ class ConversionAssistServiceTest {
         java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr-TR"));
         try {
             service.saveOverride(1L, "FUNCTION", "CALC_TAX",
-                    "create or replace function calc_tax() returns int return 1");
+                    "create or replace function calc_tax() returns int return 1", AccessGuard.system());
         } finally {
             java.util.Locale.setDefault(previous);
         }
@@ -158,7 +159,7 @@ class ConversionAssistServiceTest {
     @Test
     @DisplayName("a view's override keeps its own key")
     void aViewKeepsItsOwnKey() {
-        service.saveOverride(1L, "VIEW", "V_SALES", "CREATE VIEW V_SALES AS SELECT 1");
+        service.saveOverride(1L, "VIEW", "V_SALES", "CREATE VIEW V_SALES AS SELECT 1", AccessGuard.system());
 
         assertThat(savedConfig().ddlOverride("VIEW", "V_SALES"))
                 .isEqualTo("CREATE VIEW V_SALES AS SELECT 1");
@@ -167,21 +168,21 @@ class ConversionAssistServiceTest {
     @Test
     @DisplayName("an unknown kind is refused rather than silently becoming a PROCEDURE override")
     void anUnknownKindIsRefused() {
-        assertThatThrownBy(() -> service.saveOverride(1L, "TRIGGER", "T1", "CREATE TRIGGER whatever"))
+        assertThatThrownBy(() -> service.saveOverride(1L, "TRIGGER", "T1", "CREATE TRIGGER whatever", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.override.kind.invalid");
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
     @DisplayName("a blank object name is refused")
     void aBlankNameIsRefused() {
-        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "  ", "CREATE VIEW V AS SELECT 1"))
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "  ", "CREATE VIEW V AS SELECT 1", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.override.name.required");
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
@@ -189,28 +190,28 @@ class ConversionAssistServiceTest {
     void aHeaderThatDoesNotMatchTheKindIsRefused() {
         // Chosen as VIEW but the statement creates a procedure: saving it would store the wrong
         // DDL under the view key and break view sync.
-        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "CREATE PROCEDURE V() BEGIN END"))
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "CREATE PROCEDURE V() BEGIN END", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.override.header.mismatch");
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
     @DisplayName("a statement with no CREATE header is refused even if the kind is valid")
     void aNonCreateBodyIsRefused() {
-        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "SELECT 1"))
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "SELECT 1", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.override.header.mismatch");
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
     @DisplayName("a MySQL-style CREATE with DEFINER/OR REPLACE prefixes still matches its kind")
     void aCreateWithDialectPrefixesIsAccepted() {
         service.saveOverride(1L, "VIEW", "V_SALES",
-                "CREATE OR REPLACE DEFINER = `admin`@`%` SQL SECURITY INVOKER VIEW V_SALES AS SELECT 1");
+                "CREATE OR REPLACE DEFINER = `admin`@`%` SQL SECURITY INVOKER VIEW V_SALES AS SELECT 1", AccessGuard.system());
 
         assertThat(savedConfig().ddlOverride("VIEW", "V_SALES")).isNotNull();
     }
@@ -221,7 +222,7 @@ class ConversionAssistServiceTest {
         // SQL Developer exports a view as "CREATE OR REPLACE FORCE VIEW"; rejecting that header
         // made exactly the Oracle-authored views unsaveable, which is the common case here.
         service.saveOverride(1L, "VIEW", "V_FORCE",
-                "CREATE OR REPLACE FORCE VIEW V_FORCE AS SELECT 1 FROM DUAL");
+                "CREATE OR REPLACE FORCE VIEW V_FORCE AS SELECT 1 FROM DUAL", AccessGuard.system());
 
         assertThat(savedConfig().ddlOverride("VIEW", "V_FORCE"))
                 .isEqualTo("CREATE OR REPLACE FORCE VIEW V_FORCE AS SELECT 1 FROM DUAL");
@@ -238,13 +239,13 @@ class ConversionAssistServiceTest {
                 .thenReturn(Optional.of(db(20L, "dst", DatabaseType.MYSQL, "cee")));
 
         assertThatThrownBy(() -> service.saveOverride(1L, "PROCEDURE", "InsertTestData",
-                "CREATE PROCEDURE `test-rgh`.`InsertTestData`() BEGIN END"))
+                "CREATE PROCEDURE `test-rgh`.`InsertTestData`() BEGIN END", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageStartingWith("error.override.schema.mismatch")
                 .hasMessageContaining("test-rgh")
                 .hasMessageContaining("cee");
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
@@ -254,7 +255,7 @@ class ConversionAssistServiceTest {
                 .thenReturn(Optional.of(db(20L, "dst", DatabaseType.MYSQL, "cee")));
 
         service.saveOverride(1L, "PROCEDURE", "InsertTestData",
-                "CREATE PROCEDURE `cee`.`InsertTestData`() BEGIN END");
+                "CREATE PROCEDURE `cee`.`InsertTestData`() BEGIN END", AccessGuard.system());
 
         assertThat(savedConfig().ddlOverride("PROCEDURE", "InsertTestData"))
                 .isEqualTo("CREATE PROCEDURE `cee`.`InsertTestData`() BEGIN END");
@@ -267,13 +268,13 @@ class ConversionAssistServiceTest {
         // applying V_SALES's override drops and recreates whatever the header names, V_SALES is
         // never created, and the sync still reports the change as done.
         assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V_SALES",
-                "CREATE VIEW V_OTHER AS SELECT 1"))
+                "CREATE VIEW V_OTHER AS SELECT 1", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageStartingWith("error.override.name.mismatch")
                 .hasMessageContaining("V_OTHER")
                 .hasMessageContaining("V_SALES");
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
@@ -282,7 +283,7 @@ class ConversionAssistServiceTest {
         when(databaseConfigRepository.findById(20L))
                 .thenReturn(Optional.of(db(20L, "dst", DatabaseType.MYSQL, "cee")));
 
-        service.saveOverride(1L, "VIEW", "V_SALES", "CREATE VIEW V_SALES AS SELECT 1");
+        service.saveOverride(1L, "VIEW", "V_SALES", "CREATE VIEW V_SALES AS SELECT 1", AccessGuard.system());
 
         assertThat(savedConfig().ddlOverride("VIEW", "V_SALES"))
                 .isEqualTo("CREATE VIEW V_SALES AS SELECT 1");
@@ -291,7 +292,7 @@ class ConversionAssistServiceTest {
     @Test
     @DisplayName("surrounding whitespace is stripped before saving")
     void whitespaceIsStripped() {
-        service.saveOverride(1L, "VIEW", "V", "\n\n  CREATE VIEW V AS SELECT 1  \n\n");
+        service.saveOverride(1L, "VIEW", "V", "\n\n  CREATE VIEW V AS SELECT 1  \n\n", AccessGuard.system());
 
         assertThat(savedConfig().ddlOverride("VIEW", "V")).isEqualTo("CREATE VIEW V AS SELECT 1");
     }
@@ -301,17 +302,17 @@ class ConversionAssistServiceTest {
     void aBlankOverrideIsRefused() {
         // An empty-string override is worse than none: ddlOverride() returns it, the sync path
         // treats it as the statement to run, and the object quietly stops being created.
-        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "   "))
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", "   ", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.override.empty");
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
     @DisplayName("a null override is refused")
     void aNullOverrideIsRefused() {
-        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", null))
+        assertThatThrownBy(() -> service.saveOverride(1L, "VIEW", "V", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.override.empty");
     }
@@ -322,7 +323,7 @@ class ConversionAssistServiceTest {
         config.getDdlOverrides().put("PROCEDURE:A", "one");
         config.getDdlOverrides().put("PROCEDURE:B", "two");
 
-        service.deleteOverride(1L, "PROCEDURE:A");
+        service.deleteOverride(1L, "PROCEDURE:A", AccessGuard.system());
 
         assertThat(savedConfig().getDdlOverrides()).containsOnlyKeys("PROCEDURE:B");
     }
@@ -330,10 +331,10 @@ class ConversionAssistServiceTest {
     @Test
     @DisplayName("deleting a key that is not there does not rewrite the config")
     void deletingAMissingKeyIsANoOp() {
-        service.deleteOverride(1L, "PROCEDURE:NOT_THERE");
+        service.deleteOverride(1L, "PROCEDURE:NOT_THERE", AccessGuard.system());
 
         // Writing the project row for a no-op would bump updatedAt and make the audit trail lie.
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test

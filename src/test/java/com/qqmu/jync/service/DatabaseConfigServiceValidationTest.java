@@ -19,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -86,7 +87,7 @@ class DatabaseConfigServiceValidationTest {
 
     @Test
     void gbaseWithoutJarIsRejected() {
-        assertThatThrownBy(() -> service.save(preset(DatabaseType.GBASE, "  "), null))
+        assertThatThrownBy(() -> service.save(preset(DatabaseType.GBASE, "  "), null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.driver.jar.required");
         verify(repository, never()).save(any());
@@ -94,7 +95,7 @@ class DatabaseConfigServiceValidationTest {
 
     @Test
     void oscarWithoutJarIsRejected() {
-        assertThatThrownBy(() -> service.save(preset(DatabaseType.OSCAR, null), null))
+        assertThatThrownBy(() -> service.save(preset(DatabaseType.OSCAR, null), null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.driver.jar.required");
     }
@@ -105,7 +106,7 @@ class DatabaseConfigServiceValidationTest {
         when(cryptoUtil.encrypt(any())).thenReturn("enc");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(preset(DatabaseType.GBASE, "/opt/drivers/gbase.jar"), null);
+        service.save(preset(DatabaseType.GBASE, "/opt/drivers/gbase.jar"), null, null, AccessGuard.system());
 
         verify(repository).save(any());
     }
@@ -116,7 +117,7 @@ class DatabaseConfigServiceValidationTest {
         when(cryptoUtil.encrypt(any())).thenReturn("enc");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(preset(DatabaseType.DM, null), null);
+        service.save(preset(DatabaseType.DM, null), null, null, AccessGuard.system());
 
         verify(repository).save(any());
     }
@@ -126,7 +127,7 @@ class DatabaseConfigServiceValidationTest {
         DatabaseConfig c = preset(DatabaseType.MYSQL, null);
         c.setRole(null);
 
-        assertThatThrownBy(() -> service.save(c, null))
+        assertThatThrownBy(() -> service.save(c, null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.connection.role.required");
         verify(repository, never()).save(any());
@@ -139,7 +140,7 @@ class DatabaseConfigServiceValidationTest {
         DatabaseConfig c = preset(DatabaseType.MYSQL, null);
         c.setType(null);
 
-        assertThatThrownBy(() -> service.save(c, null))
+        assertThatThrownBy(() -> service.save(c, null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.connection.type.required");
         verify(repository, never()).save(any());
@@ -150,7 +151,7 @@ class DatabaseConfigServiceValidationTest {
         DatabaseConfig c = preset(DatabaseType.MYSQL, null);
         c.setName("x".repeat(129));
 
-        assertThatThrownBy(() -> service.save(c, null))
+        assertThatThrownBy(() -> service.save(c, null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.connection.name.too.long");
         verify(repository, never()).save(any());
@@ -161,7 +162,7 @@ class DatabaseConfigServiceValidationTest {
         DatabaseConfig c = preset(DatabaseType.MYSQL, null);
         c.setHost("h".repeat(256));
 
-        assertThatThrownBy(() -> service.save(c, null))
+        assertThatThrownBy(() -> service.save(c, null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.connection.host.too.long");
         verify(repository, never()).save(any());
@@ -174,7 +175,7 @@ class DatabaseConfigServiceValidationTest {
         when(repository.findByName("conn-x")).thenReturn(Optional.of(stored(1L, ConnectionRole.SOURCE)));
         when(projectRepository.findBySourceDbId(1L)).thenReturn(List.of(project("proj-a")));
 
-        assertThatThrownBy(() -> service.save(incoming, null))
+        assertThatThrownBy(() -> service.save(incoming, null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.connection.role.source.in.use:proj-a");
         verify(repository, never()).save(any());
@@ -188,7 +189,7 @@ class DatabaseConfigServiceValidationTest {
         when(repository.findByName("conn-x")).thenReturn(Optional.of(stored(1L, ConnectionRole.TARGET)));
         when(projectRepository.findByTargetDbId(1L)).thenReturn(List.of(project("proj-b")));
 
-        assertThatThrownBy(() -> service.save(incoming, null))
+        assertThatThrownBy(() -> service.save(incoming, null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.connection.role.target.in.use:proj-b");
         verify(repository, never()).save(any());
@@ -202,7 +203,7 @@ class DatabaseConfigServiceValidationTest {
         when(projectRepository.findBySourceDbId(1L)).thenReturn(List.of());
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(incoming, null);
+        service.save(incoming, null, null, AccessGuard.system());
 
         verify(repository).save(any());
     }
@@ -260,7 +261,7 @@ class DatabaseConfigServiceValidationTest {
         when(cryptoUtil.encrypt("miner-secret")).thenReturn("enc-miner");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(c, null, "miner-secret");
+        DatabaseConfig saved = service.save(c, null, "miner-secret", AccessGuard.system());
 
         assertThat(saved.getMinerPassword()).isEqualTo("enc-miner");
         assertThat(saved.getMinerUsername()).isEqualTo("C##MINER");
@@ -276,7 +277,7 @@ class DatabaseConfigServiceValidationTest {
         when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(incoming, null, "");
+        DatabaseConfig saved = service.save(incoming, null, "", AccessGuard.system());
 
         assertThat(saved.getMinerPassword()).isEqualTo("old-enc");
         verify(cryptoUtil, never()).encrypt("");
@@ -292,7 +293,7 @@ class DatabaseConfigServiceValidationTest {
         when(cryptoUtil.encrypt("fresh")).thenReturn("enc-fresh");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(incoming, null, "fresh");
+        DatabaseConfig saved = service.save(incoming, null, "fresh", AccessGuard.system());
 
         assertThat(saved.getMinerPassword()).isEqualTo("enc-fresh");
     }
@@ -311,7 +312,7 @@ class DatabaseConfigServiceValidationTest {
         when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(incoming, null, "");
+        DatabaseConfig saved = service.save(incoming, null, "", AccessGuard.system());
 
         assertThat(saved.getMinerUsername()).isNull();
         assertThat(saved.getMinerPassword()).isNull();
@@ -328,7 +329,7 @@ class DatabaseConfigServiceValidationTest {
         when(repository.findByName("conn-x")).thenReturn(Optional.of(existing));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(incoming, null, "");
+        DatabaseConfig saved = service.save(incoming, null, "", AccessGuard.system());
 
         assertThat(saved.getMinerUsername()).isNull();
         assertThat(saved.getMinerPassword()).isNull();
@@ -343,7 +344,7 @@ class DatabaseConfigServiceValidationTest {
         when(cryptoUtil.encrypt("pw")).thenReturn("enc");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(preset, "pw", null);
+        DatabaseConfig saved = service.save(preset, "pw", null, AccessGuard.system());
 
         assertThat(saved.getDialectFamily()).isNull();
     }
@@ -360,7 +361,7 @@ class DatabaseConfigServiceValidationTest {
         when(cryptoUtil.encrypt("pw")).thenReturn("enc");
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        DatabaseConfig saved = service.save(custom, "pw", null);
+        DatabaseConfig saved = service.save(custom, "pw", null, AccessGuard.system());
 
         assertThat(saved.getDialectFamily()).isEqualTo(DatabaseType.DialectFamily.POSTGRES);
     }
@@ -373,7 +374,7 @@ class DatabaseConfigServiceValidationTest {
 
         // deleteById would throw EmptyResultDataAccessException, which a double-clicked or
         // two-tab delete would surface as a 500 instead of a plain "already gone" message.
-        assertThatThrownBy(() -> service.delete(42L))
+        assertThatThrownBy(() -> service.delete(42L, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.connection.missing");
         verify(repository, never()).deleteById(any());
@@ -386,7 +387,7 @@ class DatabaseConfigServiceValidationTest {
         when(repository.findById(7L)).thenReturn(Optional.of(existing));
         when(projectRepository.findBySourceDbIdOrTargetDbId(7L, 7L)).thenReturn(List.of());
 
-        service.delete(7L);
+        service.delete(7L, AccessGuard.system());
 
         verify(repository).deleteById(7L);
         // The audit trail is the only place left that names a destroyed connection.

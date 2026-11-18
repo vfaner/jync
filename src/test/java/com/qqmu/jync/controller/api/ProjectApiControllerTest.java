@@ -1,5 +1,7 @@
 package com.qqmu.jync.controller.api;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -45,13 +47,13 @@ class ProjectApiControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.message").value("msg.lock.forced"))
                 .andExpect(jsonPath("$.toastKind").value("warn"));
-        verify(projectService).forceUnlock(1L);
+        verify(projectService).forceUnlock(eq(1L), any());
     }
 
     @Test
     void forceUnlockOnAFreeLockBecomesA409WithTheRefusalKey() throws Exception {
         doThrow(new IllegalStateException("error.project.lock.not.held"))
-                .when(projectService).forceUnlock(1L);
+                .when(projectService).forceUnlock(eq(1L), any());
 
         mvc.perform(post("/api/projects/1/force-unlock").with(csrf()))
                 .andExpect(status().isConflict())
@@ -83,7 +85,7 @@ class ProjectApiControllerTest {
         result.setRowsInserted(1200);
         SyncTaskRunner.Outcome outcome = ReflectionTestUtils.invokeMethod(
                 SyncTaskRunner.Outcome.class, "executed", result);
-        when(projectService.syncNow(1L)).thenReturn(outcome);
+        when(projectService.syncNow(eq(1L), any())).thenReturn(outcome);
 
         mvc.perform(post("/api/projects/1/sync-now").with(csrf()))
                 .andExpect(status().isOk())
@@ -106,7 +108,7 @@ class ProjectApiControllerTest {
         result.setDeferred(true);
         SyncTaskRunner.Outcome outcome = ReflectionTestUtils.invokeMethod(
                 SyncTaskRunner.Outcome.class, "executed", result);
-        when(projectService.syncNow(1L)).thenReturn(outcome);
+        when(projectService.syncNow(eq(1L), any())).thenReturn(outcome);
 
         mvc.perform(post("/api/projects/1/sync-now").with(csrf()))
                 .andExpect(status().isOk())
@@ -123,7 +125,7 @@ class ProjectApiControllerTest {
         // Outcome.executed is package-private by design; reflection keeps the boundary.
         SyncTaskRunner.Outcome outcome = ReflectionTestUtils.invokeMethod(
                 SyncTaskRunner.Outcome.class, "executed", result);
-        when(projectService.syncNow(1L)).thenReturn(outcome);
+        when(projectService.syncNow(eq(1L), any())).thenReturn(outcome);
 
         mvc.perform(post("/api/projects/1/sync-now").with(csrf()))
                 .andExpect(status().isOk())

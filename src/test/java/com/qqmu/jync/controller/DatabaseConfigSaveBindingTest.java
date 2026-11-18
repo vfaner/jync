@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
@@ -101,7 +102,7 @@ class DatabaseConfigSaveBindingTest {
 
     private DatabaseConfig capture() {
         ArgumentCaptor<DatabaseConfig> captor = ArgumentCaptor.forClass(DatabaseConfig.class);
-        verify(service).save(captor.capture(), isNull(), isNull());
+        verify(service).save(captor.capture(), isNull(), isNull(), any());
         return captor.getValue();
     }
 }

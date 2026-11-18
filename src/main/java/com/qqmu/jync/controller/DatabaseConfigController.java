@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.DatabaseConfigForm;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseCategory;
@@ -152,7 +153,7 @@ public class DatabaseConfigController {
                        @RequestParam(required = false) String rawMinerPassword,
                        RedirectAttributes flash) {
         try {
-            service.save(form.toEntity(), rawPassword, rawMinerPassword);
+            service.save(form.toEntity(), rawPassword, rawMinerPassword, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.connection.saved");
             return "redirect:/databases";
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -167,7 +168,7 @@ public class DatabaseConfigController {
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
         try {
-            service.delete(id);
+            service.delete(id, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.connection.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());

@@ -26,6 +26,7 @@ import org.springframework.context.ApplicationEventPublisher;
 
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.MigrationConnection;
@@ -118,7 +119,7 @@ class MigrationTaskServiceTest {
             return saved;
         });
 
-        MigrationTask saved = service.save(form(), DEFAULT_OPTIONS);
+        MigrationTask saved = service.save(form(), DEFAULT_OPTIONS, AccessGuard.system());
 
         assertThat(saved.getId()).isEqualTo(10L);
         assertThat(saved.getOptionsJson()).isEqualTo("{\"writeMode\":\"APPEND\"}");
@@ -132,7 +133,7 @@ class MigrationTaskServiceTest {
         MigrationTaskForm form = form();
         form.setName("  ");
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.name.required");
         verify(taskRepository, never()).save(any());
@@ -143,7 +144,7 @@ class MigrationTaskServiceTest {
         MigrationTaskForm form = form();
         form.setName("x".repeat(129));
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.name.tooLong");
     }
@@ -153,7 +154,7 @@ class MigrationTaskServiceTest {
         MigrationTaskForm form = form();
         form.setTargetConnectionId(1L);
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.same.connection");
     }
@@ -163,7 +164,7 @@ class MigrationTaskServiceTest {
         source.setKind(MigrationConnectionKind.EASYSEARCH);
         MigrationTaskForm form = form();
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.source.kind");
     }
@@ -173,7 +174,7 @@ class MigrationTaskServiceTest {
         target.setKind(MigrationConnectionKind.OPENSEARCH);
         MigrationTaskForm form = form();
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.target.kind");
     }
@@ -184,7 +185,7 @@ class MigrationTaskServiceTest {
                 .thenThrow(new IllegalArgumentException("error.migration.options.batchSize.invalid"));
         MigrationTaskForm form = form();
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.options.batchSize.invalid");
     }
@@ -194,7 +195,7 @@ class MigrationTaskServiceTest {
         MigrationTaskForm form = form();
         form.setCronExpression("not a cron");
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.cron.invalid");
     }
@@ -204,7 +205,7 @@ class MigrationTaskServiceTest {
         MigrationTaskForm form = form();
         form.setEnabled(true);
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.cron.required");
     }
@@ -214,7 +215,7 @@ class MigrationTaskServiceTest {
         MigrationTaskForm form = form();
         form.setTimeoutSeconds(-1);
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.timeout.invalid");
     }
@@ -228,7 +229,7 @@ class MigrationTaskServiceTest {
         MigrationTaskForm form = form();
         form.setId(9L);
 
-        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form, DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.migration.running.config");
         verify(taskRepository, never()).save(any());
@@ -246,7 +247,7 @@ class MigrationTaskServiceTest {
         form.setId(9L);
         form.setDescription("new words");
 
-        MigrationTask saved = service.save(form, DEFAULT_OPTIONS);
+        MigrationTask saved = service.save(form, DEFAULT_OPTIONS, AccessGuard.system());
 
         assertThat(saved.getDescription()).isEqualTo("new words");
     }
@@ -256,7 +257,7 @@ class MigrationTaskServiceTest {
         when(taskRepository.findById(9L)).thenReturn(Optional.of(storedTask(9L)));
         when(guard.isRunning(9L)).thenReturn(true);
 
-        assertThatThrownBy(() -> service.delete(9L))
+        assertThatThrownBy(() -> service.delete(9L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.migration.running");
         verify(taskRepository, never()).deleteById(9L);
@@ -267,7 +268,7 @@ class MigrationTaskServiceTest {
         when(taskRepository.findById(9L)).thenReturn(Optional.of(storedTask(9L)));
         when(guard.isRunning(9L)).thenReturn(false);
 
-        service.delete(9L);
+        service.delete(9L, AccessGuard.system());
 
         verify(taskRepository).deleteById(9L);
         verify(events).publishEvent(new MigrationTaskChangedEvent(9L, true));
@@ -347,9 +348,10 @@ class MigrationTaskServiceTest {
 
     @Test
     void cancelDelegatesToTheGuardAndReportsWhetherAnythingWasRunning() {
+        when(taskRepository.findById(9L)).thenReturn(Optional.of(storedTask(9L)));
         when(guard.cancel(9L)).thenReturn(true);
 
-        assertThat(service.cancel(9L)).isTrue();
+        assertThat(service.cancel(9L, AccessGuard.system())).isTrue();
 
         verify(guard).cancel(9L);
     }
@@ -360,7 +362,7 @@ class MigrationTaskServiceTest {
         task.setCronExpression(null);
         when(taskRepository.findById(9L)).thenReturn(Optional.of(task));
 
-        assertThatThrownBy(() -> service.setEnabled(9L, true))
+        assertThatThrownBy(() -> service.setEnabled(9L, true, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.cron.required");
     }
@@ -374,7 +376,7 @@ class MigrationTaskServiceTest {
         task.setCronExpression("every five minutes");
         when(taskRepository.findById(9L)).thenReturn(Optional.of(task));
 
-        assertThatThrownBy(() -> service.setEnabled(9L, true))
+        assertThatThrownBy(() -> service.setEnabled(9L, true, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.cron.invalid");
         assertThat(task.getEnabled()).isFalse();
@@ -387,7 +389,7 @@ class MigrationTaskServiceTest {
         task.setCronExpression("0 */5 * * * *");
         when(taskRepository.findById(9L)).thenReturn(Optional.of(task));
 
-        service.setEnabled(9L, true);
+        service.setEnabled(9L, true, AccessGuard.system());
 
         assertThat(task.getEnabled()).isTrue();
         verify(taskRepository).save(task);
@@ -398,7 +400,7 @@ class MigrationTaskServiceTest {
     void anUnknownTypeCannotBeSaved() {
         when(registry.find(MigrationType.ES_TO_EASYSEARCH)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.save(form(), DEFAULT_OPTIONS))
+        assertThatThrownBy(() -> service.save(form(), DEFAULT_OPTIONS, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.type.unknown");
     }

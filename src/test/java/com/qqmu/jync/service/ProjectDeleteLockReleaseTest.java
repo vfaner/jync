@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.task.SyncLockService;
@@ -67,9 +68,9 @@ class ProjectDeleteLockReleaseTest {
     void deletingAProjectNeverTriesToReleaseTheLeaseRowItIsDeleting() {
         Project project = new Project();
         project.setName("delete-with-lease");
-        Project saved = projectService.save(project);
+        Project saved = projectService.save(project, AccessGuard.system());
 
-        projectService.delete(saved.getId());
+        projectService.delete(saved.getId(), AccessGuard.system());
 
         assertThat(projectRepository.findById(saved.getId())).isEmpty();
         assertThat(releaseWarnings()).isEmpty();

@@ -15,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
@@ -57,7 +58,7 @@ class EtlTaskServiceMongoTest {
         form.setSourceCollection(" orders ");
         form.setSourceFilter(" {\"status\":\"active\"} ");
 
-        EtlTask saved = service.save(form);
+        EtlTask saved = service.save(form, AccessGuard.system());
 
         assertThat(saved.getSourceSql()).isEmpty();
         assertThat(saved.getSourceCollection()).isEqualTo("orders");
@@ -73,7 +74,7 @@ class EtlTaskServiceMongoTest {
         form.setSourceCollection("orders");
         form.setSourceFilter("{\"status\":\"active\"}");
 
-        EtlTask saved = service.save(form);
+        EtlTask saved = service.save(form, AccessGuard.system());
 
         assertThat(saved.getSourceCollection()).isNull();
         assertThat(saved.getSourceFilter()).isNull();
@@ -90,7 +91,7 @@ class EtlTaskServiceMongoTest {
         edit.setId(5L);
         edit.setSourceCollection("orders2");
 
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(checkpointStore).clear(5L);
     }
@@ -105,7 +106,7 @@ class EtlTaskServiceMongoTest {
         edit.setId(5L);
         edit.setSourceFilter("{\"status\":\"paid\"}");
 
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(checkpointStore).clear(5L);
     }
@@ -120,7 +121,7 @@ class EtlTaskServiceMongoTest {
         edit.setId(5L);
         edit.setName("renamed");
 
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(checkpointStore, never()).clear(eq(5L));
     }
@@ -131,7 +132,7 @@ class EtlTaskServiceMongoTest {
         EtlTask form = form();
         form.setSourceCollection(" ");
 
-        assertThatThrownBy(() -> service.save(form))
+        assertThatThrownBy(() -> service.save(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.collection.required");
         verify(taskRepository, never()).save(any());

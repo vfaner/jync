@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller;
 
+import static org.mockito.ArgumentMatchers.eq;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -238,8 +239,8 @@ class ConversionControllerViewTest {
                 .andExpect(redirectedUrl("/projects/1/conversions/PROCEDURE/GET_TOTAL"))
                 .andExpect(flash().attribute("message", "msg.override.saved"));
 
-        verify(assistService).saveOverride(1L, "PROCEDURE", "GET_TOTAL",
-                "CREATE PROCEDURE GET_TOTAL() BEGIN END");
+        verify(assistService).saveOverride(eq(1L), eq("PROCEDURE"), eq("GET_TOTAL"),
+                eq("CREATE PROCEDURE GET_TOTAL() BEGIN END"), any());
     }
 
     @Test
@@ -256,7 +257,7 @@ class ConversionControllerViewTest {
                 .andExpect(redirectedUrl("/projects/1/conversions/VIEW/%E8%A7%86%E5%9B%BE"))
                 .andExpect(flash().attribute("message", "msg.override.saved"));
 
-        verify(assistService).saveOverride(1L, "VIEW", "视图", "CREATE VIEW V AS SELECT 1");
+        verify(assistService).saveOverride(eq(1L), eq("VIEW"), eq("视图"), eq("CREATE VIEW V AS SELECT 1"), any());
     }
 
     @Test
@@ -268,13 +269,13 @@ class ConversionControllerViewTest {
                 .andExpect(redirectedUrl("/projects/1/conversions/VIEW/%E8%A7%86%E5%9B%BE"))
                 .andExpect(flash().attribute("message", "msg.override.deleted"));
 
-        verify(assistService).deleteOverride(1L, "VIEW:视图");
+        verify(assistService).deleteOverride(eq(1L), eq("VIEW:视图"), any());
     }
 
     @Test
     void aRejectedSaveReportsTheReasonInsteadOfSucceedingSilently() throws Exception {
         doThrow(new IllegalArgumentException("error.override.empty"))
-                .when(assistService).saveOverride(anyLong(), anyString(), anyString(), any());
+                .when(assistService).saveOverride(anyLong(), anyString(), anyString(), any(), any());
 
         mvc.perform(post("/projects/1/conversions/PROCEDURE/GET_TOTAL/save").with(csrf()).param("sql", "  "))
                 .andExpect(status().is3xxRedirection())
@@ -287,7 +288,7 @@ class ConversionControllerViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("message", "msg.override.deleted"));
 
-        verify(assistService).deleteOverride(1L, "PROCEDURE:GET_TOTAL");
+        verify(assistService).deleteOverride(eq(1L), eq("PROCEDURE:GET_TOTAL"), any());
     }
 
     @Test
@@ -298,7 +299,7 @@ class ConversionControllerViewTest {
                 .andExpect(redirectedUrl("/projects/1/conversions"))
                 .andExpect(flash().attribute("message", "msg.override.deleted"));
 
-        verify(assistService).deleteOverride(1L, "VIEW:GONE");
+        verify(assistService).deleteOverride(eq(1L), eq("VIEW:GONE"), any());
     }
 
     @Test

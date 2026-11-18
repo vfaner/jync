@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
@@ -63,7 +64,7 @@ class EtlTaskServiceVariablesTest {
         stubConnections();
         captureSaved();
 
-        service.save(form("  tenant='acme'  "));
+        service.save(form("  tenant='acme'  "), AccessGuard.system());
 
         assertThat(captured.getVariables()).isEqualTo("tenant='acme'");
     }
@@ -75,7 +76,7 @@ class EtlTaskServiceVariablesTest {
 
         EtlTask blank = form("   \n  ");
         blank.setSourceSql("SELECT id FROM src");
-        service.save(blank);
+        service.save(blank, AccessGuard.system());
 
         assertThat(captured.getVariables()).isNull();
     }
@@ -89,7 +90,7 @@ class EtlTaskServiceVariablesTest {
 
         EtlTask edit = form("tenant='other'");
         edit.setId(5L);
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(checkpointStore).clear(5L);
     }
@@ -103,7 +104,7 @@ class EtlTaskServiceVariablesTest {
 
         EtlTask edit = form("  tenant='acme'  ");
         edit.setId(5L);
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         verify(checkpointStore, never()).clear(eq(5L));
     }
@@ -118,7 +119,7 @@ class EtlTaskServiceVariablesTest {
         EtlTask edit = form("tenant='other'");
         edit.setId(5L);
 
-        assertThatThrownBy(() -> service.save(edit))
+        assertThatThrownBy(() -> service.save(edit, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.running.extraction");
         verify(taskRepository, never()).save(any());
@@ -131,7 +132,7 @@ class EtlTaskServiceVariablesTest {
         EtlTask task = form("tenant='acme'");
         task.setSourceSql("SELECT * FROM src WHERE tenant = ${nope}");
 
-        assertThatThrownBy(() -> service.save(task))
+        assertThatThrownBy(() -> service.save(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.var.unknown:nope");
         verify(taskRepository, never()).save(any());
@@ -142,7 +143,7 @@ class EtlTaskServiceVariablesTest {
         stubConnections();
         EtlTask task = form("tenant");
 
-        assertThatThrownBy(() -> service.save(task))
+        assertThatThrownBy(() -> service.save(task, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.var.line:1");
         verify(taskRepository, never()).save(any());

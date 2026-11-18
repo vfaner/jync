@@ -15,6 +15,7 @@ import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlRun;
 import com.qqmu.jync.model.EtlTask;
@@ -80,7 +81,7 @@ public class EtlTaskService {
     }
 
     @Transactional
-    public EtlTask save(EtlTask form) {
+    public EtlTask save(EtlTask form, AccessGuard actor) {
         validate(form);
 
         EtlTask entity;
@@ -88,9 +89,11 @@ public class EtlTaskService {
         if (form.getId() == null) {
             entity = new EtlTask();
             entity.setEnabled(false);
+            entity.setOwnerUsername(actor.username());
         } else {
             entity = taskRepository.findById(form.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+            actor.requireEditable(entity.getOwnerUsername());
             extractionChanged = extractionChanged(entity, form);
             if (extractionChanged && guard.isLeased(form.getId())) {
                 // The runner read its SQL, target and resume key when it started. Clearing the
@@ -176,9 +179,10 @@ public class EtlTaskService {
     }
 
     @Transactional
-    public void setEnabled(Long id, boolean enabled) {
+    public void setEnabled(Long id, boolean enabled, AccessGuard actor) {
         EtlTask task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+        actor.requireEditable(task.getOwnerUsername());
         if (task.getBatchId() != null) {
             throw new IllegalStateException("error.etl.batch.managed");
         }
@@ -200,9 +204,10 @@ public class EtlTaskService {
     }
 
     @Transactional
-    public void delete(Long id) {
+    public void delete(Long id, AccessGuard actor) {
         EtlTask task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+        actor.requireEditable(task.getOwnerUsername());
         if (task.getBatchId() != null) {
             throw new IllegalStateException("error.etl.batch.managed");
         }
@@ -217,9 +222,20 @@ public class EtlTaskService {
         events.publishEvent(new EtlTaskChangedEvent(id, true));
     }
 
+    /** Loads the task and refuses it unless the caller may edit it. */
+    public EtlTask requireEditable(Long id, AccessGuard actor) {
+        EtlTask task = taskRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
+        actor.requireEditable(task.getOwnerUsername());
+        return task;
+    }
+
     /**
      * Queues one run and returns immediately. Returns false when the task is already running
      * or no executor slot is free, so the caller can tell the operator nothing was started.
+     *
+     * <p>No actor: the scheduler submits too, and it has no request identity. Callers that
+     * answer a request must ask {@link #requireEditable(Long, AccessGuard)} first.
      */
     public boolean submit(Long id) {
         if (!guard.tryAcquire(id)) {

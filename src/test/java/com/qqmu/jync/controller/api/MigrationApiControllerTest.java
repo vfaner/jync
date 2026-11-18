@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller.api;
 
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
@@ -33,7 +34,7 @@ class MigrationApiControllerTest {
 
     @Test
     void discoveryReturnsTheParsedIndexList() throws Exception {
-        when(service.listIndices(3L, "orders-*")).thenReturn(List.of(
+        when(service.listIndices(eq(3L), eq("orders-*"), any())).thenReturn(List.of(
                 new MigrationDiscoveryItem(
                         "orders-2026", 12L, "1kb", "open", "green")));
 
@@ -48,7 +49,7 @@ class MigrationApiControllerTest {
 
     @Test
     void discoveryFailuresAnswerWithAKeyInsteadOfAnHttpError() throws Exception {
-        when(service.listIndices(3L, "")).thenThrow(
+        when(service.listIndices(eq(3L), eq(""), any())).thenThrow(
                 new IllegalStateException("error.migration.connection.unreachable"));
 
         mvc.perform(get("/api/migrations/indices").param("connectionId", "3"))
@@ -91,7 +92,7 @@ class MigrationApiControllerTest {
 
     @Test
     void aSavedConnectionCanBeTested() throws Exception {
-        when(service.test(7L)).thenReturn(new MigrationConnectionTestResult(
+        when(service.test(eq(7L), any())).thenReturn(new MigrationConnectionTestResult(
                 true, null, "easysearch", "2.0.0", "easy", 8));
 
         mvc.perform(post("/api/migrations/connections/7/test").with(csrf()))

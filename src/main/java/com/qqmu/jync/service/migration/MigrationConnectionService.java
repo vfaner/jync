@@ -8,6 +8,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.audit.AuditDetail;
@@ -77,7 +78,7 @@ public class MigrationConnectionService {
      */
     @Transactional
     public MigrationConnection save(MigrationConnectionForm form, String rawPassword,
-                                    String rawApiKey) {
+                                    String rawApiKey, AccessGuard actor) {
         validateCommon(form);
 
         MigrationConnection entity;
@@ -95,6 +96,7 @@ public class MigrationConnectionService {
             existing = connections.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException(
                             "error.migration.connection.not.found"));
+            actor.requireEditable(existing.getOwnerUsername());
             // Reuse the loaded instance. A fresh entity built from the form has a null
             // @Version, so Spring Data treats it as new and INSERTs it — an edit would then
             // create a duplicate row (or hit the unique name index) instead of updating.
@@ -105,6 +107,7 @@ public class MigrationConnectionService {
                         "error.migration.connection.name.duplicate");
             });
             entity = new MigrationConnection();
+            entity.setOwnerUsername(actor.username());
         }
 
         if (existing != null && existing.getKind() != form.getKind()
@@ -208,10 +211,11 @@ public class MigrationConnectionService {
     }
 
     @Transactional
-    public void delete(Long id) {
+    public void delete(Long id, AccessGuard actor) {
         MigrationConnection victim = connections.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "error.migration.connection.missing"));
+        actor.requireEditable(victim.getOwnerUsername());
         if (tasks.countBySourceConnectionIdOrTargetConnectionId(id, id) > 0) {
             throw new IllegalStateException("error.migration.connection.inUse");
         }
@@ -222,10 +226,11 @@ public class MigrationConnectionService {
         log.info("Deleted dedicated-migration connection {}", id);
     }
 
-    public MigrationConnectionTestResult test(Long id) {
+    public MigrationConnectionTestResult test(Long id, AccessGuard actor) {
         MigrationConnection connection = connections.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "error.migration.connection.missing"));
+        actor.requireEditable(connection.getOwnerUsername());
         return adapters.forKind(connection.getKind()).test(connection);
     }
 
@@ -260,10 +265,12 @@ public class MigrationConnectionService {
     }
 
     /** Discovers copyable objects on the source connection, never touching the target. */
-    public List<MigrationDiscoveryItem> listIndices(Long connectionId, String pattern) {
+    public List<MigrationDiscoveryItem> listIndices(Long connectionId, String pattern,
+                                                    AccessGuard actor) {
         MigrationConnection connection = connections.findById(connectionId)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "error.migration.connection.missing"));
+        actor.requireEditable(connection.getOwnerUsername());
         return adapters.forKind(connection.getKind()).list(connection, pattern);
     }
 }

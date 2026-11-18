@@ -98,13 +98,13 @@ class EtlBatchViewTest {
         verify(etlBatchService).createWithTables(
                 org.mockito.ArgumentMatchers.argThat(batch -> "nightly".equals(batch.getName())
                         && Long.valueOf(1L).equals(batch.getSourceDbId())),
-                eq(List.of("orders", "users")));
+                eq(List.of("orders", "users")), any());
     }
 
     @Test
     void aRefusedSelectionComesBackOnTheFormWithTheNames() throws Exception {
         when(etlTaskService.connections()).thenReturn(List.of(source(1L), target(2L)));
-        when(etlBatchService.createWithTables(any(), any()))
+        when(etlBatchService.createWithTables(any(), any(), any()))
                 .thenThrow(new EtlBatchTableException(
                         "error.etl.batch.tables.unknown", List.of("gone")));
 
@@ -150,7 +150,7 @@ class EtlBatchViewTest {
                 .andExpect(redirectedUrl("/etl/batches/5/edit"))
                 .andExpect(flash().attribute("message", "msg.etl.batch.tables.added"));
 
-        verify(etlBatchService).addTables(5L, List.of("people"));
+        verify(etlBatchService).addTables(eq(5L), eq(List.of("people")), any());
     }
 
     @Test
@@ -161,7 +161,7 @@ class EtlBatchViewTest {
                 .andExpect(redirectedUrl("/etl/batches/5/edit"))
                 .andExpect(flash().attribute("message", "msg.etl.batch.member.removed"));
 
-        verify(etlBatchService).removeMember(5L, 7L);
+        verify(etlBatchService).removeMember(eq(5L), eq(7L), any());
     }
 
     @Test
@@ -174,7 +174,7 @@ class EtlBatchViewTest {
 
     @Test
     void saveFlashAndRedirectBackToTheEditPage() throws Exception {
-        when(etlBatchService.saveSettings(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(etlBatchService.saveSettings(any(), any())).thenAnswer(invocation -> invocation.getArgument(0));
 
         mvc.perform(post("/etl/batches/save").with(asAdmin()).with(csrf())
                         .param("id", "5")
@@ -200,22 +200,22 @@ class EtlBatchViewTest {
         mvc.perform(post("/etl/batches/5/start").with(asAdmin()).with(csrf()))
                 .andExpect(redirectedUrl("/etl"))
                 .andExpect(flash().attribute("message", "msg.etl.batch.enabled"));
-        verify(etlBatchService).setEnabled(5L, true);
+        verify(etlBatchService).setEnabled(eq(5L), eq(true), any());
 
         mvc.perform(post("/etl/batches/5/stop").with(asAdmin()).with(csrf()))
                 .andExpect(flash().attribute("message", "msg.etl.batch.disabled"));
-        verify(etlBatchService).setEnabled(5L, false);
+        verify(etlBatchService).setEnabled(eq(5L), eq(false), any());
 
         mvc.perform(post("/etl/batches/5/delete").with(asAdmin()).with(csrf()))
                 .andExpect(redirectedUrl("/etl"))
                 .andExpect(flash().attribute("message", "msg.etl.batch.deleted"));
-        verify(etlBatchService).delete(5L);
+        verify(etlBatchService).delete(eq(5L), any());
     }
 
     @Test
     void aServiceFailureFlashesTheErrorKey() throws Exception {
         org.mockito.Mockito.doThrow(new IllegalStateException("error.etl.batch.running"))
-                .when(etlBatchService).delete(5L);
+                .when(etlBatchService).delete(eq(5L), any());
 
         mvc.perform(post("/etl/batches/5/delete").with(asAdmin()).with(csrf()))
                 .andExpect(redirectedUrl("/etl"))

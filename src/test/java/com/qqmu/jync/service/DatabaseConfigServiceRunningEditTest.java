@@ -17,6 +17,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -77,7 +78,7 @@ class DatabaseConfigServiceRunningEditTest {
         when(projectRepository.findBySourceDbIdOrTargetDbId(5L, 5L))
                 .thenReturn(List.of(project("orders-sync", true)));
 
-        assertThatThrownBy(() -> service.save(incoming(5L), null))
+        assertThatThrownBy(() -> service.save(incoming(5L), null, null, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.connection.edit.running:orders-sync");
         verify(repository, never()).save(any());
@@ -92,7 +93,7 @@ class DatabaseConfigServiceRunningEditTest {
                 .thenReturn(List.of(project("orders-sync", false)));
         when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        assertThatCode(() -> service.save(incoming(5L), null)).doesNotThrowAnyException();
+        assertThatCode(() -> service.save(incoming(5L), null, null, AccessGuard.system())).doesNotThrowAnyException();
         verify(repository).save(any());
     }
 }

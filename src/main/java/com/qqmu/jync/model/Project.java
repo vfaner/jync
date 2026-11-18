@@ -61,6 +61,13 @@ public class Project {
     @Column(nullable = false)
     private Boolean enabled = false;
 
+    /**
+     * The account that created this resource; {@code null} for rows written before v2.4.0.
+     * Never bound from a form — see {@link com.qqmu.jync.service.auth.AccessGuard}.
+     */
+    @Column(name = "owner_username", length = 64)
+    private String ownerUsername;
+
     @Column(name = "created_at")
     private Instant createdAt;
 

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.util.UriUtils;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.ai.ConversionAssistService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -78,7 +79,7 @@ public class ConversionController {
                                @PathVariable String name, @RequestParam("sql") String sql,
                                RedirectAttributes flash) {
         try {
-            assistService.saveOverride(projectId, kind, name, sql);
+            assistService.saveOverride(projectId, kind, name, sql, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.override.saved");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -109,7 +110,7 @@ public class ConversionController {
     public String deleteOverride(@PathVariable Long projectId, @PathVariable String kind,
                                  @PathVariable String name, RedirectAttributes flash) {
         try {
-            assistService.deleteOverride(projectId, kind + ":" + name);
+            assistService.deleteOverride(projectId, kind + ":" + name, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.override.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -129,7 +130,7 @@ public class ConversionController {
                                 @RequestParam String overrideKey,
                                 RedirectAttributes flash) {
         try {
-            assistService.deleteOverride(projectId, overrideKey);
+            assistService.deleteOverride(projectId, overrideKey, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.override.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlBatch;
@@ -73,7 +74,7 @@ class EtlBatchMembershipTest {
         EtlBatch form = form();
         form.setTimeoutSeconds(30);
 
-        int created = service.createWithTables(form, List.of("c", "a"));
+        int created = service.createWithTables(form, List.of("c", "a"), AccessGuard.system());
 
         assertThat(created).isEqualTo(2);
         ArgumentCaptor<Iterable<EtlTask>> captor = ArgumentCaptor.forClass(Iterable.class);
@@ -97,7 +98,7 @@ class EtlBatchMembershipTest {
 
     @Test
     void anEmptySelectionIsRejected() {
-        assertThatThrownBy(() -> service.createWithTables(form(), List.of()))
+        assertThatThrownBy(() -> service.createWithTables(form(), List.of(), AccessGuard.system()))
                 .isInstanceOf(EtlBatchTableException.class)
                 .hasMessage("error.etl.batch.tables.none");
         verify(batchRepository, never()).save(any());
@@ -109,7 +110,7 @@ class EtlBatchMembershipTest {
         when(catalogService.listTables(1L))
                 .thenReturn(new ConnectionCatalogService.Tables("s", List.of("a")));
 
-        assertThatThrownBy(() -> service.createWithTables(form(), List.of("a", "z")))
+        assertThatThrownBy(() -> service.createWithTables(form(), List.of("a", "z"), AccessGuard.system()))
                 .isInstanceOf(EtlBatchTableException.class)
                 .hasMessage("error.etl.batch.tables.unknown")
                 .satisfies(error -> assertThat(((EtlBatchTableException) error).names())
@@ -122,7 +123,7 @@ class EtlBatchMembershipTest {
         when(catalogService.listTables(1L)).thenReturn(
                 new ConnectionCatalogService.Tables("s", List.of("a b", "ok", "a\"b")));
 
-        assertThatThrownBy(() -> service.createWithTables(form(), List.of("a b", "a\"b")))
+        assertThatThrownBy(() -> service.createWithTables(form(), List.of("a b", "a\"b"), AccessGuard.system()))
                 .isInstanceOf(EtlBatchTableException.class)
                 .hasMessage("error.etl.batch.tables.invalid")
                 .satisfies(error -> assertThat(((EtlBatchTableException) error).names())
@@ -135,7 +136,7 @@ class EtlBatchMembershipTest {
         when(catalogService.listTables(1L))
                 .thenThrow(new IllegalArgumentException("error.mongodb.native.jdbcUnsupported"));
 
-        assertThatThrownBy(() -> service.createWithTables(form(), List.of("a")))
+        assertThatThrownBy(() -> service.createWithTables(form(), List.of("a"), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.mongodb.native.jdbcUnsupported");
         verify(batchRepository, never()).save(any());
@@ -151,7 +152,7 @@ class EtlBatchMembershipTest {
         EtlTask existing = member(7L, 5L, "a");
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of(existing));
 
-        assertThatThrownBy(() -> service.addTables(5L, List.of("a", "b")))
+        assertThatThrownBy(() -> service.addTables(5L, List.of("a", "b"), AccessGuard.system()))
                 .isInstanceOf(EtlBatchTableException.class)
                 .hasMessage("error.etl.batch.tables.exists")
                 .satisfies(error -> assertThat(((EtlBatchTableException) error).names())
@@ -172,7 +173,7 @@ class EtlBatchMembershipTest {
         EtlTask existing = member(7L, 5L, "s.a");
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of(existing));
 
-        assertThatThrownBy(() -> service.addTables(5L, List.of("a")))
+        assertThatThrownBy(() -> service.addTables(5L, List.of("a"), AccessGuard.system()))
                 .isInstanceOf(EtlBatchTableException.class)
                 .hasMessage("error.etl.batch.tables.exists")
                 .satisfies(error -> assertThat(((EtlBatchTableException) error).names())
@@ -188,7 +189,7 @@ class EtlBatchMembershipTest {
         when(taskRepository.findById(7L)).thenReturn(Optional.of(member));
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of(member));
 
-        service.removeMember(5L, 7L);
+        service.removeMember(5L, 7L, AccessGuard.system());
 
         verify(checkpointStore).clear(7L);
         verify(taskRepository).delete(member);
@@ -204,7 +205,7 @@ class EtlBatchMembershipTest {
         when(taskRepository.findById(7L)).thenReturn(Optional.of(member));
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of());
 
-        service.removeMember(5L, 7L);
+        service.removeMember(5L, 7L, AccessGuard.system());
 
         assertThat(batch.getEnabled()).isFalse();
         verify(batchRepository).save(batch);
@@ -218,7 +219,7 @@ class EtlBatchMembershipTest {
         when(taskRepository.findById(7L)).thenReturn(Optional.of(member));
         guard.tryAcquire(7L);
 
-        assertThatThrownBy(() -> service.removeMember(5L, 7L))
+        assertThatThrownBy(() -> service.removeMember(5L, 7L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.batch.memberRunning");
         verify(taskRepository, never()).delete(any());

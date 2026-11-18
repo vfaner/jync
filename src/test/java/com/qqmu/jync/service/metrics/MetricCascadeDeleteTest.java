@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.TestPropertySource;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.AppMetricSample;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -52,7 +53,7 @@ class MetricCascadeDeleteTest {
         dbSamples.save(dbSample(doomed.getId()));
         dbSamples.save(dbSample(spared.getId()));
 
-        databaseConfigService.delete(doomed.getId());
+        databaseConfigService.delete(doomed.getId(), AccessGuard.system());
 
         assertThat(dbSamples.findAll())
                 .extracting(DbMetricSample::getConnectionId)
@@ -63,11 +64,11 @@ class MetricCascadeDeleteTest {
     void deletingAProjectDeletesItsTaskSamplesButLeavesTheProcessSamples() {
         Project project = new Project();
         project.setName("metric-cascade");
-        Project saved = projectService.save(project);
+        Project saved = projectService.save(project, AccessGuard.system());
         taskSamples.save(taskSample(saved.getId()));
         appSamples.save(appSample());
 
-        projectService.delete(saved.getId());
+        projectService.delete(saved.getId(), AccessGuard.system());
 
         assertThat(taskSamples.findAll()).isEmpty();
         assertThat(appSamples.findAll()).hasSize(1);

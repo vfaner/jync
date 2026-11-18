@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
@@ -59,7 +60,7 @@ class EtlTaskServiceBatchMemberTest {
         EtlTask edit = form(3L, 4L);
         edit.setId(5L);
 
-        assertThatThrownBy(() -> service.save(edit))
+        assertThatThrownBy(() -> service.save(edit, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.batch.connectionsLocked");
         verify(taskRepository, never()).save(any());
@@ -79,7 +80,7 @@ class EtlTaskServiceBatchMemberTest {
         edit.setCronExpression("0 0 3 * * *");
         edit.setEnabled(true);
 
-        service.save(edit);
+        service.save(edit, AccessGuard.system());
 
         ArgumentCaptor<EtlTask> saved = ArgumentCaptor.forClass(EtlTask.class);
         verify(taskRepository).save(saved.capture());
@@ -91,7 +92,7 @@ class EtlTaskServiceBatchMemberTest {
     void aMemberCannotBeEnabledOrDisabledDirectly() {
         when(taskRepository.findById(5L)).thenReturn(Optional.of(member(5L)));
 
-        assertThatThrownBy(() -> service.setEnabled(5L, true))
+        assertThatThrownBy(() -> service.setEnabled(5L, true, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.batch.managed");
         verify(taskRepository, never()).save(any());
@@ -101,7 +102,7 @@ class EtlTaskServiceBatchMemberTest {
     void aMemberCannotBeDeletedThroughTheTaskEndpoint() {
         when(taskRepository.findById(5L)).thenReturn(Optional.of(member(5L)));
 
-        assertThatThrownBy(() -> service.delete(5L))
+        assertThatThrownBy(() -> service.delete(5L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.batch.managed");
         verify(taskRepository, never()).deleteById(any());
@@ -118,7 +119,7 @@ class EtlTaskServiceBatchMemberTest {
         EtlTask edit = form(1L, 2L);
         edit.setId(5L);
 
-        assertThatThrownBy(() -> service.save(edit))
+        assertThatThrownBy(() -> service.save(edit, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.batch.duplicateTarget");
         verify(taskRepository, never()).save(any());
@@ -141,7 +142,7 @@ class EtlTaskServiceBatchMemberTest {
         EtlTask edit = form(1L, 2L);
         edit.setId(5L);
 
-        assertThatThrownBy(() -> service.save(edit))
+        assertThatThrownBy(() -> service.save(edit, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.batch.duplicateTarget");
         verify(taskRepository, never()).save(any());
@@ -156,7 +157,7 @@ class EtlTaskServiceBatchMemberTest {
         EtlTask created = form(1L, 2L);
         created.setBatchId(99L);
 
-        service.save(created);
+        service.save(created, AccessGuard.system());
 
         ArgumentCaptor<EtlTask> saved = ArgumentCaptor.forClass(EtlTask.class);
         verify(taskRepository).save(saved.capture());

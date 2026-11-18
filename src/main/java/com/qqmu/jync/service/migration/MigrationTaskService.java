@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.audit.AuditDetail;
@@ -86,7 +87,8 @@ public class MigrationTaskService {
     }
 
     @Transactional
-    public MigrationTask save(MigrationTaskForm form, ObjectNode formOptions) {
+    public MigrationTask save(MigrationTaskForm form, ObjectNode formOptions,
+                              AccessGuard actor) {
         validateBasics(form);
         MigrationTypeHandler handler = registry.find(form.getType())
                 .orElseThrow(() -> new IllegalArgumentException("error.migration.type.unknown"));
@@ -124,9 +126,11 @@ public class MigrationTaskService {
         MigrationTask entity;
         if (isNew) {
             entity = new MigrationTask();
+            entity.setOwnerUsername(actor.username());
         } else {
             entity = taskRepository.findById(form.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.migration.not.found"));
+            actor.requireEditable(entity.getOwnerUsername());
             if (guard.isRunning(entity.getId())
                     && configurationChanged(entity, form, options)) {
                 // The engine already read the old connections and options; letting the form
@@ -155,9 +159,10 @@ public class MigrationTaskService {
     }
 
     @Transactional
-    public void setEnabled(Long id, boolean enabled) {
+    public void setEnabled(Long id, boolean enabled, AccessGuard actor) {
         MigrationTask task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.migration.not.found"));
+        actor.requireEditable(task.getOwnerUsername());
         if (enabled && (task.getCronExpression() == null
                 || task.getCronExpression().isBlank())) {
             throw new IllegalArgumentException("error.migration.cron.required");
@@ -174,9 +179,10 @@ public class MigrationTaskService {
     }
 
     @Transactional
-    public void delete(Long id) {
+    public void delete(Long id, AccessGuard actor) {
         MigrationTask task = taskRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.migration.not.found"));
+        actor.requireEditable(task.getOwnerUsername());
         if (guard.isRunning(id)) {
             throw new IllegalStateException("error.migration.running");
         }
@@ -249,8 +255,17 @@ public class MigrationTaskService {
         runStore.finish(runId, id, result);
     }
 
-    public boolean cancel(Long id) {
+    public boolean cancel(Long id, AccessGuard actor) {
+        requireEditable(id, actor);
         return guard.cancel(id);
+    }
+
+    /** Loads the task and refuses it unless the caller may edit it. */
+    public MigrationTask requireEditable(Long id, AccessGuard actor) {
+        MigrationTask task = taskRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.migration.not.found"));
+        actor.requireEditable(task.getOwnerUsername());
+        return task;
     }
 
     private static JsonNode options(MigrationTask task) {

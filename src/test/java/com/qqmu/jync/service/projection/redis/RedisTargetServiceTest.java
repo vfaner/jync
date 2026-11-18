@@ -16,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.RedisTargetForm;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -47,7 +48,7 @@ class RedisTargetServiceTest {
         when(cryptoUtil.encrypt("s3cret")).thenReturn("enc:cipher");
         when(targets.save(any())).thenAnswer(i -> i.getArgument(0));
 
-        service.save(form("cache-1", null), "s3cret");
+        service.save(form("cache-1", null), "s3cret", AccessGuard.system());
 
         ArgumentCaptor<RedisTarget> saved = ArgumentCaptor.forClass(RedisTarget.class);
         verify(targets).save(saved.capture());
@@ -64,7 +65,7 @@ class RedisTargetServiceTest {
         when(targets.findById(3L)).thenReturn(Optional.of(existing));
         when(targets.save(any())).thenAnswer(i -> i.getArgument(0));
 
-        RedisTarget saved = service.save(form("cache-1", 3L), "");
+        RedisTarget saved = service.save(form("cache-1", 3L), "", AccessGuard.system());
 
         assertThat(saved).isSameAs(existing);
         assertThat(saved.getPasswordEnc()).isEqualTo("enc:stored");
@@ -80,7 +81,7 @@ class RedisTargetServiceTest {
         when(targets.findById(3L)).thenReturn(Optional.of(existing));
         when(targets.save(any())).thenAnswer(i -> i.getArgument(0));
 
-        RedisTarget saved = service.save(form("cache-1", 3L), null);
+        RedisTarget saved = service.save(form("cache-1", 3L), null, AccessGuard.system());
 
         assertThat(saved).isSameAs(existing);
         assertThat(saved.getOptVersion()).isEqualTo(7L);
@@ -91,7 +92,7 @@ class RedisTargetServiceTest {
         when(targets.findById(3L)).thenReturn(Optional.of(new RedisTarget()));
         when(projects.existsByTargetRedisId(3L)).thenReturn(true);
 
-        assertThatThrownBy(() -> service.delete(3L))
+        assertThatThrownBy(() -> service.delete(3L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.redis.target.inUse");
         verify(targets, never()).deleteById(any());
@@ -117,7 +118,7 @@ class RedisTargetServiceTest {
         stopped.setEnabled(false);
         when(projects.findByTargetRedisId(3L)).thenReturn(java.util.List.of(running, stopped));
 
-        assertThatThrownBy(() -> service.save(form("cache-1", 3L), null))
+        assertThatThrownBy(() -> service.save(form("cache-1", 3L), null, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.redis.target.edit.running:orders-cache");
         verify(targets, never()).save(any());
@@ -142,7 +143,7 @@ class RedisTargetServiceTest {
     void aNameIsRequired() {
         RedisTargetForm form = form("  ", null);
 
-        assertThatThrownBy(() -> service.save(form, null))
+        assertThatThrownBy(() -> service.save(form, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.redis.target.name.required");
     }
@@ -153,7 +154,7 @@ class RedisTargetServiceTest {
         other.setId(9L);
         when(targets.findByName("cache-1")).thenReturn(Optional.of(other));
 
-        assertThatThrownBy(() -> service.save(form("cache-1", null), null))
+        assertThatThrownBy(() -> service.save(form("cache-1", null), null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.redis.target.name.duplicate");
     }
@@ -164,7 +165,7 @@ class RedisTargetServiceTest {
         form.setClusterMode(true);
         form.setDatabaseIndex(3);
 
-        assertThatThrownBy(() -> service.save(form, null))
+        assertThatThrownBy(() -> service.save(form, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.redis.target.cluster.database");
     }
@@ -182,7 +183,7 @@ class RedisTargetServiceTest {
         RedisTargetForm form = form("cache-1", 3L);
         form.setDatabaseIndex(null);
 
-        RedisTarget saved = service.save(form, null);
+        RedisTarget saved = service.save(form, null, AccessGuard.system());
 
         assertThat(saved.getDatabaseIndex()).isZero();
     }
@@ -192,7 +193,7 @@ class RedisTargetServiceTest {
         RedisTargetForm form = form("cache-1", null);
         form.setPort(70000);
 
-        assertThatThrownBy(() -> service.save(form, null))
+        assertThatThrownBy(() -> service.save(form, null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.redis.target.port.invalid");
     }

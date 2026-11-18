@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -211,7 +212,7 @@ class ProjectRedisViewTest {
 
         org.mockito.ArgumentCaptor<SyncConfig> captor =
                 org.mockito.ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("BINLOG_CDC"));
+        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("BINLOG_CDC"), any());
         SyncConfig saved = captor.getValue();
         assertThat(saved.getBatchSize()).isEqualTo(1500);
         assertThat(saved.getFullLoadParallelism()).isEqualTo(3);

@@ -29,6 +29,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ChangeLog;
@@ -173,7 +174,7 @@ class ProjectServiceTest {
         SyncConfig config = new SyncConfig();
         config.setCronExpression("0 0/30 * * * ?");
 
-        assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
+        assertThatCode(() -> service.saveConfig(1L, config, AccessGuard.system())).doesNotThrowAnyException();
         verify(scheduler).reschedule(any());
     }
 
@@ -186,7 +187,7 @@ class ProjectServiceTest {
 
         // Left to Quartz this fails inside the save transaction with a bare RuntimeException:
         // a 500 for the user and a rollback that silently discards the rest of the form.
-        assertThatThrownBy(() -> service.saveConfig(1L, config))
+        assertThatThrownBy(() -> service.saveConfig(1L, config, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.cron.invalid");
         verify(projectRepository, never()).save(any());
@@ -202,7 +203,7 @@ class ProjectServiceTest {
         SyncConfig config = new SyncConfig();
         config.setCronExpression("   ");
 
-        assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
+        assertThatCode(() -> service.saveConfig(1L, config, AccessGuard.system())).doesNotThrowAnyException();
     }
 
     @Test
@@ -213,7 +214,7 @@ class ProjectServiceTest {
         config.getTableNameMapping().put("A", "X");
         config.getTableNameMapping().put("B", "X");
 
-        assertThatThrownBy(() -> service.saveConfig(1L, config))
+        assertThatThrownBy(() -> service.saveConfig(1L, config, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageStartingWith("error.project.tablemapping.duplicate:");
         verify(projectRepository, never()).save(any());
@@ -238,7 +239,7 @@ class ProjectServiceTest {
         // restored fields can be inspected on the merged entity.
         Project incoming = project(1L);
         incoming.setDescription("备注改一下");
-        service.save(incoming);
+        service.save(incoming, AccessGuard.system());
 
         ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
         verify(projectRepository).save(captor.capture());
@@ -253,7 +254,7 @@ class ProjectServiceTest {
         when(projectRepository.findByName("proj")).thenReturn(Optional.empty());
         when(projectRepository.findById(1L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.save(project(1L)))
+        assertThatThrownBy(() -> service.save(project(1L), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.not.found");
         verify(projectRepository, never()).save(any());
@@ -264,7 +265,7 @@ class ProjectServiceTest {
         when(projectRepository.findByName("proj")).thenReturn(Optional.empty());
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(project(null));
+        service.save(project(null), AccessGuard.system());
 
         verify(projectRepository, never()).findById(any());
     }
@@ -278,7 +279,7 @@ class ProjectServiceTest {
         when(projectRepository.findByName("proj")).thenReturn(Optional.empty());
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(incoming);
+        service.save(incoming, AccessGuard.system());
 
         ArgumentCaptor<Project> captor = ArgumentCaptor.forClass(Project.class);
         verify(projectRepository).save(captor.capture());
@@ -290,7 +291,7 @@ class ProjectServiceTest {
         Project p = project(null);
         p.setName("x".repeat(129));
 
-        assertThatThrownBy(() -> service.save(p))
+        assertThatThrownBy(() -> service.save(p, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.name.too.long");
         verify(projectRepository, never()).save(any());
@@ -301,7 +302,7 @@ class ProjectServiceTest {
         Project p = project(null);
         p.setDescription("x".repeat(513));
 
-        assertThatThrownBy(() -> service.save(p))
+        assertThatThrownBy(() -> service.save(p, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.description.too.long");
         verify(projectRepository, never()).save(any());
@@ -314,7 +315,7 @@ class ProjectServiceTest {
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
         when(lockService.tryAcquire(1L)).thenReturn(null);
 
-        assertThatThrownBy(() -> service.delete(1L))
+        assertThatThrownBy(() -> service.delete(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.sync.in.progress");
         // The refusal must precede every state purge: a half-deleted project coexisting
@@ -329,7 +330,7 @@ class ProjectServiceTest {
         SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
         when(lockService.tryAcquire(1L)).thenReturn(lock);
 
-        service.delete(1L);
+        service.delete(1L, AccessGuard.system());
 
         verify(scheduler).unschedule(1L);
         verify(taskStore).deleteForProject(1L);
@@ -368,7 +369,7 @@ class ProjectServiceTest {
         SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
         when(lockService.tryAcquire(42L)).thenReturn(lock);
 
-        service.delete(42L);
+        service.delete(42L, AccessGuard.system());
 
         org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(cdcManager, st);
         inOrder.verify(cdcManager).ensureStopped(42L);
@@ -385,7 +386,7 @@ class ProjectServiceTest {
         SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
         when(lockService.tryAcquire(1L)).thenReturn(lock);
 
-        service.delete(1L);
+        service.delete(1L, AccessGuard.system());
 
         verify(dataSourceManager, never()).getConnection(any());
         verify(positionStore).delete(1L);
@@ -421,7 +422,7 @@ class ProjectServiceTest {
         SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
         when(lockService.tryAcquire(42L)).thenReturn(lock);
 
-        service.delete(42L);
+        service.delete(42L, AccessGuard.system());
 
         // 服务处于 STARTED/RUNNING 时 DROP 直接报错,必须先 STOP。
         verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.STOP(?)}");
@@ -459,7 +460,7 @@ class ProjectServiceTest {
         when(conn.prepareCall(any(String.class))).thenReturn(cs);
         when(dataSourceManager.getConnection(source)).thenReturn(conn);
 
-        service.saveConfig(42L, new SyncConfig(), "POLLING");
+        service.saveConfig(42L, new SyncConfig(), "POLLING", AccessGuard.system());
 
         verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.STOP(?)}");
         verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.DROP(?)}");
@@ -482,7 +483,7 @@ class ProjectServiceTest {
 
         SyncConfig allTables = new SyncConfig();   // 未显式选表 = 整库
 
-        assertThatThrownBy(() -> service.saveConfig(42L, allTables, "YSTREAM_CDC"))
+        assertThatThrownBy(() -> service.saveConfig(42L, allTables, "YSTREAM_CDC", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.cdc.tables.required");
         verify(projectRepository, never()).save(any());
@@ -509,7 +510,7 @@ class ProjectServiceTest {
         config.setObjectSelectionExplicit(true);
 
         TransactionSynchronizationManager.initSynchronization();
-        service.saveConfig(42L, config, null);
+        service.saveConfig(42L, config, null, AccessGuard.system());
         for (TransactionSynchronization synchronization
                 : TransactionSynchronizationManager.getSynchronizations()) {
             synchronization.afterCommit();
@@ -621,7 +622,7 @@ class ProjectServiceTest {
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken("admin", null, java.util.List.of()));
 
-        service.forceUnlock(1L);
+        service.forceUnlock(1L, AccessGuard.of("admin", com.qqmu.jync.model.UserRole.ADMIN));
 
         verify(lockService).forceUnlock(1L);
         // Both trails get the event: the change log can be cleared per project, the
@@ -648,7 +649,7 @@ class ProjectServiceTest {
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project(1L)));
         when(taskStore.find(1L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.forceUnlock(1L))
+        assertThatThrownBy(() -> service.forceUnlock(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.lock.not.held");
         verify(lockService, never()).forceUnlock(1L);
@@ -674,7 +675,7 @@ class ProjectServiceTest {
         when(lockService.tryAcquire(1L)).thenReturn(lock);
 
         TransactionSynchronizationManager.initSynchronization();
-        service.delete(1L);
+        service.delete(1L, AccessGuard.system());
 
         // Simulate the outer transaction rolling back after delete() returned.
         for (TransactionSynchronization synchronization
@@ -695,7 +696,7 @@ class ProjectServiceTest {
         when(lockService.tryAcquire(1L)).thenReturn(lock);
 
         TransactionSynchronizationManager.initSynchronization();
-        service.delete(1L);
+        service.delete(1L, AccessGuard.system());
 
         for (TransactionSynchronization synchronization
                 : TransactionSynchronizationManager.getSynchronizations()) {
@@ -716,7 +717,7 @@ class ProjectServiceTest {
                 .when(scheduler).reschedule(any());
 
         TransactionSynchronizationManager.initSynchronization();
-        service.saveConfig(1L, new SyncConfig());
+        service.saveConfig(1L, new SyncConfig(), AccessGuard.system());
 
         for (TransactionSynchronization synchronization
                 : TransactionSynchronizationManager.getSynchronizations()) {
@@ -765,7 +766,7 @@ class ProjectServiceTest {
         when(cdcManager.strategyOf(project))
                 .thenReturn(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
 
-        service.stop(7L);
+        service.stop(7L, AccessGuard.system());
 
         verify(cdcManager).ensureStopped(7L);
         verify(taskStore).markStopped(7L);
@@ -786,7 +787,7 @@ class ProjectServiceTest {
         when(cdcManager.strategyOf(project))
                 .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
 
-        service.stop(7L);
+        service.stop(7L, AccessGuard.system());
 
         verify(taskRunner).requestStop(7L);
         verify(scheduler).unschedule(7L);
@@ -827,7 +828,7 @@ class ProjectServiceTest {
         Project incoming = formProject(1L);
         incoming.setSourceDbId(11L);   // 换了源库
 
-        assertThatThrownBy(() -> service.save(incoming))
+        assertThatThrownBy(() -> service.save(incoming, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.edit.running");
         verify(projectRepository, never()).save(any());
@@ -846,7 +847,7 @@ class ProjectServiceTest {
 
         // The project is already stopped, so "stop it first" would be advice the user cannot
         // act on; the blocker is the round that is still wrapping up.
-        assertThatThrownBy(() -> service.save(incoming))
+        assertThatThrownBy(() -> service.save(incoming, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.stillStopping");
         verify(projectRepository, never()).save(any());
@@ -859,7 +860,7 @@ class ProjectServiceTest {
         Project incoming = formProject(1L);
         incoming.setDescription("备注改一下");
 
-        assertThatCode(() -> service.save(incoming)).doesNotThrowAnyException();
+        assertThatCode(() -> service.save(incoming, AccessGuard.system())).doesNotThrowAnyException();
         verify(projectRepository).save(any());
         verify(syncEngine, never()).resetProject(any());
     }
@@ -872,7 +873,7 @@ class ProjectServiceTest {
         incoming.setSourceDbId(11L);
         incoming.setTargetDbId(21L);
 
-        service.save(incoming);
+        service.save(incoming, AccessGuard.system());
 
         // 游标/检查点/快照/CDC 位点描述的是旧端点组合,换库后必须全部作废,否则下次
         // 增量会拿旧游标读新库,静默漏数据。
@@ -901,7 +902,7 @@ class ProjectServiceTest {
 
         Project incoming = formProject(1L);
         incoming.setSourceDbId(11L);           // 换了源库,目标不变
-        service.save(incoming);
+        service.save(incoming, AccessGuard.system());
 
         verify(st).execute(contains("pg_drop_replication_slot('jync_1')"));
         verify(conn).close();
@@ -935,7 +936,7 @@ class ProjectServiceTest {
 
         Project incoming = formProject(1L);
         incoming.setSourceDbId(11L);           // 换了源库,目标不变
-        service.save(incoming);
+        service.save(incoming, AccessGuard.system());
 
         verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.STOP(?)}");
         verify(conn).prepareCall("{call DBMS_YSTREAM_ADM.DROP(?)}");
@@ -950,7 +951,7 @@ class ProjectServiceTest {
         Project incoming = formProject(1L);
         incoming.setSourceDbId(11L);
 
-        service.save(incoming);
+        service.save(incoming, AccessGuard.system());
 
         verify(dataSourceManager, never()).getConnection(any());
     }
@@ -964,7 +965,7 @@ class ProjectServiceTest {
         // 让用户以为已经重置,真正的入口是旁边的「重建基线」。
         when(cdcManager.strategyOf(existing)).thenReturn(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
 
-        assertThatThrownBy(() -> service.resetProgress(1L))
+        assertThatThrownBy(() -> service.resetProgress(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.cdc.reset.use.rebaseline");
         verify(syncEngine, never()).resetProject(1L);
@@ -983,7 +984,7 @@ class ProjectServiceTest {
         running.setLockExpiresAt(Instant.now().plusSeconds(60));
         when(taskStore.find(1L)).thenReturn(Optional.of(running));
 
-        assertThatThrownBy(() -> service.resetProgress(1L))
+        assertThatThrownBy(() -> service.resetProgress(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.sync.in.progress");
         verify(syncEngine, never()).resetProject(1L);
@@ -1001,7 +1002,7 @@ class ProjectServiceTest {
         stale.setLockExpiresAt(Instant.now().minusSeconds(60));
         when(taskStore.find(1L)).thenReturn(Optional.of(stale));
 
-        service.resetProgress(1L);
+        service.resetProgress(1L, AccessGuard.system());
 
         verify(syncEngine).resetProject(1L);
     }
@@ -1018,7 +1019,7 @@ class ProjectServiceTest {
         when(cdcManager.strategyOf(existing)).thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
         when(taskStore.find(1L)).thenReturn(Optional.empty());
 
-        service.resetProgress(1L);
+        service.resetProgress(1L, AccessGuard.system());
 
         verify(syncEngine).resetProject(1L);
         verify(taskStore).markStoppedClearingResult(1L);
@@ -1029,7 +1030,7 @@ class ProjectServiceTest {
         Project existing = storedProject(1L, false);
         stubLookup(existing);              // 内容未变:save() 不会被调用,不需要它的 stub
 
-        service.save(formProject(1L));
+        service.save(formProject(1L), AccessGuard.system());
 
         verify(syncEngine, never()).resetProject(any());
         verify(checkpointRepository, never()).deleteByProjectId(any());
@@ -1044,7 +1045,7 @@ class ProjectServiceTest {
         // 这样失败原因才是 verify(never()) 而不是一次无关的 NPE。
         lenient().when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        Project result = service.save(formProject(1L));
+        Project result = service.save(formProject(1L), AccessGuard.system());
 
         assertThat(result).isSameAs(existing);
         verify(projectRepository, never()).save(any());
@@ -1061,7 +1062,7 @@ class ProjectServiceTest {
         Project incoming = formProject(1L);
         incoming.setDescription("");       // 表单对空文本域提交的是空串,不是 null
 
-        service.save(incoming);
+        service.save(incoming, AccessGuard.system());
 
         verify(projectRepository, never()).save(any());
     }
@@ -1074,7 +1075,7 @@ class ProjectServiceTest {
         SyncConfig config = new SyncConfig();
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("B")));
 
-        assertThatThrownBy(() -> service.saveConfig(1L, config))
+        assertThatThrownBy(() -> service.saveConfig(1L, config, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.mapping.running");
         verify(projectRepository, never()).save(any());
@@ -1110,7 +1111,7 @@ class ProjectServiceTest {
         config.setAllowDrop(true);
         config.setSyncDeletes(true);
 
-        service.saveConfig(1L, config);
+        service.saveConfig(1L, config, AccessGuard.system());
 
         assertThat(config.isAllowDrop()).isTrue();
         assertThat(config.isSyncDeletes()).isTrue();
@@ -1132,7 +1133,7 @@ class ProjectServiceTest {
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("COURSE")));
         config.setObjectSelectionExplicit(true);
 
-        assertThatThrownBy(() -> service.saveConfig(1L, config))
+        assertThatThrownBy(() -> service.saveConfig(1L, config, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.stillStopping");
         verify(projectRepository, never()).save(any());
@@ -1146,7 +1147,7 @@ class ProjectServiceTest {
         SyncConfig config = new SyncConfig();
         config.getTableNameMapping().put("A", "Y");
 
-        assertThatThrownBy(() -> service.saveConfig(1L, config))
+        assertThatThrownBy(() -> service.saveConfig(1L, config, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.mapping.running");
         verify(projectRepository, never()).save(any());
@@ -1167,7 +1168,7 @@ class ProjectServiceTest {
         SyncConfig config = new SyncConfig();
         config.getTableNameMapping().put("A", "Y");
 
-        assertThatThrownBy(() -> service.saveConfig(1L, config))
+        assertThatThrownBy(() -> service.saveConfig(1L, config, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.stillStopping");
     }
@@ -1181,7 +1182,7 @@ class ProjectServiceTest {
         running.setLockExpiresAt(Instant.now().plusSeconds(60));
         when(taskStore.find(1L)).thenReturn(Optional.of(running));
 
-        assertThatThrownBy(() -> service.saveCursorColumn(1L, "T", "id"))
+        assertThatThrownBy(() -> service.saveCursorColumn(1L, "T", "id", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.stillStopping");
     }
@@ -1198,7 +1199,7 @@ class ProjectServiceTest {
         // 服务端必须与之一致,不能只认 ASCII 空格。
         config.getTableNameMapping().put("orders", " ord\u3000ers_copy\t");
 
-        service.saveConfig(1L, config);
+        service.saveConfig(1L, config, AccessGuard.system());
 
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
         verify(contextFactory).serializeConfig(captor.capture());
@@ -1220,7 +1221,7 @@ class ProjectServiceTest {
         config.getTableNameMapping().put("orders", "   ");
         config.getTableNameMapping().put("products", " products ");
 
-        service.saveConfig(1L, config);
+        service.saveConfig(1L, config, AccessGuard.system());
 
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
         verify(contextFactory).serializeConfig(captor.capture());
@@ -1240,7 +1241,7 @@ class ProjectServiceTest {
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("A")));
         config.getTableNameMapping().put("A", " A ");
 
-        assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
+        assertThatCode(() -> service.saveConfig(1L, config, AccessGuard.system())).doesNotThrowAnyException();
         verify(projectRepository).save(any());
     }
 
@@ -1255,7 +1256,7 @@ class ProjectServiceTest {
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("A")));
         config.setCronExpression("0 0/30 * * * ?");
 
-        assertThatCode(() -> service.saveConfig(1L, config)).doesNotThrowAnyException();
+        assertThatCode(() -> service.saveConfig(1L, config, AccessGuard.system())).doesNotThrowAnyException();
         verify(projectRepository).save(any());
     }
 
@@ -1270,7 +1271,7 @@ class ProjectServiceTest {
         Project clone = project(null);
         clone.setName("proj (copy)");
 
-        Project saved = service.saveAsClone(clone, 1L);
+        Project saved = service.saveAsClone(clone, 1L, AccessGuard.system());
 
         // Verbatim, not re-serialized from a parsed config: fields this version does not
         // know (a newer version's config) must survive the clone.
@@ -1299,7 +1300,7 @@ class ProjectServiceTest {
         Project clone = project(null);
         clone.setName("proj (copy)");
 
-        Project saved = service.saveAsClone(clone, 1L);
+        Project saved = service.saveAsClone(clone, 1L, AccessGuard.system());
 
         tools.jackson.databind.JsonNode node =
                 new tools.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
@@ -1332,7 +1333,7 @@ class ProjectServiceTest {
         clone.setTargetKind(SyncTargetKind.REDIS);
         clone.setTargetRedisId(7L);
 
-        Project saved = service.saveAsClone(clone, 1L);
+        Project saved = service.saveAsClone(clone, 1L, AccessGuard.system());
 
         tools.jackson.databind.JsonNode node =
                 new tools.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
@@ -1367,7 +1368,7 @@ class ProjectServiceTest {
         clone.setTargetKind(SyncTargetKind.JDBC);
         clone.setTargetDbId(2L);
 
-        Project saved = service.saveAsClone(clone, 1L);
+        Project saved = service.saveAsClone(clone, 1L, AccessGuard.system());
 
         tools.jackson.databind.JsonNode node =
                 new tools.jackson.databind.ObjectMapper().readTree(saved.getSyncConfig());
@@ -1392,7 +1393,7 @@ class ProjectServiceTest {
         clone.setTargetKind(SyncTargetKind.JDBC);
         clone.setTargetDbId(2L);
 
-        Project saved = service.saveAsClone(clone, 1L);
+        Project saved = service.saveAsClone(clone, 1L, AccessGuard.system());
 
         assertThat(saved.getSyncConfig()).isEqualTo("{\"tables\":[\"A\"]}");
     }
@@ -1413,7 +1414,7 @@ class ProjectServiceTest {
 
         // Nothing is selected, so starting would only schedule empty cycles — refuse before
         // the enabled flag is persisted and before any consumer is launched.
-        assertThatThrownBy(() -> service.start(1L))
+        assertThatThrownBy(() -> service.start(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.no.objects");
         assertThat(project.getEnabled()).isNotEqualTo(Boolean.TRUE);
@@ -1430,7 +1431,7 @@ class ProjectServiceTest {
         when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
         when(cdcManager.strategyOf(project)).thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
 
-        service.start(1L);
+        service.start(1L, AccessGuard.system());
 
         // Legacy empty means "all" — there is still work to schedule.
         assertThat(project.getEnabled()).isTrue();
@@ -1446,7 +1447,7 @@ class ProjectServiceTest {
                 .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
         when(contextFactory.parseConfig(project)).thenReturn(explicitlyEmptySelection());
 
-        assertThatThrownBy(() -> service.syncNow(1L))
+        assertThatThrownBy(() -> service.syncNow(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.no.objects");
         verify(taskRunner, never()).runOnce(any());
@@ -1467,7 +1468,7 @@ class ProjectServiceTest {
         when(cdcManager.strategyOf(project))
                 .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
 
-        assertThatThrownBy(() -> service.syncNow(1L))
+        assertThatThrownBy(() -> service.syncNow(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.redis.cdcOnly");
         verify(taskRunner, never()).runOnce(any());
@@ -1480,7 +1481,7 @@ class ProjectServiceTest {
         when(contextFactory.parseConfig(project)).thenReturn(pollingWithNoOptions());
 
         // No enabled category can write anything: scheduling would only connect and read.
-        assertThatThrownBy(() -> service.start(1L))
+        assertThatThrownBy(() -> service.start(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.no.options");
         assertThat(project.getEnabled()).isNotEqualTo(Boolean.TRUE);
@@ -1500,7 +1501,7 @@ class ProjectServiceTest {
         config.setCronExpression("*/5 * * * *");
         when(contextFactory.parseConfig(project)).thenReturn(config);
 
-        assertThatThrownBy(() -> service.start(1L))
+        assertThatThrownBy(() -> service.start(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.cron.invalid");
         assertThat(project.getEnabled()).isNotEqualTo(Boolean.TRUE);
@@ -1519,7 +1520,7 @@ class ProjectServiceTest {
         when(cdcManager.strategyOf(project))
                 .thenReturn(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
 
-        service.start(1L);
+        service.start(1L, AccessGuard.system());
 
         // The consumer replays row events regardless of the polling switches; blocking
         // Start here would disable a mode that still has work to do.
@@ -1536,7 +1537,7 @@ class ProjectServiceTest {
                 .thenReturn(com.qqmu.jync.model.CaptureStrategy.POLLING);
         when(contextFactory.parseConfig(project)).thenReturn(pollingWithNoOptions());
 
-        assertThatThrownBy(() -> service.syncNow(1L))
+        assertThatThrownBy(() -> service.syncNow(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.no.options");
         verify(taskRunner, never()).runOnce(any());
@@ -1557,7 +1558,7 @@ class ProjectServiceTest {
 
         ListAppender<ILoggingEvent> logs = LogCapture.attach(ProjectService.class);
         try {
-            assertThatThrownBy(() -> service.start(1L))
+            assertThatThrownBy(() -> service.start(1L, AccessGuard.system()))
                     .isInstanceOf(IllegalStateException.class)
                     .hasMessage("error.project.no.options");
         } finally {
@@ -1593,7 +1594,7 @@ class ProjectServiceTest {
         Project clone = project(null);
         clone.setName("proj (copy)");
 
-        assertThatThrownBy(() -> service.saveAsClone(clone, 9L))
+        assertThatThrownBy(() -> service.saveAsClone(clone, 9L, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.not.found");
         verify(projectRepository, never()).save(any());

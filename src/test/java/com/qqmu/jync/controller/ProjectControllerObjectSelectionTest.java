@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -93,7 +94,7 @@ class ProjectControllerObjectSelectionTest {
 
         assertThat(result.getFlashMap().get("error")).isNull();
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), captor.capture(), isNull());
+        verify(projectService).saveConfig(eq(1L), captor.capture(), isNull(), any());
         SyncConfig saved = captor.getValue();
         assertThat(saved.isObjectSelectionExplicit()).isTrue();
         assertThat(saved.getTables()).isEmpty();
@@ -118,7 +119,7 @@ class ProjectControllerObjectSelectionTest {
                 .andExpect(status().is3xxRedirection());
 
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), captor.capture(), isNull());
+        verify(projectService).saveConfig(eq(1L), captor.capture(), isNull(), any());
         assertThat(captor.getValue().getTables()).containsExactly("orders");
         assertThat(captor.getValue().getViews()).containsExactly("v_orders");
         assertThat(captor.getValue().getProcedures()).containsExactly("p_nightly");

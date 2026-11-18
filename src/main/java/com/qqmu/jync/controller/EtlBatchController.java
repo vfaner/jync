@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlBatch;
 import com.qqmu.jync.model.EtlTask;
@@ -57,7 +58,7 @@ public class EtlBatchController {
                          Model model, RedirectAttributes flash) {
         List<String> chosen = tables == null ? List.of() : tables;
         try {
-            etlBatchService.createWithTables(batch, chosen);
+            etlBatchService.createWithTables(batch, chosen, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.etl.batch.created");
             return "redirect:/etl";
         } catch (EtlBatchTableException e) {
@@ -108,7 +109,7 @@ public class EtlBatchController {
     @PostMapping("/save")
     public String save(@ModelAttribute("batch") EtlBatch batch, RedirectAttributes flash) {
         try {
-            EtlBatch saved = etlBatchService.saveSettings(batch);
+            EtlBatch saved = etlBatchService.saveSettings(batch, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.etl.batch.saved");
             return "redirect:/etl/batches/" + saved.getId() + "/edit";
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -123,7 +124,7 @@ public class EtlBatchController {
                             @RequestParam(name = "tables", required = false) List<String> tables,
                             RedirectAttributes flash) {
         try {
-            etlBatchService.addTables(id, tables == null ? List.of() : tables);
+            etlBatchService.addTables(id, tables == null ? List.of() : tables, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.etl.batch.tables.added");
         } catch (EtlBatchTableException e) {
             // Flash 的 key:附加上下文 约定（见 layout.html）把被拒绝的表名带回去。
@@ -139,7 +140,7 @@ public class EtlBatchController {
     public String removeMember(@PathVariable Long id, @PathVariable Long taskId,
                                RedirectAttributes flash) {
         try {
-            etlBatchService.removeMember(id, taskId);
+            etlBatchService.removeMember(id, taskId, AccessGuard.current());
             flash.addFlashAttribute("message", etlBatchService.members(id).isEmpty()
                     ? "msg.etl.batch.member.emptied" : "msg.etl.batch.member.removed");
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -175,7 +176,7 @@ public class EtlBatchController {
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
         try {
-            etlBatchService.delete(id);
+            etlBatchService.delete(id, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.etl.batch.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -185,7 +186,7 @@ public class EtlBatchController {
 
     private String changeEnabled(Long id, boolean enabled, RedirectAttributes flash) {
         try {
-            etlBatchService.setEnabled(id, enabled);
+            etlBatchService.setEnabled(id, enabled, AccessGuard.current());
             flash.addFlashAttribute("message",
                     enabled ? "msg.etl.batch.enabled" : "msg.etl.batch.disabled");
         } catch (IllegalArgumentException | IllegalStateException e) {

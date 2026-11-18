@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
 import com.qqmu.jync.model.MigrationConnectionKind;
@@ -59,7 +60,7 @@ public class MigrationConnectionController {
                        @RequestParam(required = false) String rawApiKey,
                        RedirectAttributes flash) {
         try {
-            service.save(form, rawPassword, rawApiKey);
+            service.save(form, rawPassword, rawApiKey, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.migration.connection.saved");
             return "redirect:/migrations/connections";
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -73,7 +74,7 @@ public class MigrationConnectionController {
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
         try {
-            service.delete(id);
+            service.delete(id, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.migration.connection.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ChangeLogRepository;
@@ -109,7 +110,7 @@ class ProjectServiceCursorColumnTest {
         // Only reached if the guard is missing; lenient so the fixed code need not read it.
         lenient().when(contextFactory.parseConfig(running)).thenReturn(new SyncConfig());
 
-        assertThatThrownBy(() -> service.saveCursorColumn(1L, TABLE, "created_at"))
+        assertThatThrownBy(() -> service.saveCursorColumn(1L, TABLE, "created_at", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.stop.before.config");
 
@@ -127,7 +128,7 @@ class ProjectServiceCursorColumnTest {
         when(contextFactory.serializeConfig(any())).thenReturn("{}");
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveCursorColumn(1L, TABLE, "created_at");
+        service.saveCursorColumn(1L, TABLE, "created_at", AccessGuard.system());
 
         assertThat(config.cursorColumnFor(TABLE)).isEqualTo("created_at");
         verify(projectRepository).save(stopped);
@@ -142,7 +143,7 @@ class ProjectServiceCursorColumnTest {
         stoppedProjectWith(stopped, config);
 
         // Same value, only whitespace differs: no write and no needless full reload.
-        service.saveCursorColumn(1L, TABLE, "  updated_at  ");
+        service.saveCursorColumn(1L, TABLE, "  updated_at  ", AccessGuard.system());
 
         verify(projectRepository, never()).save(any());
         verify(stateWriter, never()).clearCursor(anyLong(), anyString());
@@ -157,7 +158,7 @@ class ProjectServiceCursorColumnTest {
         when(contextFactory.serializeConfig(any())).thenReturn("{}");
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveCursorColumn(1L, TABLE, "   ");
+        service.saveCursorColumn(1L, TABLE, "   ", AccessGuard.system());
 
         assertThat(config.getCursorColumns()).isEmpty();
         verify(stateWriter).clearCursor(1L, TABLE);
@@ -172,7 +173,7 @@ class ProjectServiceCursorColumnTest {
         when(contextFactory.serializeConfig(any())).thenReturn("{}");
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        service.saveCursorColumn(1L, "ORDERS", "created_at");
+        service.saveCursorColumn(1L, "ORDERS", "created_at", AccessGuard.system());
 
         // cursorColumnFor matches case-insensitively; two keys would make the lookup ambiguous.
         assertThat(config.getCursorColumns()).hasSize(1);

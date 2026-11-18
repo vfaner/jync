@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.task.SyncTaskRunner;
@@ -32,14 +33,14 @@ public class ProjectApiController {
     /** Enables the project and begins polling. */
     @PostMapping("/{id}/start")
     public ResponseEntity<Map<String, Object>> start(@PathVariable Long id) {
-        projectService.start(id);
+        projectService.start(id, AccessGuard.current());
         return ResponseEntity.ok(ok("msg.sync.started"));
     }
 
     /** Disables the project and removes its schedule. */
     @PostMapping("/{id}/stop")
     public ResponseEntity<Map<String, Object>> stop(@PathVariable Long id) {
-        projectService.stop(id);
+        projectService.stop(id, AccessGuard.current());
         return ResponseEntity.ok(ok("msg.sync.stopped"));
     }
 
@@ -52,7 +53,7 @@ public class ProjectApiController {
      */
     @PostMapping("/{id}/sync-now")
     public ResponseEntity<Map<String, Object>> syncNow(@PathVariable Long id) {
-        SyncTaskRunner.Outcome outcome = projectService.syncNow(id);
+        SyncTaskRunner.Outcome outcome = projectService.syncNow(id, AccessGuard.current());
         switch (outcome.kind()) {
             case QUEUED: {
                 // Accepted, not executed: amber rather than green or red, and no reload —
@@ -94,7 +95,7 @@ public class ProjectApiController {
     /** Clears all cursors and snapshots so the next run performs a full reload. */
     @PostMapping("/{id}/reset")
     public ResponseEntity<Map<String, Object>> reset(@PathVariable Long id) {
-        projectService.resetProgress(id);
+        projectService.resetProgress(id, AccessGuard.current());
         return ResponseEntity.ok(ok("msg.progress.reset"));
     }
 
@@ -106,7 +107,7 @@ public class ProjectApiController {
      */
     @PostMapping("/{id}/force-unlock")
     public ResponseEntity<Map<String, Object>> forceUnlock(@PathVariable Long id) {
-        projectService.forceUnlock(id);
+        projectService.forceUnlock(id, AccessGuard.current());
         Map<String, Object> body = ok("msg.lock.forced");
         // A forced unlock can stop a live cycle; reload so the badge and buttons reflect it.
         body.put("toastKind", "warn");

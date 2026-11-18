@@ -99,7 +99,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection());
 
         ArgumentCaptor<SyncConfig> saved = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), saved.capture());
+        verify(projectService).saveConfig(eq(1L), saved.capture(), any());
         assertThat(saved.getValue().getColumnRules()).hasSize(1);
         assertThat(saved.getValue().getColumnRules().get(0).getTable()).isEqualTo("orders");
         assertThat(saved.getValue().getColumnRules().get(0).getType())
@@ -119,7 +119,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.columnrule.regex.invalid"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     /**
@@ -140,7 +140,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
@@ -156,7 +156,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     /**
@@ -176,7 +176,7 @@ class ProjectColumnRuleViewTest {
                         .param("ruleReplacement", "$12"))
                 .andExpect(status().is3xxRedirection());
 
-        verify(projectService).saveConfig(eq(1L), any());
+        verify(projectService).saveConfig(eq(1L), any(), any());
         assertThat(config.getColumnRules()).hasSize(1);
         assertThat(config.getColumnRules().get(0).getReplacement()).isEqualTo("$12");
     }
@@ -195,7 +195,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     /** A group number too large for an int must be a validation message, not a 500. */
@@ -212,7 +212,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.columnrule.replacement.invalid"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
@@ -227,7 +227,7 @@ class ProjectColumnRuleViewTest {
                         .param("ruleReplacement", "[$1]"))
                 .andExpect(status().is3xxRedirection());
 
-        verify(projectService).saveConfig(eq(1L), any());
+        verify(projectService).saveConfig(eq(1L), any(), any());
         assertThat(config.getColumnRules()).hasSize(1);
         assertThat(config.getColumnRules().get(0).getReplacement()).isEqualTo("[$1]");
     }
@@ -242,7 +242,7 @@ class ProjectColumnRuleViewTest {
                         .param("ruleType", "MASK_PHONE"))
                 .andExpect(status().is3xxRedirection());
 
-        verify(projectService).saveConfig(eq(1L), any());
+        verify(projectService).saveConfig(eq(1L), any(), any());
         assertThat(config.getColumnRules()).hasSize(1);
         assertThat(config.getColumnRules().get(0).getType()).isEqualTo(ColumnRuleType.MASK_PHONE);
         assertThat(config.getColumnRules().get(0).getArg()).isNull();
@@ -259,7 +259,7 @@ class ProjectColumnRuleViewTest {
                         .param("ruleArg", "salt-2026"))
                 .andExpect(status().is3xxRedirection());
 
-        verify(projectService).saveConfig(eq(1L), any());
+        verify(projectService).saveConfig(eq(1L), any(), any());
         assertThat(config.getColumnRules()).hasSize(1);
         assertThat(config.getColumnRules().get(0).getType())
                 .isEqualTo(ColumnRuleType.HASH_SHA256);
@@ -278,7 +278,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.columnrule.arg.required"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     /**
@@ -302,7 +302,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.columnrule.duplicate"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
         assertThat(config.getColumnRules()).hasSize(1);
     }
 
@@ -319,7 +319,7 @@ class ProjectColumnRuleViewTest {
                         .param("ruleArg", "B-"))
                 .andExpect(status().is3xxRedirection());
 
-        verify(projectService).saveConfig(eq(1L), any());
+        verify(projectService).saveConfig(eq(1L), any(), any());
         assertThat(config.getColumnRules()).hasSize(2);
     }
 
@@ -334,7 +334,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("error", "error.project.stop.before.config"));
 
-        verify(projectService, never()).saveConfig(anyLong(), any());
+        verify(projectService, never()).saveConfig(anyLong(), any(), any());
     }
 
     @Test
@@ -349,7 +349,7 @@ class ProjectColumnRuleViewTest {
                 .andExpect(status().is3xxRedirection());
 
         ArgumentCaptor<SyncConfig> saved = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), saved.capture());
+        verify(projectService).saveConfig(eq(1L), saved.capture(), any());
         assertThat(saved.getValue().getColumnRules()).hasSize(1);
         assertThat(saved.getValue().getColumnRules().get(0).getColumn()).isEqualTo("phone");
     }

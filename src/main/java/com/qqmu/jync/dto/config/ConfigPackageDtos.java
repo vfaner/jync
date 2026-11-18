@@ -83,7 +83,8 @@ public final class ConfigPackageDtos {
                                     String customUrl,
                                     String customDriver,
                                     String customJarPath,
-                                    String extraParams) {
+                                    String extraParams,
+                                    String ownerUsername) {
     }
 
     public record RedisTargetDto(Long id,
@@ -98,7 +99,8 @@ public final class ConfigPackageDtos {
                                  boolean clusterMode,
                                  int connectTimeoutMs,
                                  int commandTimeoutMs,
-                                 String description) {
+                                 String description,
+                                 String ownerUsername) {
     }
 
     public record MigrationConnectionDto(Long id,
@@ -115,7 +117,8 @@ public final class ConfigPackageDtos {
                                          boolean verifyTls,
                                          int connectTimeoutMs,
                                          int requestTimeoutMs,
-                                         String description) {
+                                         String description,
+                                         String ownerUsername) {
     }
 
     public record ProjectDto(Long id,
@@ -126,7 +129,8 @@ public final class ConfigPackageDtos {
                              SyncTargetKind targetKind,
                              Long targetRedisId,
                              String syncConfig,
-                             Boolean enabled) {
+                             Boolean enabled,
+                             String ownerUsername) {
     }
 
     public record EtlBatchDto(Long id,
@@ -136,7 +140,8 @@ public final class ConfigPackageDtos {
                               Long targetDbId,
                               String cronExpression,
                               Boolean enabled,
-                              Integer timeoutSeconds) {
+                              Integer timeoutSeconds,
+                              String ownerUsername) {
     }
 
     public record EtlTaskDto(Long id,
@@ -158,7 +163,8 @@ public final class ConfigPackageDtos {
                              String upsertKeyColumns,
                              String cronExpression,
                              Boolean enabled,
-                             Integer timeoutSeconds) {
+                             Integer timeoutSeconds,
+                             String ownerUsername) {
     }
 
     public record MigrationTaskDto(Long id,
@@ -170,7 +176,8 @@ public final class ConfigPackageDtos {
                                    String optionsJson,
                                    String cronExpression,
                                    Boolean enabled,
-                                   Integer timeoutSeconds) {
+                                   Integer timeoutSeconds,
+                                   String ownerUsername) {
     }
 
     public record AiProviderDto(Long id,

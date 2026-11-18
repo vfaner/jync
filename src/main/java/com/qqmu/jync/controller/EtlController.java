@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlBatch;
@@ -116,7 +117,7 @@ public class EtlController {
     public String save(@ModelAttribute("task") EtlTask task, Model model,
                        RedirectAttributes flash) {
         try {
-            etlTaskService.save(task);
+            etlTaskService.save(task, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.etl.saved");
             return "redirect:/etl";
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -167,7 +168,7 @@ public class EtlController {
     @PostMapping("/{id}/delete")
     public String delete(@PathVariable Long id, RedirectAttributes flash) {
         try {
-            etlTaskService.delete(id);
+            etlTaskService.delete(id, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.etl.deleted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -177,7 +178,7 @@ public class EtlController {
 
     private String changeEnabled(Long id, boolean enabled, RedirectAttributes flash) {
         try {
-            etlTaskService.setEnabled(id, enabled);
+            etlTaskService.setEnabled(id, enabled, AccessGuard.current());
             flash.addFlashAttribute("message",
                     enabled ? "msg.etl.enabled" : "msg.etl.disabled");
         } catch (IllegalArgumentException | IllegalStateException e) {

@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -76,7 +77,7 @@ class ProjectControllerTableMappingTest {
 
     private SyncConfig savedConfig() {
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), captor.capture(), isNull());
+        verify(projectService).saveConfig(eq(1L), captor.capture(), isNull(), any());
         return captor.getValue();
     }
 

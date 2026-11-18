@@ -1,5 +1,7 @@
 package com.qqmu.jync.controller;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -63,7 +65,7 @@ class ProjectCursorViewTest {
     @Test
     void aRefusedChangeShowsTheServicesReason() throws Exception {
         doThrow(new IllegalStateException("error.project.stop.before.config"))
-                .when(projectService).saveCursorColumn(1L, "orders", "created_at");
+                .when(projectService).saveCursorColumn(eq(1L), eq("orders"), eq("created_at"), any());
 
         mvc.perform(post("/projects/1/cursor").with(asAdmin()).with(csrf())
                         .param("tableName", "orders")
@@ -81,7 +83,7 @@ class ProjectCursorViewTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(flash().attribute("message", "msg.cursor.saved"));
 
-        verify(projectService).saveCursorColumn(1L, "orders", "created_at");
+        verify(projectService).saveCursorColumn(eq(1L), eq("orders"), eq("created_at"), any());
     }
 
     @Test
@@ -92,6 +94,6 @@ class ProjectCursorViewTest {
                 .andExpect(status().is3xxRedirection());
 
         // Blank is the "back to auto-detection" submission, not "leave as is".
-        verify(projectService).saveCursorColumn(1L, "orders", "");
+        verify(projectService).saveCursorColumn(eq(1L), eq("orders"), eq(""), any());
     }
 }

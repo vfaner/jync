@@ -17,6 +17,7 @@ import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlBatch;
 import com.qqmu.jync.model.EtlTask;
@@ -98,7 +99,7 @@ public class EtlBatchService {
      * refused rather than half-created.
      */
     @Transactional
-    public int createWithTables(EtlBatch form, List<String> tables) {
+    public int createWithTables(EtlBatch form, List<String> tables, AccessGuard actor) {
         validateSettings(form);
         List<String> chosen = requireSelection(tables);
         DatabaseConfig source = EtlTaskValidation.validateConnections(databaseConfigService,
@@ -115,6 +116,7 @@ public class EtlBatchService {
         batch.setEnabled(false);
         batch.setSourceDbId(form.getSourceDbId());
         batch.setTargetDbId(form.getTargetDbId());
+        batch.setOwnerUsername(actor.username());
         batch = batchRepository.save(batch);
 
         List<EtlTask> created = buildMembers(batch, ordered, catalog.schema(), source);
@@ -125,9 +127,10 @@ public class EtlBatchService {
 
     /** Adds more tables to an existing batch, skipping nothing: a duplicate target is refused. */
     @Transactional
-    public int addTables(Long batchId, List<String> tables) {
+    public int addTables(Long batchId, List<String> tables, AccessGuard actor) {
         EtlBatch batch = batchRepository.findById(batchId)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
+        actor.requireEditable(batch.getOwnerUsername());
         List<String> chosen = requireSelection(tables);
         DatabaseConfig source = EtlTaskValidation.validateConnections(databaseConfigService,
                 batch.getSourceDbId(), batch.getTargetDbId());
@@ -149,9 +152,10 @@ public class EtlBatchService {
     }
 
     @Transactional
-    public void removeMember(Long batchId, Long taskId) {
+    public void removeMember(Long batchId, Long taskId, AccessGuard actor) {
         EtlBatch batch = batchRepository.findById(batchId)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
+        actor.requireEditable(batch.getOwnerUsername());
         EtlTask member = taskRepository.findById(taskId)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
         if (!batchId.equals(member.getBatchId())) {
@@ -177,6 +181,14 @@ public class EtlBatchService {
             batchRepository.save(batch);
             events.publishEvent(new EtlBatchChangedEvent(batchId, false));
         }
+    }
+
+    /** Loads the batch and refuses it unless the caller may edit it. */
+    public EtlBatch requireEditable(Long id, AccessGuard actor) {
+        EtlBatch batch = batchRepository.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
+        actor.requireEditable(batch.getOwnerUsername());
+        return batch;
     }
 
     /**
@@ -263,7 +275,7 @@ public class EtlBatchService {
     }
 
     @Transactional
-    public EtlBatch saveSettings(EtlBatch form) {
+    public EtlBatch saveSettings(EtlBatch form, AccessGuard actor) {
         validateSettings(form);
         EtlBatch entity;
         if (form.getId() == null) {
@@ -273,9 +285,11 @@ public class EtlBatchService {
             entity.setEnabled(false);
             entity.setSourceDbId(form.getSourceDbId());
             entity.setTargetDbId(form.getTargetDbId());
+            entity.setOwnerUsername(actor.username());
         } else {
             entity = batchRepository.findById(form.getId())
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
+            actor.requireEditable(entity.getOwnerUsername());
             // The connection pair is fixed once members exist; the form's values are ignored.
         }
         if (Boolean.TRUE.equals(entity.getEnabled())
@@ -295,9 +309,10 @@ public class EtlBatchService {
     }
 
     @Transactional
-    public void setEnabled(Long id, boolean enabled) {
+    public void setEnabled(Long id, boolean enabled, AccessGuard actor) {
         EtlBatch batch = batchRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
+        actor.requireEditable(batch.getOwnerUsername());
         if (enabled) {
             if (batch.getCronExpression() == null || batch.getCronExpression().isBlank()) {
                 throw new IllegalArgumentException("error.etl.cron.required");
@@ -318,9 +333,10 @@ public class EtlBatchService {
     }
 
     @Transactional
-    public void delete(Long id) {
+    public void delete(Long id, AccessGuard actor) {
         EtlBatch batch = batchRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
+        actor.requireEditable(batch.getOwnerUsername());
         if (guard.isLeased(batchKey(id))) {
             throw new IllegalStateException("error.etl.batch.running");
         }
@@ -476,8 +492,8 @@ public class EtlBatchService {
         }
     }
 
-    private List<EtlTask> buildMembers(EtlBatch batch, List<String> tables, String schema,
-                                       DatabaseConfig source) {
+    List<EtlTask> buildMembers(EtlBatch batch, List<String> tables, String schema,
+                               DatabaseConfig source) {
         SqlDialect dialect = dialectFactory.forType(source.effectiveType(), null, source.resolvedFamily());
         List<EtlTask> created = new ArrayList<>(tables.size());
         for (String table : tables) {
@@ -491,6 +507,8 @@ public class EtlBatchService {
             task.setWriteMode(EtlWriteMode.OVERWRITE);
             task.setEnabled(false);
             task.setTimeoutSeconds(batch.getTimeoutSeconds());
+            // A member is edited through its batch, so it belongs to whoever owns the batch.
+            task.setOwnerUsername(batch.getOwnerUsername());
             created.add(task);
         }
         return created;

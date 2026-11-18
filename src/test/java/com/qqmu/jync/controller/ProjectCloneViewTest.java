@@ -120,7 +120,7 @@ class ProjectCloneViewTest {
     void savingTheCloneCopiesTheSourceSettingsOntoTheNewProject() throws Exception {
         Project saved = new Project();
         saved.setId(2L);
-        when(projectService.saveAsClone(any(), eq(1L))).thenReturn(saved);
+        when(projectService.saveAsClone(any(), eq(1L), any())).thenReturn(saved);
 
         mvc.perform(post("/projects/save").with(asAdmin()).with(csrf())
                         .param("name", "proj (copy)")
@@ -132,8 +132,8 @@ class ProjectCloneViewTest {
         // Creating the row and copying the settings is one service call (one transaction).
         // Runtime state is not copied because a brand-new project has none — and must start
         // from zero.
-        verify(projectService).saveAsClone(any(), eq(1L));
-        verify(projectService, never()).save(any());
+        verify(projectService).saveAsClone(any(), eq(1L), any());
+        verify(projectService, never()).save(any(), any());
     }
 
     @Test

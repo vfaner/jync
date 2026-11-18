@@ -18,6 +18,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
@@ -111,7 +112,7 @@ class ProjectServiceTargetKindTest {
         when(contextFactory.parseConfig(project)).thenReturn(config);
         when(cdcManager.strategyOf(any())).thenReturn(CaptureStrategy.BINLOG_CDC);
 
-        service.start(1L);
+        service.start(1L, AccessGuard.system());
 
         assertThat(project.getEnabled()).isTrue();
         verify(cdcManager).ensureStarted(project);
@@ -137,7 +138,7 @@ class ProjectServiceTargetKindTest {
         config.getTables().add("orders");
         when(contextFactory.parseConfig(project)).thenReturn(config);
 
-        assertThatThrownBy(() -> service.start(1L))
+        assertThatThrownBy(() -> service.start(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.redis.cdcOnly");
 
@@ -172,7 +173,7 @@ class ProjectServiceTargetKindTest {
         });
         when(cdcManager.strategyOf(any())).thenReturn(CaptureStrategy.BINLOG_CDC);
 
-        service.start(1L);
+        service.start(1L, AccessGuard.system());
 
         verify(redisPolicy).apply(eq(project), eq(config),
                 eq(CaptureStrategy.BINLOG_CDC), isNull());
@@ -205,7 +206,7 @@ class ProjectServiceTargetKindTest {
         position.setProjectionSignature("HASH|jync:1:");
         when(positionStore.find(1L)).thenReturn(Optional.of(position));
 
-        assertThatThrownBy(() -> service.start(1L))
+        assertThatThrownBy(() -> service.start(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.redis.projection.rebuildRequired");
 
@@ -235,7 +236,7 @@ class ProjectServiceTargetKindTest {
         owner.setId(2L);
         when(redisPolicy.conflictingProject(project, "jync:1:")).thenReturn(owner);
 
-        assertThatThrownBy(() -> service.start(1L))
+        assertThatThrownBy(() -> service.start(1L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.redis.prefixConflict");
 
@@ -267,7 +268,7 @@ class ProjectServiceTargetKindTest {
         projection.setValueFormat(RedisValueFormat.HASH);
         next.setRedisProjection(projection);
 
-        assertThatThrownBy(() -> service.saveConfig(1L, next))
+        assertThatThrownBy(() -> service.saveConfig(1L, next, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.project.redis.projection.running");
 
@@ -281,7 +282,7 @@ class ProjectServiceTargetKindTest {
         project.setSourceDbId(1L);
         project.setTargetKind(SyncTargetKind.REDIS);
 
-        assertThatThrownBy(() -> service.save(project))
+        assertThatThrownBy(() -> service.save(project, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.redis.target.required");
     }
@@ -294,7 +295,7 @@ class ProjectServiceTargetKindTest {
         project.setTargetKind(SyncTargetKind.JDBC);
         project.setTargetRedisId(9L);
 
-        Project saved = service.save(project);
+        Project saved = service.save(project, AccessGuard.system());
 
         assertThat(saved.getTargetRedisId()).isNull();
     }
@@ -317,7 +318,7 @@ class ProjectServiceTargetKindTest {
         form.setTargetDbId(2L);
         form.setTargetKind(SyncTargetKind.JDBC);
 
-        Project result = service.save(form);
+        Project result = service.save(form, AccessGuard.system());
 
         assertThat(result).isSameAs(stored);
         verify(projectRepository, never()).save(any());
@@ -337,7 +338,7 @@ class ProjectServiceTargetKindTest {
         form.setTargetKind(SyncTargetKind.REDIS);
         form.setTargetRedisId(7L);
 
-        service.save(form);
+        service.save(form, AccessGuard.system());
 
         verify(syncEngine).resetProject(1L);
         verify(checkpointRepository).deleteByProjectId(1L);
@@ -368,7 +369,7 @@ class ProjectServiceTargetKindTest {
         form.setSourceDbId(1L);
         form.setTargetKind(SyncTargetKind.JDBC);
 
-        service.save(form);
+        service.save(form, AccessGuard.system());
 
         verify(positionStore).resetAnchorKeepingProjectionSignature(1L);
         verify(positionStore, never()).delete(any());
@@ -389,7 +390,7 @@ class ProjectServiceTargetKindTest {
         form.setTargetDbId(2L);
         form.setTargetKind(SyncTargetKind.JDBC);
 
-        service.save(form);
+        service.save(form, AccessGuard.system());
 
         verify(positionStore).delete(1L);
         verify(positionStore, never()).resetAnchorKeepingProjectionSignature(any());
@@ -412,7 +413,7 @@ class ProjectServiceTargetKindTest {
         form.setTargetKind(SyncTargetKind.REDIS);
         form.setTargetRedisId(7L);
 
-        Project saved = service.save(form);
+        Project saved = service.save(form, AccessGuard.system());
 
         assertThat(saved.getTargetDbId()).isNull();
         assertThat(saved.getTargetRedisId()).isEqualTo(7L);
@@ -432,7 +433,7 @@ class ProjectServiceTargetKindTest {
         form.setSourceDbId(1L);
         form.setTargetKind(SyncTargetKind.JDBC);
 
-        Project saved = service.save(form);
+        Project saved = service.save(form, AccessGuard.system());
 
         assertThat(saved.getTargetRedisId()).isNull();
         verify(syncEngine).resetProject(1L);

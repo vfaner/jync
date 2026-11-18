@@ -159,7 +159,7 @@ class MigrationFormViewTest {
 
     @Test
     void aRejectedSaveRendersTheSameFormWithTheErrorAndTheTypedOptions() throws Exception {
-        when(taskService.save(any(), any()))
+        when(taskService.save(any(), any(), any()))
                 .thenThrow(new IllegalArgumentException("error.migration.name.required"));
 
         String page = mvc.perform(post("/migrations/es-to-easysearch/save")

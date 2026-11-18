@@ -267,7 +267,9 @@ public class ConfigExportService {
                         .map(ConfigExportService::toDto)
                         .orElseGet(() -> toDto(new OaAuthConfig())),
                 users.findAll().stream().map(ConfigExportService::toDto).toList(),
-                systemSettings.findAll().stream().map(ConfigExportService::toDto).toList(),
+                systemSettings.findAll().stream()
+                        .filter(row -> !row.getKey().startsWith("seed."))
+                        .map(ConfigExportService::toDto).toList(),
                 syncProgress.findAll().stream().map(ConfigExportService::toDto).toList(),
                 cdcPositions.findAll().stream().map(ConfigExportService::toDto).toList(),
                 metadataSnapshots.findAll().stream().map(ConfigExportService::toDto).toList(),
@@ -290,7 +292,8 @@ public class ConfigExportService {
                 db.getDialectFamily(), db.getRole(), db.getHost(), db.getPort(),
                 db.getDatabaseName(), db.getSchemaName(), db.getUsername(), db.getPassword(),
                 db.getMinerUsername(), db.getMinerPassword(), db.getCustomUrl(),
-                db.getCustomDriver(), db.getCustomJarPath(), db.getExtraParams());
+                db.getCustomDriver(), db.getCustomJarPath(), db.getExtraParams(),
+                db.getOwnerUsername());
     }
 
     private static ConfigPackageDtos.RedisTargetDto toDto(RedisTarget target) {
@@ -298,7 +301,7 @@ public class ConfigExportService {
                 target.getHost(), target.getPort(), target.getDatabaseIndex(), target.getUsername(),
                 target.getPasswordEnc(), target.isTlsEnabled(), target.isVerifyTls(),
                 target.isClusterMode(), target.getConnectTimeoutMs(), target.getCommandTimeoutMs(),
-                target.getDescription());
+                target.getDescription(), target.getOwnerUsername());
     }
 
     private static ConfigPackageDtos.MigrationConnectionDto toDto(MigrationConnection connection) {
@@ -308,20 +311,21 @@ public class ConfigExportService {
                 connection.getUsername(), connection.getPasswordEnc(), connection.getApiKeyEnc(),
                 connection.getExtraParams(), connection.isVerifyTls(),
                 connection.getConnectTimeoutMs(), connection.getRequestTimeoutMs(),
-                connection.getDescription());
+                connection.getDescription(), connection.getOwnerUsername());
     }
 
     private static ConfigPackageDtos.ProjectDto toDto(Project project) {
         return new ConfigPackageDtos.ProjectDto(project.getId(), project.getName(),
                 project.getDescription(), project.getSourceDbId(), project.getTargetDbId(),
                 project.getTargetKind(), project.getTargetRedisId(), project.getSyncConfig(),
-                project.getEnabled());
+                project.getEnabled(), project.getOwnerUsername());
     }
 
     private static ConfigPackageDtos.EtlBatchDto toDto(EtlBatch batch) {
         return new ConfigPackageDtos.EtlBatchDto(batch.getId(), batch.getName(),
                 batch.getDescription(), batch.getSourceDbId(), batch.getTargetDbId(),
-                batch.getCronExpression(), batch.getEnabled(), batch.getTimeoutSeconds());
+                batch.getCronExpression(), batch.getEnabled(), batch.getTimeoutSeconds(),
+                batch.getOwnerUsername());
     }
 
     private static ConfigPackageDtos.EtlTaskDto toDto(EtlTask task) {
@@ -332,14 +336,14 @@ public class ConfigExportService {
                 task.getPostSql(), task.getTargetTable(), task.getWriteMode(),
                 task.getRangeCondition(), task.getResumeKeyColumn(),
                 task.getUpsertKeyColumns(), task.getCronExpression(),
-                task.getEnabled(), task.getTimeoutSeconds());
+                task.getEnabled(), task.getTimeoutSeconds(), task.getOwnerUsername());
     }
 
     private static ConfigPackageDtos.MigrationTaskDto toDto(MigrationTask task) {
         return new ConfigPackageDtos.MigrationTaskDto(task.getId(), task.getName(),
                 task.getDescription(), task.getType(), task.getSourceConnectionId(),
                 task.getTargetConnectionId(), task.getOptionsJson(), task.getCronExpression(),
-                task.getEnabled(), task.getTimeoutSeconds());
+                task.getEnabled(), task.getTimeoutSeconds(), task.getOwnerUsername());
     }
 
     private static ConfigPackageDtos.AiProviderDto toDto(AiProvider provider) {

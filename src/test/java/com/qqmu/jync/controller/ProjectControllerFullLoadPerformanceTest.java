@@ -1,5 +1,6 @@
 package com.qqmu.jync.controller;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
@@ -90,7 +91,7 @@ class ProjectControllerFullLoadPerformanceTest {
 
     private SyncConfig savedConfig() {
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"));
+        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"), any());
         return captor.getValue();
     }
 

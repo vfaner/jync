@@ -228,6 +228,7 @@ public class ConfigImportService {
             db.setCustomDriver(dto.customDriver());
             db.setCustomJarPath(dto.customJarPath());
             db.setExtraParams(dto.extraParams());
+            db.setOwnerUsername(dto.ownerUsername());
             databaseIds.put(dto.id(), databaseConfigs.save(db).getId());
         }
 
@@ -246,6 +247,7 @@ public class ConfigImportService {
             target.setConnectTimeoutMs(dto.connectTimeoutMs());
             target.setCommandTimeoutMs(dto.commandTimeoutMs());
             target.setDescription(dto.description());
+            target.setOwnerUsername(dto.ownerUsername());
             redisIds.put(dto.id(), redisTargets.save(target).getId());
         }
 
@@ -266,6 +268,7 @@ public class ConfigImportService {
             connection.setConnectTimeoutMs(dto.connectTimeoutMs());
             connection.setRequestTimeoutMs(dto.requestTimeoutMs());
             connection.setDescription(dto.description());
+            connection.setOwnerUsername(dto.ownerUsername());
             migrationIds.put(dto.id(), migrationConnections.save(connection).getId());
         }
 
@@ -291,6 +294,7 @@ public class ConfigImportService {
             }
             project.setSyncConfig(dto.syncConfig());
             project.setEnabled(dto.enabled());
+            project.setOwnerUsername(dto.ownerUsername());
             projectIds.put(dto.id(), projects.save(project).getId());
             projectSyncConfigs.put(dto.id(), dto.syncConfig());
         }
@@ -305,6 +309,7 @@ public class ConfigImportService {
             batch.setCronExpression(dto.cronExpression());
             batch.setEnabled(dto.enabled());
             batch.setTimeoutSeconds(dto.timeoutSeconds());
+            batch.setOwnerUsername(dto.ownerUsername());
             batchIds.put(dto.id(), etlBatches.save(batch).getId());
         }
 
@@ -330,6 +335,7 @@ public class ConfigImportService {
             task.setCronExpression(dto.cronExpression());
             task.setEnabled(dto.enabled());
             task.setTimeoutSeconds(dto.timeoutSeconds());
+            task.setOwnerUsername(dto.ownerUsername());
             taskIds.put(dto.id(), etlTasks.save(task).getId());
         }
 
@@ -344,6 +350,7 @@ public class ConfigImportService {
             task.setCronExpression(dto.cronExpression());
             task.setEnabled(dto.enabled());
             task.setTimeoutSeconds(dto.timeoutSeconds());
+            task.setOwnerUsername(dto.ownerUsername());
             migrationTasks.save(task);
         }
 
@@ -601,6 +608,11 @@ public class ConfigImportService {
         boolean httpsReset = false;
         for (ConfigPackageDtos.SystemSettingDto dto : settings) {
             if (dto.key() == null || dto.key().isBlank()) {
+                continue;
+            }
+            // Machine state, not configuration: a package must not reset this installation's
+            // one-time markers (e.g. the seeded local ops account) to another install's values.
+            if (dto.key().startsWith("seed.")) {
                 continue;
             }
             String value = dto.value();

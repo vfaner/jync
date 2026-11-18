@@ -15,6 +15,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationEventPublisher;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlBatch;
@@ -55,7 +56,7 @@ class EtlBatchServiceTest {
 
     @Test
     void nameIsRequired() {
-        assertThatThrownBy(() -> service.saveSettings(new EtlBatch()))
+        assertThatThrownBy(() -> service.saveSettings(new EtlBatch(), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.batch.name.required");
         verify(batchRepository, never()).save(any());
@@ -66,7 +67,7 @@ class EtlBatchServiceTest {
         EtlBatch form = form();
         form.setName("x".repeat(129));
 
-        assertThatThrownBy(() -> service.saveSettings(form))
+        assertThatThrownBy(() -> service.saveSettings(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.batch.name.tooLong");
     }
@@ -76,7 +77,7 @@ class EtlBatchServiceTest {
         EtlBatch form = form();
         form.setSourceDbId(null);
 
-        assertThatThrownBy(() -> service.saveSettings(form))
+        assertThatThrownBy(() -> service.saveSettings(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.connection.required");
     }
@@ -88,7 +89,7 @@ class EtlBatchServiceTest {
         EtlBatch form = form();
         form.setTargetDbId(1L);
 
-        assertThatThrownBy(() -> service.saveSettings(form))
+        assertThatThrownBy(() -> service.saveSettings(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.same.database");
     }
@@ -100,7 +101,7 @@ class EtlBatchServiceTest {
         when(databaseConfigService.findById(1L)).thenReturn(Optional.of(source));
         when(databaseConfigService.findById(2L)).thenReturn(Optional.of(target));
 
-        assertThatThrownBy(() -> service.saveSettings(form()))
+        assertThatThrownBy(() -> service.saveSettings(form(), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.target.readOnly");
     }
@@ -110,7 +111,7 @@ class EtlBatchServiceTest {
         EtlBatch form = form();
         form.setCronExpression("every night");
 
-        assertThatThrownBy(() -> service.saveSettings(form))
+        assertThatThrownBy(() -> service.saveSettings(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.cron.invalid");
     }
@@ -121,7 +122,7 @@ class EtlBatchServiceTest {
         batch.setCronExpression(null);
         when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));
 
-        assertThatThrownBy(() -> service.setEnabled(5L, true))
+        assertThatThrownBy(() -> service.setEnabled(5L, true, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.cron.required");
     }
@@ -139,7 +140,7 @@ class EtlBatchServiceTest {
         when(taskRepository.findByBatchIdOrderByIdAsc(5L))
                 .thenReturn(List.of(member(9L, 5L)));
 
-        assertThatThrownBy(() -> service.setEnabled(5L, true))
+        assertThatThrownBy(() -> service.setEnabled(5L, true, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.cron.invalid");
     }
@@ -150,7 +151,7 @@ class EtlBatchServiceTest {
         when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of());
 
-        assertThatThrownBy(() -> service.setEnabled(5L, true))
+        assertThatThrownBy(() -> service.setEnabled(5L, true, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.batch.empty");
     }
@@ -167,7 +168,7 @@ class EtlBatchServiceTest {
         edit.setSourceDbId(3L);
         edit.setTargetDbId(4L);
 
-        EtlBatch saved = service.saveSettings(edit);
+        EtlBatch saved = service.saveSettings(edit, AccessGuard.system());
 
         assertThat(saved.getSourceDbId()).isEqualTo(1L);
         assertThat(saved.getTargetDbId()).isEqualTo(2L);
@@ -190,7 +191,7 @@ class EtlBatchServiceTest {
         edit.setDescription("renamed");
         edit.setCronExpression(" ");
 
-        assertThatThrownBy(() -> service.saveSettings(edit))
+        assertThatThrownBy(() -> service.saveSettings(edit, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.cron.required");
         verify(batchRepository, never()).save(any());
@@ -209,7 +210,7 @@ class EtlBatchServiceTest {
         when(taskRepository.findById(7L)).thenReturn(Optional.of(member));
         guard.tryAcquire("batch:5");
 
-        assertThatThrownBy(() -> service.removeMember(5L, 7L))
+        assertThatThrownBy(() -> service.removeMember(5L, 7L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.batch.running");
         verify(taskRepository, never()).delete(any());
@@ -223,7 +224,7 @@ class EtlBatchServiceTest {
         when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of(first, second));
 
-        service.delete(5L);
+        service.delete(5L, AccessGuard.system());
 
         verify(checkpointStore).clear(7L);
         verify(checkpointStore).clear(8L);
@@ -240,7 +241,7 @@ class EtlBatchServiceTest {
         when(taskRepository.findByBatchIdOrderByIdAsc(5L)).thenReturn(List.of(running));
         guard.tryAcquire(7L);
 
-        assertThatThrownBy(() -> service.delete(5L))
+        assertThatThrownBy(() -> service.delete(5L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.batch.memberRunning");
         verify(batchRepository, never()).delete(any());
@@ -252,7 +253,7 @@ class EtlBatchServiceTest {
         when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));
         guard.tryAcquire("batch:5");
 
-        assertThatThrownBy(() -> service.delete(5L))
+        assertThatThrownBy(() -> service.delete(5L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.etl.batch.running");
     }

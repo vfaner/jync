@@ -7,6 +7,7 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.RedisTargetForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.Project;
@@ -64,7 +65,7 @@ public class RedisTargetService {
      * receives ciphertext or plaintext from the browser.
      */
     @Transactional
-    public RedisTarget save(RedisTargetForm form, String rawPassword) {
+    public RedisTarget save(RedisTargetForm form, String rawPassword, AccessGuard actor) {
         validate(form);
 
         RedisTarget entity;
@@ -74,6 +75,7 @@ public class RedisTargetService {
                 throw new IllegalArgumentException("error.redis.target.name.duplicate");
             });
             entity = new RedisTarget();
+            entity.setOwnerUsername(actor.username());
         } else {
             Long id = form.getId();
             targets.findByName(form.getName()).ifPresent(found -> {
@@ -86,6 +88,7 @@ public class RedisTargetService {
             entity = targets.findById(id)
                     .orElseThrow(() -> new IllegalArgumentException(
                             "error.redis.target.not.found"));
+            actor.requireEditable(entity.getOwnerUsername());
             // A running consumer holds a connection built from the settings it started with;
             // changing host/credentials under it makes the page and the stream disagree until
             // the project is restarted. Database connections answer an edit the same way.
@@ -133,9 +136,10 @@ public class RedisTargetService {
     }
 
     @Transactional
-    public void delete(Long id) {
+    public void delete(Long id, AccessGuard actor) {
         RedisTarget victim = targets.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.redis.target.not.found"));
+        actor.requireEditable(victim.getOwnerUsername());
         if (projects.existsByTargetRedisId(id)) {
             throw new IllegalStateException("error.redis.target.inUse");
         }
@@ -143,6 +147,14 @@ public class RedisTargetService {
         auditService.record(AuditAction.REDIS_TARGET_DELETE,
                 AuditDetail.of("audit.detail.redisTargetDelete", victim.getName()));
         log.info("Deleted Redis target {}", id);
+    }
+
+    /** Loads the target and refuses it unless the caller may edit it. */
+    public RedisTarget requireEditable(Long id, AccessGuard actor) {
+        RedisTarget target = targets.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("error.redis.target.not.found"));
+        actor.requireEditable(target.getOwnerUsername());
+        return target;
     }
 
     /**

@@ -90,7 +90,7 @@ class EtlBatchMemberFormViewTest {
         when(etlTaskService.isRunning(7L)).thenReturn(false);
         when(etlBatchService.findById(5L)).thenReturn(Optional.of(batch(5L, "nightly")));
         doThrow(new IllegalArgumentException("error.etl.name.required"))
-                .when(etlTaskService).save(any());
+                .when(etlTaskService).save(any(), any());
 
         String page = mvc.perform(post("/etl/save").with(asAdmin()).with(csrf())
                         .param("id", "7")

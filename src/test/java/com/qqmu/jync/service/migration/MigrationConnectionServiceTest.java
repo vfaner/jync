@@ -23,6 +23,7 @@ import org.springframework.context.support.ResourceBundleMessageSource;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.MigrationConnection;
@@ -108,7 +109,7 @@ class MigrationConnectionServiceTest {
             return saved;
         });
 
-        service.save(form(), "secret", null);
+        service.save(form(), "secret", null, AccessGuard.system());
 
         ArgumentCaptor<MigrationConnection> captor =
                 ArgumentCaptor.forClass(MigrationConnection.class);
@@ -136,7 +137,7 @@ class MigrationConnectionServiceTest {
         when(connections.findByName("es-prod")).thenReturn(Optional.of(existing));
         when(connections.save(any(MigrationConnection.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(form, "", "");
+        service.save(form, "", "", AccessGuard.system());
 
         ArgumentCaptor<MigrationConnection> captor =
                 ArgumentCaptor.forClass(MigrationConnection.class);
@@ -156,7 +157,7 @@ class MigrationConnectionServiceTest {
         when(connections.findByName("es-prod-renamed")).thenReturn(Optional.empty());
         when(connections.save(any(MigrationConnection.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(form, "", "");
+        service.save(form, "", "", AccessGuard.system());
 
         ArgumentCaptor<MigrationConnection> captor =
                 ArgumentCaptor.forClass(MigrationConnection.class);
@@ -181,7 +182,7 @@ class MigrationConnectionServiceTest {
         when(cryptoUtil.encrypt("id:key")).thenReturn("enc:key");
         when(connections.save(any(MigrationConnection.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(form, null, "id:key");
+        service.save(form, null, "id:key", AccessGuard.system());
 
         ArgumentCaptor<MigrationConnection> captor =
                 ArgumentCaptor.forClass(MigrationConnection.class);
@@ -201,7 +202,7 @@ class MigrationConnectionServiceTest {
         when(connections.findByName("es-prod")).thenReturn(Optional.of(existing));
         when(connections.save(any(MigrationConnection.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.save(form, "new", "new");
+        service.save(form, "new", "new", AccessGuard.system());
 
         ArgumentCaptor<MigrationConnection> captor =
                 ArgumentCaptor.forClass(MigrationConnection.class);
@@ -214,25 +215,25 @@ class MigrationConnectionServiceTest {
     void invalidInputIsRejectedWithAKey() {
         MigrationConnectionForm noName = form();
         noName.setName(" ");
-        assertThatThrownBy(() -> service.save(noName, "x", null))
+        assertThatThrownBy(() -> service.save(noName, "x", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.connection.name.required");
 
         MigrationConnectionForm badUrl = form();
         badUrl.setBaseUrl("ftp://host:21");
-        assertThatThrownBy(() -> service.save(badUrl, "x", null))
+        assertThatThrownBy(() -> service.save(badUrl, "x", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.connection.url.invalid");
 
         MigrationConnectionForm noUser = form();
         noUser.setUsername(" ");
-        assertThatThrownBy(() -> service.save(noUser, "x", null))
+        assertThatThrownBy(() -> service.save(noUser, "x", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.connection.username.required");
 
         MigrationConnectionForm noKey = form();
         noKey.setAuthType(MigrationConnectionAuthType.API_KEY);
-        assertThatThrownBy(() -> service.save(noKey, null, " "))
+        assertThatThrownBy(() -> service.save(noKey, null, " ", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.connection.apiKey.required");
     }
@@ -244,7 +245,7 @@ class MigrationConnectionServiceTest {
         form.setId(3L);
         when(connections.findByName("es-prod")).thenReturn(Optional.of(other));
 
-        assertThatThrownBy(() -> service.save(form, "x", null))
+        assertThatThrownBy(() -> service.save(form, "x", null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.migration.connection.name.duplicate");
     }
@@ -259,7 +260,7 @@ class MigrationConnectionServiceTest {
         when(connections.findByName("es-prod")).thenReturn(Optional.of(existing));
         when(tasks.countBySourceConnectionIdOrTargetConnectionId(3L, 3L)).thenReturn(1L);
 
-        assertThatThrownBy(() -> service.save(form, "", ""))
+        assertThatThrownBy(() -> service.save(form, "", "", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.migration.connection.kind.inUse");
         verify(connections, never()).save(any(MigrationConnection.class));
@@ -270,7 +271,7 @@ class MigrationConnectionServiceTest {
         when(connections.findById(3L)).thenReturn(Optional.of(stored(3L, null)));
         when(tasks.countBySourceConnectionIdOrTargetConnectionId(3L, 3L)).thenReturn(1L);
 
-        assertThatThrownBy(() -> service.delete(3L))
+        assertThatThrownBy(() -> service.delete(3L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.migration.connection.inUse");
         verify(connections, never()).deleteById(3L);
@@ -281,7 +282,7 @@ class MigrationConnectionServiceTest {
         when(connections.findById(3L)).thenReturn(Optional.of(stored(3L, null)));
         when(tasks.countBySourceConnectionIdOrTargetConnectionId(3L, 3L)).thenReturn(0L);
 
-        service.delete(3L);
+        service.delete(3L, AccessGuard.system());
 
         verify(connections).deleteById(3L);
         ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
@@ -301,7 +302,7 @@ class MigrationConnectionServiceTest {
                 + "\"version\":{\"number\":\"7.17.22\",\"distribution\":\"elasticsearch\"}}");
         when(client.get("/")).thenReturn(root);
 
-        MigrationConnectionTestResult result = service.test(3L);
+        MigrationConnectionTestResult result = service.test(3L, AccessGuard.system());
 
         assertThat(result.success()).isTrue();
         assertThat(result.product()).isEqualTo("elasticsearch");
@@ -324,7 +325,7 @@ class MigrationConnectionServiceTest {
         when(client.get(startsWith("/_cat/indices"))).thenReturn(cat);
 
         List<MigrationDiscoveryItem> indices =
-                service.listIndices(3L, "orders-*");
+                service.listIndices(3L, "orders-*", AccessGuard.system());
 
         assertThat(indices).singleElement().satisfies(index -> {
             assertThat(index.name()).isEqualTo("orders-2026");

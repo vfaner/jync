@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoDatabase;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.MigrationConnectionForm;
 import com.qqmu.jync.model.MigrationConnection;
 import com.qqmu.jync.model.MigrationConnectionAuthType;
@@ -85,7 +86,7 @@ class MigrationConnectionServiceMongoTest {
         when(connections.save(any(MigrationConnection.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.save(form(), "s3cret", null);
+        service.save(form(), "s3cret", null, AccessGuard.system());
 
         ArgumentCaptor<MigrationConnection> captor =
                 ArgumentCaptor.forClass(MigrationConnection.class);
@@ -109,7 +110,7 @@ class MigrationConnectionServiceMongoTest {
         when(connections.save(any(MigrationConnection.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        service.save(form, "", null);
+        service.save(form, "", null, AccessGuard.system());
 
         assertThat(existing.getPasswordEnc()).isEqualTo("enc:old");
     }

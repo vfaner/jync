@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
@@ -393,7 +394,9 @@ public class ConversionAssistService {
 
     /** Saves a reviewed candidate as the DDL override the sync path will use. */
     @Transactional
-    public void saveOverride(Long projectId, String kind, String name, String sql) {
+    public void saveOverride(Long projectId, String kind, String name, String sql,
+                             AccessGuard actor) {
+        projectService.requireEditable(projectId, actor);
         if (sql == null || sql.isBlank()) {
             throw new IllegalArgumentException("error.override.empty");
         }
@@ -439,7 +442,7 @@ public class ConversionAssistService {
         SyncConfig config = projectService.loadConfig(project);
         String key = normalizedKind + ":" + objectName;
         config.getDdlOverrides().put(key, statement);
-        projectService.saveConfig(projectId, config);
+        projectService.saveConfig(projectId, config, actor);
         log.info("Saved a DDL override for {} on project '{}' ({} chars)",
                 key, project.getName(), statement.length());
     }
@@ -461,11 +464,12 @@ public class ConversionAssistService {
 
     /** Removes an override, restoring automatic conversion for that object. */
     @Transactional
-    public void deleteOverride(Long projectId, String overrideKey) {
+    public void deleteOverride(Long projectId, String overrideKey, AccessGuard actor) {
+        projectService.requireEditable(projectId, actor);
         Project project = require(projectId);
         SyncConfig config = projectService.loadConfig(project);
         if (config.getDdlOverrides().remove(overrideKey) != null) {
-            projectService.saveConfig(projectId, config);
+            projectService.saveConfig(projectId, config, actor);
             log.info("Removed the DDL override for {} on project '{}'",
                     overrideKey, project.getName());
         }

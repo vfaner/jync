@@ -142,7 +142,7 @@ class ProjectControllerStrategyTest {
         // 无 error flash;切换成功给的是 strategy-switched 提示(before=POLLING → FULL_COMPARE)。
         assertThat(result.getFlashMap().get("error")).isNull();
         assertThat(result.getFlashMap().get("message")).isEqualTo("msg.project.strategy.switched");
-        verify(projectService).saveConfig(eq(1L), any(), eq("FULL_COMPARE"));
+        verify(projectService).saveConfig(eq(1L), any(), eq("FULL_COMPARE"), any());
     }
 
     @Test
@@ -154,7 +154,7 @@ class ProjectControllerStrategyTest {
                 .andReturn();
 
         assertThat(result.getFlashMap().get("error")).isEqualTo("error.project.strategy.invalid");
-        verify(projectService).saveConfig(eq(1L), any(), isNull());   // 非法值不透传
+        verify(projectService).saveConfig(eq(1L), any(), isNull(), any());   // 非法值不透传
     }
 
     @Test
@@ -165,7 +165,7 @@ class ProjectControllerStrategyTest {
                 .andExpect(status().is3xxRedirection());
 
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"));
+        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"), any());
         assertThat(captor.getValue().getCdcIdlePollMs()).isEqualTo(250L);
     }
 
@@ -178,7 +178,7 @@ class ProjectControllerStrategyTest {
                 .andExpect(status().is3xxRedirection());
 
         ArgumentCaptor<SyncConfig> captor = ArgumentCaptor.forClass(SyncConfig.class);
-        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"));
+        verify(projectService).saveConfig(eq(1L), captor.capture(), eq("POLLING"), any());
         assertThat(captor.getValue().getCdcIdlePollMs()).isNull();
     }
 

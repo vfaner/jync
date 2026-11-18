@@ -27,6 +27,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.bulk.BulkPlan;
 import com.qqmu.jync.dto.bulk.BulkPlanRequest;
@@ -126,7 +127,7 @@ class BulkPlanServiceTest {
                 stats("mid", 500L, 4_096L),
                 stats("small", 100L, 1_024L)));
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "同步任务", null, false));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "同步任务", null, false), AccessGuard.system());
 
         assertThat(plan.taskCount()).isEqualTo(2);
         assertThat(plan.tableCount()).isEqualTo(3);
@@ -148,7 +149,7 @@ class BulkPlanServiceTest {
     void aDictionaryThatReturnsNothingIsReportedRatherThanCounted() throws SQLException {
         when(reader.estimateTableStats(connection, "shop")).thenReturn(Map.of());
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "t", null, false));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "t", null, false), AccessGuard.system());
 
         assertThat(plan.catalogStatsUsed()).isFalse();
         assertThat(plan.unknownTables()).isEqualTo(3);
@@ -161,7 +162,7 @@ class BulkPlanServiceTest {
         when(reader.estimateTableStats(connection, "shop"))
                 .thenReturn(stats("big", 1_000L, null));
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "t", null, true));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "t", null, true), AccessGuard.system());
 
         assertThat(plan.exactStatsUsed()).isTrue();
         assertThat(plan.exactStatsTruncated()).isFalse();
@@ -184,7 +185,7 @@ class BulkPlanServiceTest {
         when(reader.estimateTableStats(eq(connection), anyString())).thenReturn(Map.of());
         stubCountStar(7L, "\"");
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, true));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, true), AccessGuard.system());
 
         verify(connection).prepareStatement("SELECT COUNT(*) FROM \"SCOTT\".\"EMP\"");
         assertThat(plan.exactStatsUsed()).isTrue();
@@ -199,7 +200,7 @@ class BulkPlanServiceTest {
         BulkPlan plan = new BulkPlanService(configService, dataSourceManager, readerFactory,
                 projectRepository, projectService, 0L,
                 mock(org.springframework.transaction.PlatformTransactionManager.class))
-                .plan(new BulkPlanRequest(1L, 2L, 2, "t", null, true));
+                .plan(new BulkPlanRequest(1L, 2L, 2, "t", null, true), AccessGuard.system());
 
         assertThat(plan.exactStatsUsed()).isFalse();
         assertThat(plan.exactStatsTruncated()).isTrue();
@@ -214,7 +215,7 @@ class BulkPlanServiceTest {
         when(connection.prepareStatement(contains("COUNT(*)"))).thenReturn(failing);
         when(reader.estimateTableStats(connection, "shop")).thenReturn(Map.of());
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "t", null, true));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 2, "t", null, true), AccessGuard.system());
 
         assertThat(plan.unknownTables()).isEqualTo(3);
         assertThat(plan.exactStatsUsed()).isFalse();
@@ -229,7 +230,7 @@ class BulkPlanServiceTest {
         source.setRole(ConnectionRole.TARGET);
 
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                new BulkPlanRequest(1L, 2L, 2, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.source.role");
     }
@@ -239,7 +240,7 @@ class BulkPlanServiceTest {
         target.setRole(ConnectionRole.SOURCE);
 
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                new BulkPlanRequest(1L, 2L, 2, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.target.role");
     }
@@ -253,7 +254,7 @@ class BulkPlanServiceTest {
         target.setType(DatabaseType.CLICKHOUSE);
 
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                new BulkPlanRequest(1L, 2L, 2, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.target.unsupported");
         verify(dataSourceManager, never()).createTransientDataSource(any());
@@ -262,7 +263,7 @@ class BulkPlanServiceTest {
     @Test
     void aTaskCountBelowOneIsRefusedInsteadOfSilentlyBecomingOne() {
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 0, "t", null, false)))
+                new BulkPlanRequest(1L, 2L, 0, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.taskcount.invalid");
     }
@@ -273,7 +274,7 @@ class BulkPlanServiceTest {
         // saveConfig 才拒绝,而那时预览已经展示了一份注定建不出来的计划。
         // 契约:布局阶段就按源库类型拒绝,连接都不开。
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "t", "LOGMINER_CDC", false)))
+                new BulkPlanRequest(1L, 2L, 2, "t", "LOGMINER_CDC", false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.cdc.not.oracle");
 
@@ -283,7 +284,7 @@ class BulkPlanServiceTest {
     @Test
     void anUnknownStrategyNameIsRefusedBeforeAnyConnectionIsOpened() {
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "t", "FOO", false)))
+                new BulkPlanRequest(1L, 2L, 2, "t", "FOO", false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.strategy.invalid");
 
@@ -318,7 +319,7 @@ class BulkPlanServiceTest {
         when(reader.estimateTableStats(eq(connection), anyString())).thenReturn(Map.of());
         stubCountStar(3L, "\"");
 
-        service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, true));
+        service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, true), AccessGuard.system());
 
         verify(connection).prepareStatement("SELECT COUNT(*) FROM \"DB2INST1\".\"ORDERS\"");
     }
@@ -328,7 +329,7 @@ class BulkPlanServiceTest {
         when(reader.listTableNames(connection, "shop")).thenReturn(List.of());
 
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                new BulkPlanRequest(1L, 2L, 2, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.no.tables");
     }
@@ -336,7 +337,7 @@ class BulkPlanServiceTest {
     @Test
     void syncingADatabaseOntoItselfIsRefused() {
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 1L, 2, "t", null, false)))
+                new BulkPlanRequest(1L, 1L, 2, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.same.database");
     }
@@ -345,7 +346,7 @@ class BulkPlanServiceTest {
     void moreTasksThanTablesIsClampedAndFlagged() throws SQLException {
         when(reader.estimateTableStats(connection, "shop")).thenReturn(Map.of());
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 10, "t", null, false));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 10, "t", null, false), AccessGuard.system());
 
         assertThat(plan.tasks()).hasSize(3);
         assertThat(plan.taskCountClamped()).isTrue();
@@ -357,7 +358,7 @@ class BulkPlanServiceTest {
                 .thenReturn(List.of("a,b", "plain"));
         when(reader.estimateTableStats(connection, "shop")).thenReturn(Map.of());
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, false));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, false), AccessGuard.system());
         String csv = service().toCsv(plan, new BulkPlanService.CsvLabels(
                 List.of("任务序号", "任务名称", "表名", "估算行数", "估算大小(字节)", "统计来源"),
                 "目录统计", "精确统计", "未知"));
@@ -378,7 +379,7 @@ class BulkPlanServiceTest {
                 .thenReturn(List.of("=cmd", "+1", "-x", "@y", "plain"));
         when(reader.estimateTableStats(connection, "shop")).thenReturn(Map.of());
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, false));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, false), AccessGuard.system());
         String csv = service().toCsv(plan, new BulkPlanService.CsvLabels(
                 List.of("a", "b", "c", "d", "e", "f"), "c", "e", "u"));
 
@@ -392,17 +393,17 @@ class BulkPlanServiceTest {
     void createWritesADisabledTaskPerBinWithItsOwnSelection() throws SQLException {
         when(reader.listTableNames(connection, "shop")).thenReturn(List.of("a", "b"));
         when(reader.estimateTableStats(connection, "shop")).thenReturn(Map.of());
-        when(projectService.save(any(Project.class))).thenAnswer(invocation -> {
+        when(projectService.save(any(Project.class), any())).thenAnswer(invocation -> {
             Project project = invocation.getArgument(0);
             project.setId(100L + project.getName().hashCode() % 10);
             return project;
         });
 
-        int created = service().create(new BulkPlanRequest(1L, 2L, 2, "t", "BINLOG_CDC", false));
+        int created = service().create(new BulkPlanRequest(1L, 2L, 2, "t", "BINLOG_CDC", false), AccessGuard.system());
 
         assertThat(created).isEqualTo(2);
         ArgumentCaptor<Project> projects = ArgumentCaptor.forClass(Project.class);
-        verify(projectService, org.mockito.Mockito.times(2)).save(projects.capture());
+        verify(projectService, org.mockito.Mockito.times(2)).save(projects.capture(), any());
         assertThat(projects.getAllValues()).allSatisfy(project -> {
             assertThat(project.getSourceDbId()).isEqualTo(1L);
             assertThat(project.getTargetDbId()).isEqualTo(2L);
@@ -411,7 +412,7 @@ class BulkPlanServiceTest {
 
         ArgumentCaptor<SyncConfig> configs = ArgumentCaptor.forClass(SyncConfig.class);
         verify(projectService, org.mockito.Mockito.times(2))
-                .saveConfig(any(), configs.capture(), eq("BINLOG_CDC"));
+                .saveConfig(any(), configs.capture(), eq("BINLOG_CDC"), any());
         assertThat(configs.getAllValues()).allSatisfy(config -> {
             assertThat(config.isObjectSelectionExplicit()).isTrue();
             assertThat(config.getViews()).isEmpty();
@@ -429,10 +430,10 @@ class BulkPlanServiceTest {
                 .thenReturn(Optional.of(new Project()));
 
         assertThatThrownBy(() -> service().create(
-                new BulkPlanRequest(1L, 2L, 1, "t", null, false)))
+                new BulkPlanRequest(1L, 2L, 1, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.name.duplicate:t-01");
-        verify(projectService, never()).save(any());
+        verify(projectService, never()).save(any(), any());
     }
 
     @Test
@@ -447,7 +448,7 @@ class BulkPlanServiceTest {
                 mock(org.springframework.transaction.PlatformTransactionManager.class);
 
         assertThatThrownBy(() -> service(transactions)
-                .create(new BulkPlanRequest(1L, 2L, 2, "t", null, false)))
+                .create(new BulkPlanRequest(1L, 2L, 2, "t", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.source.failed");
 
@@ -462,7 +463,7 @@ class BulkPlanServiceTest {
         when(reader.estimateTableStats(connection, "shop"))
                 .thenReturn(Map.of("big", new MetadataReader.TableStat(null, 8_192L)));
 
-        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, false));
+        BulkPlan plan = service().plan(new BulkPlanRequest(1L, 2L, 1, "t", null, false), AccessGuard.system());
 
         assertThat(plan.catalogStatsUsed()).isTrue();
         assertThat(plan.tasks().get(0).tables())
@@ -479,7 +480,7 @@ class BulkPlanServiceTest {
     @Test
     void aBlankPrefixIsRefusedBeforeTheSourceIsTouched() {
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "  ", null, false)))
+                new BulkPlanRequest(1L, 2L, 2, "  ", null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.prefix.required");
     }
@@ -487,7 +488,7 @@ class BulkPlanServiceTest {
     @Test
     void anOverlongPrefixIsRefused() {
         assertThatThrownBy(() -> service().plan(
-                new BulkPlanRequest(1L, 2L, 2, "x".repeat(101), null, false)))
+                new BulkPlanRequest(1L, 2L, 2, "x".repeat(101), null, false), AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.bulk.prefix.too.long");
     }

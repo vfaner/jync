@@ -20,8 +20,6 @@ import java.util.stream.Collectors;
 import org.quartz.CronExpression;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -35,6 +33,7 @@ import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.service.audit.AuditDetail;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
@@ -227,6 +226,13 @@ public class ProjectService {
         return projectRepository.findById(id);
     }
 
+    /** Loads the project and refuses it unless the caller may edit it. */
+    public Project requireEditable(Long projectId, AccessGuard actor) {
+        Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
+        return project;
+    }
+
     public long count() {
         return projectRepository.count();
     }
@@ -301,7 +307,7 @@ public class ProjectService {
 
     /** Creates or updates a project. Rescheduling follows the enabled flag automatically. */
     @Transactional
-    public Project save(Project project) {
+    public Project save(Project project, AccessGuard actor) {
         if (project.getName() == null || project.getName().isBlank()) {
             throw new IllegalArgumentException("error.project.name.required");
         }
@@ -357,12 +363,17 @@ public class ProjectService {
             // are later enabled through the explicit start action. A bound enabled=true from
             // a crafted POST must not survive into the row (it would schedule immediately).
             project.setEnabled(false);
+            project.setOwnerUsername(actor.username());
         }
         if (!isNew) {
             // enabled, syncConfig and createdAt are not the form's to set: a stale tab
             // submitting this form must neither stop a running project nor null out columns
             // the form never contained. Start/stop go through their own methods below.
             Project existing = require(project.getId());
+            actor.requireEditable(existing.getOwnerUsername());
+            // Ownership is never the form's to set: a crafted POST must not move the project
+            // to another account, and an edit must not blank it either.
+            project.setOwnerUsername(existing.getOwnerUsername());
             if (sameContent(project, existing)) {
                 // A save with nothing to change must not write: a merge would bump
                 // updated_at (the form never carries it), append a PROJECT_SAVE audit row
@@ -444,8 +455,8 @@ public class ProjectService {
 
     /** Persists just the sync settings for a project, leaving the capture strategy as-is. */
     @Transactional
-    public Project saveConfig(Long projectId, SyncConfig config) {
-        return saveConfig(projectId, config, null);
+    public Project saveConfig(Long projectId, SyncConfig config, AccessGuard actor) {
+        return saveConfig(projectId, config, null, actor);
     }
 
     /**
@@ -467,8 +478,10 @@ public class ProjectService {
      * @throws IllegalStateException    when a cycle is running or its lease is still held
      */
     @Transactional
-    public void saveCursorColumn(Long projectId, String tableName, String cursorColumn) {
+    public void saveCursorColumn(Long projectId, String tableName, String cursorColumn,
+                                 AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         if (isRunning(project)) {
             throw new IllegalStateException(stoppedButRunningKey(project,
                     "error.project.stop.before.config"));
@@ -485,7 +498,7 @@ public class ProjectService {
         if (value != null) {
             config.getCursorColumns().put(tableName, value);
         }
-        saveConfig(projectId, config);
+        saveConfig(projectId, config, actor);
         stateWriter.clearCursor(projectId, tableName);
     }
 
@@ -500,12 +513,12 @@ public class ProjectService {
      * and the source's cursors describe a different target.
      */
     @Transactional
-    public Project saveAsClone(Project clone, Long sourceProjectId) {
+    public Project saveAsClone(Project clone, Long sourceProjectId, AccessGuard actor) {
         Project source = require(sourceProjectId);
         clone.setSyncConfig(cloneSettings(source));
         log.info("Project '{}' cloned sync settings from project '{}'",
                 clone.getName(), source.getName());
-        return claimRedisKeyNamespace(save(clone));
+        return claimRedisKeyNamespace(save(clone, actor));
     }
 
     /**
@@ -606,8 +619,10 @@ public class ProjectService {
      *                        stored strategy unchanged (the pre-v1.5.0 two-arg behavior)
      */
     @Transactional
-    public Project saveConfig(Long projectId, SyncConfig config, String captureStrategy) {
+    public Project saveConfig(Long projectId, SyncConfig config, String captureStrategy,
+                              AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         // 表名映射落库前统一规范化:目标表名是数据库标识符,空格不可能属于它。表单边输入
         // 边去掉空格,但直连 POST 也必须被兜住;留空或改成与源表同名都表示"不映射"。
         config.setTableNameMapping(normalizeTableNameMapping(config.getTableNameMapping()));
@@ -984,8 +999,9 @@ public class ProjectService {
 
     /** Enables the project and starts polling, running one cycle immediately. */
     @Transactional
-    public void start(Long projectId) {
+    public void start(Long projectId, AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         // A Redis target replaces the JDBC one, so its projects have no targetDbId at all.
         // Requiring it here made a fresh cache project unstartable before its consumer ran.
         if (project.getSourceDbId() == null) {
@@ -1122,8 +1138,9 @@ public class ProjectService {
      * a safe point, so nothing is cut mid-write and the lease is released by its owner.
      */
     @Transactional
-    public void stop(Long projectId) {
+    public void stop(Long projectId, AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         project.setEnabled(false);
         projectRepository.save(project);
         afterCommit(projectId, "stop", () -> {
@@ -1146,8 +1163,9 @@ public class ProjectService {
     }
 
     /** Runs one cycle on demand, contending for the same lock the scheduler uses. */
-    public SyncTaskRunner.Outcome syncNow(Long projectId) {
+    public SyncTaskRunner.Outcome syncNow(Long projectId, AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         if (cdcManager.strategyOf(project).isLogCdc()) {
             // 「立即同步」对 CDC 无意义:流一直在跑。正确的重放入口是「重建基线」(T17)。
             // 裸 i18n 键:ApiExceptionHandler 原样返回,浏览器端 JyncMessages 本地化。
@@ -1180,8 +1198,9 @@ public class ProjectService {
      * race with the cycle currently advancing those same cursors.
      */
     @Transactional
-    public void resetProgress(Long projectId) {
+    public void resetProgress(Long projectId, AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         // Progress rows play no part in CDC: the baseline wipes them itself before its full
         // load (CdcBaselineService → SyncEngine.resetProject), and streaming afterwards
         // follows the position row only. Clearing them would report success and change
@@ -1244,8 +1263,9 @@ public class ProjectService {
      *                               (nothing to force — the UI should not offer the button)
      */
     @Transactional
-    public void forceUnlock(Long projectId) {
+    public void forceUnlock(Long projectId, AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         SyncTask task = taskStore.find(projectId).orElse(null);
         String previousOwner = task == null ? null : task.getLockOwner();
         if (previousOwner == null) {
@@ -1254,8 +1274,8 @@ public class ProjectService {
         String previousExpiry = task.getLockExpiresAt() == null ? "unknown"
                 : task.getLockExpiresAt().toString();
         boolean cleared = lockService.forceUnlock(projectId);
-        String actor = currentUsername();
-        String detail = "Sync lock force-released by " + actor
+        String actorName = actor.username();
+        String detail = "Sync lock force-released by " + actorName
                 + " (previous holder " + previousOwner + ", lease until " + previousExpiry + ")";
         ChangeLog entry = ChangeLog.of(projectId, ObjectType.PROJECT, project.getName(),
                 ChangeType.INFO, detail);
@@ -1264,14 +1284,8 @@ public class ProjectService {
         // The change log for this project can itself be cleared later; the admin audit
         // trail is append-only, so the force-unlock record outlives it.
         auditService.record(AuditAction.PROJECT_FORCE_UNLOCK,
-                AuditDetail.of("audit.detail.forceUnlock", actor, previousOwner, previousExpiry));
+                AuditDetail.of("audit.detail.forceUnlock", actorName, previousOwner, previousExpiry));
         log.warn("Project '{}': {}", project.getName(), detail);
-    }
-
-    /** The signed-in username for audit entries, or "unknown" outside a request context. */
-    private static String currentUsername() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth == null || !auth.isAuthenticated() ? "unknown" : auth.getName();
     }
 
     /**
@@ -1284,8 +1298,9 @@ public class ProjectService {
      * unscheduling first stops new fires, so the purge runs against a quiet project.
      */
     @Transactional
-    public void delete(Long projectId) {
+    public void delete(Long projectId, AccessGuard actor) {
         Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
         scheduler.unschedule(projectId);
         // Delete can still roll back (lock busy, a failing delete, ...). Restore an enabled
         // project's schedule on rollback rather than leaving it silently unmonitored.

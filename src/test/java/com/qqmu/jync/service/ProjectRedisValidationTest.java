@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import tools.jackson.databind.ObjectMapper;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
@@ -114,10 +115,10 @@ class ProjectRedisValidationTest {
     void redisTargetRejectsPollingStrategy() {
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(redisProject()));
 
-        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), "POLLING"))
+        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), "POLLING", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.redis.cdcOnly");
-        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), "FULL_COMPARE"))
+        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), "FULL_COMPARE", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.redis.cdcOnly");
     }
@@ -128,7 +129,7 @@ class ProjectRedisValidationTest {
         // which a Redis target must never run.
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(redisProject()));
 
-        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), null))
+        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.redis.cdcOnly");
     }
@@ -143,7 +144,7 @@ class ProjectRedisValidationTest {
         config.setSyncProcedures(true);
         config.setSyncData(false);
 
-        Project saved = service.saveConfig(PROJECT_ID, config, "BINLOG_CDC");
+        Project saved = service.saveConfig(PROJECT_ID, config, "BINLOG_CDC", AccessGuard.system());
 
         SyncConfig stored = mapper.readValue(saved.getSyncConfig(), SyncConfig.class);
         assertThat(stored.isSyncStructure()).isFalse();
@@ -162,14 +163,14 @@ class ProjectRedisValidationTest {
         RedisProjectionConfig projection = new RedisProjectionConfig();
         projection.setKeyPrefix("  myapp  ");
         submitted.setRedisProjection(projection);
-        Project saved = service.saveConfig(PROJECT_ID, submitted, "BINLOG_CDC");
+        Project saved = service.saveConfig(PROJECT_ID, submitted, "BINLOG_CDC", AccessGuard.system());
         assertThat(mapper.readValue(saved.getSyncConfig(), SyncConfig.class)
                 .getRedisProjection().getKeyPrefix()).isEqualTo("myapp:");
 
         SyncConfig blank = new SyncConfig();
         blank.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
         blank.setRedisProjection(new RedisProjectionConfig());
-        Project savedBlank = service.saveConfig(PROJECT_ID, blank, "BINLOG_CDC");
+        Project savedBlank = service.saveConfig(PROJECT_ID, blank, "BINLOG_CDC", AccessGuard.system());
         assertThat(mapper.readValue(savedBlank.getSyncConfig(), SyncConfig.class)
                 .getRedisProjection().getKeyPrefix()).isEqualTo("jync:1:");
     }
@@ -180,7 +181,7 @@ class ProjectRedisValidationTest {
         SyncConfig config = new SyncConfig();
         config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
 
-        Project saved = service.saveConfig(PROJECT_ID, config, "BINLOG_CDC");
+        Project saved = service.saveConfig(PROJECT_ID, config, "BINLOG_CDC", AccessGuard.system());
 
         RedisProjectionConfig projection = mapper.readValue(saved.getSyncConfig(), SyncConfig.class)
                 .getRedisProjection();
@@ -211,7 +212,7 @@ class ProjectRedisValidationTest {
         projection.setKeyPrefix("myapp");
         config.setRedisProjection(projection);
 
-        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, config, "BINLOG_CDC"))
+        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, config, "BINLOG_CDC", AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.redis.prefixConflict");
     }
@@ -227,7 +228,7 @@ class ProjectRedisValidationTest {
         when(databaseConfigRepository.findById(SOURCE_ID))
                 .thenReturn(Optional.of(source(DatabaseType.H2)));
 
-        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), null))
+        assertThatThrownBy(() -> service.saveConfig(PROJECT_ID, new SyncConfig(), null, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.redis.sourceNoCdc");
     }
@@ -240,7 +241,7 @@ class ProjectRedisValidationTest {
         form.setTargetKind(SyncTargetKind.REDIS);
         form.setTargetRedisId(404L);
 
-        assertThatThrownBy(() -> service.save(form))
+        assertThatThrownBy(() -> service.save(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.redis.target.not.found");
     }
@@ -255,7 +256,7 @@ class ProjectRedisValidationTest {
         form.setTargetKind(SyncTargetKind.REDIS);
         form.setTargetRedisId(REDIS_TARGET_ID);
 
-        assertThatThrownBy(() -> service.save(form))
+        assertThatThrownBy(() -> service.save(form, AccessGuard.system()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.project.redis.sourceNoCdc");
     }
@@ -275,7 +276,7 @@ class ProjectRedisValidationTest {
         config.setRedisProjection(new RedisProjectionConfig());
         config.setSyncStructure(true);
 
-        Project saved = service.saveConfig(PROJECT_ID, config, "BINLOG_CDC");
+        Project saved = service.saveConfig(PROJECT_ID, config, "BINLOG_CDC", AccessGuard.system());
 
         SyncConfig persisted = mapper.readValue(saved.getSyncConfig(), SyncConfig.class);
         assertThat(persisted.getRedisProjection()).isNull();
