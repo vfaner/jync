@@ -1,21 +1,24 @@
 package com.qqmu.jync.model;
 
 /**
- * What a signed-in user is allowed to do.
+ * The three fixed roles.
  *
- * <p>Only two levels, deliberately. Every state change in this application is a POST — audited
- * endpoint by endpoint, no GET mutates anything — so "may write" is a single, checkable bit
- * rather than a matrix of per-resource permissions that would drift from the controllers.
+ * <p>Write access is deliberately two questions, not one bit: whether the role may write at
+ * all ({@link #ADMIN} and {@link #OPS}), and whether this particular resource belongs to the
+ * caller (the owner column on the resource). A viewer answers no to the first; an operator
+ * answers yes to the first and "only mine" to the second.
  */
 public enum UserRole {
 
-    /** Read-only: may view every page, may change nothing but their own password. */
+    /** 只读：可查看全部业务资源，只能修改自己的密码。 */
     VIEWER,
 
-    /** Full access, including the operations that reach outside this process. */
+    /** 运维：可查看全部资源，只能编辑/删除/运行自己名下的资源。 */
+    OPS,
+
+    /** 系统管理员：全部业务权限 + 全部系统面权限。 */
     ADMIN;
 
-    /** Spring Security expects the {@code ROLE_} prefix on authorities. */
     public String authority() {
         return "ROLE_" + name();
     }

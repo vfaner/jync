@@ -56,7 +56,10 @@ class SystemSettingServiceTest {
         Thread.sleep(5);
         service.putBoolean(KEY, false);
 
-        assertThat(repository.count()).isEqualTo(1);
+        // Startup seeding writes its own marker row, so count the rows for this key only.
+        assertThat(repository.findAll())
+                .filteredOn(row -> KEY.key().equals(row.getKey()))
+                .hasSize(1);
         assertThat(repository.findById(KEY.key()).orElseThrow().getUpdatedAt()).isAfter(first);
         assertThat(service.getBoolean(KEY, true)).isFalse();
     }

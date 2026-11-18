@@ -11,7 +11,11 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 
 import com.qqmu.jync.model.AppUser;
+import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.repository.AppUserRepository;
+import com.qqmu.jync.repository.SystemSettingRepository;
+import com.qqmu.jync.service.settings.SystemSettingKey;
+import com.qqmu.jync.service.settings.SystemSettingService;
 
 /**
  * Exercises user creation, seeding, password validation, and the change flow.
@@ -24,12 +28,15 @@ class AppUserServiceTest {
 
     @Autowired
     private AppUserRepository repository;
+    @Autowired
+    private SystemSettingRepository systemSettings;
 
     private AppUserService service;
 
     @BeforeEach
     void setUp() {
-        service = new AppUserService(repository, new BCryptPasswordEncoder());
+        service = new AppUserService(repository, new BCryptPasswordEncoder(),
+                new SystemSettingService(systemSettings));
     }
 
     // ── Seeding ────────────────────────────────────────────────────────────────
@@ -37,9 +44,71 @@ class AppUserServiceTest {
     @Test
     void seedsOnEmptyTable() {
         service.seedIfEmpty();
+        assertThat(repository.count()).isEqualTo(3);
+        assertThat(repository.findByUsername("admin")).get()
+                .extracting(AppUser::getRole).isEqualTo(UserRole.ADMIN);
+        assertThat(repository.findByUsername("ops")).get()
+                .extracting(AppUser::getRole).isEqualTo(UserRole.OPS);
+        assertThat(repository.findByUsername("view")).get()
+                .extracting(AppUser::getRole).isEqualTo(UserRole.VIEWER);
+        assertThat(systemSettings.findById(SystemSettingKey.LOCAL_OPS_SEEDED.key()))
+                .isPresent();
+    }
+
+    @Test
+    void upgradesAnExistingInstallationWithAnOpsAccount() {
+        repository.save(user("admin", UserRole.ADMIN));
+        repository.save(user("view", UserRole.VIEWER));
+
+        service.seedIfEmpty();
+
+        assertThat(repository.findByUsername("ops")).get()
+                .extracting(AppUser::getRole).isEqualTo(UserRole.OPS);
+        assertThat(systemSettings.findById(SystemSettingKey.LOCAL_OPS_SEEDED.key()))
+                .isPresent();
+    }
+
+    @Test
+    void aDeletedOpsAccountIsNotRecreatedAfterTheMarkerExists() {
+        service.seedIfEmpty();
+        repository.delete(repository.findByUsername("ops").orElseThrow());
+
+        service.seedIfEmpty();
+
+        assertThat(repository.findByUsername("ops")).isEmpty();
         assertThat(repository.count()).isEqualTo(2);
-        assertThat(repository.findByUsername("admin")).isPresent();
-        assertThat(repository.findByUsername("view")).isPresent();
+    }
+
+    @Test
+    void anExistingOpsRoleOnlyGetsTheMarker() {
+        repository.save(user("admin", UserRole.ADMIN));
+        repository.save(user("view", UserRole.VIEWER));
+        repository.save(user("sso-ops", UserRole.OPS));
+        long before = repository.count();
+
+        service.seedIfEmpty();
+
+        assertThat(repository.count()).isEqualTo(before);
+        assertThat(repository.findByUsername("ops")).isEmpty();
+        assertThat(systemSettings.findById(SystemSettingKey.LOCAL_OPS_SEEDED.key()))
+                .isPresent();
+    }
+
+    @Test
+    void loadsOps() {
+        service.seedIfEmpty();
+        SyncUserDetails details = service.loadUserByUsername("ops");
+        assertThat(details.isOps()).isTrue();
+        assertThat(details.isAdmin()).isFalse();
+        assertThat(details.isUsingDefaultPassword()).isTrue();
+    }
+
+    private static AppUser user(String username, UserRole role) {
+        AppUser user = new AppUser();
+        user.setUsername(username);
+        user.setPasswordHash("$2a$10$not-a-real-hash");
+        user.setRole(role);
+        return user;
     }
 
     @Test
@@ -111,7 +180,8 @@ class AppUserServiceTest {
         // A missing user must cost one BCrypt verification, else reply timing enumerates users.
         org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder encoder =
                 org.mockito.Mockito.spy(new BCryptPasswordEncoder());
-        AppUserService svc = new AppUserService(repository, encoder);
+        AppUserService svc = new AppUserService(repository, encoder,
+                new SystemSettingService(systemSettings));
 
         assertThatThrownBy(() -> svc.loadUserByUsername("ghost"))
                 .isInstanceOf(UsernameNotFoundException.class);

@@ -66,6 +66,10 @@ public class SyncUserDetails implements UserDetails {
         return role == UserRole.ADMIN;
     }
 
+    public boolean isOps() {
+        return role == UserRole.OPS;
+    }
+
     @Override
     public List<GrantedAuthority> getAuthorities() {
         return List.of(new SimpleGrantedAuthority(role.authority()));

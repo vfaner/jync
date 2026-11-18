@@ -13,11 +13,13 @@ import org.springframework.transaction.annotation.Transactional;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.repository.AppUserRepository;
+import com.qqmu.jync.service.settings.SystemSettingKey;
+import com.qqmu.jync.service.settings.SystemSettingService;
 
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Loads users for authentication, seeds the initial pair, and changes passwords.
+ * Loads users for authentication, seeds the initial three accounts, and changes passwords.
  *
  * @see SyncUserDetails
  */
@@ -26,13 +28,14 @@ import lombok.extern.slf4j.Slf4j;
 public class AppUserService implements UserDetailsService {
 
     /**
-     * Handed to both seeded accounts, and the value the layout warns about while it is still in
+     * Handed to all seeded accounts, and the value the layout warns about while it is still in
      * use. Public because the warning check and the tests both need the same constant — a second
      * copy of this string somewhere else is a bug waiting to happen.
      */
     public static final String DEFAULT_PASSWORD = "123456";
 
     public static final String ADMIN_USERNAME = "admin";
+    public static final String OPS_USERNAME = "ops";
     public static final String VIEWER_USERNAME = "view";
 
     /**
@@ -45,30 +48,50 @@ public class AppUserService implements UserDetailsService {
 
     private final AppUserRepository repository;
     private final PasswordEncoder passwordEncoder;
+    private final SystemSettingService settings;
 
-    public AppUserService(AppUserRepository repository, PasswordEncoder passwordEncoder) {
+    public AppUserService(AppUserRepository repository, PasswordEncoder passwordEncoder,
+                          SystemSettingService settings) {
         this.repository = repository;
         this.passwordEncoder = passwordEncoder;
+        this.settings = settings;
     }
 
     /**
-     * Creates the two starting accounts, but only when there are no users at all.
+     * Creates the three starting accounts, but only when there are no users at all.
      *
      * <p>The emptiness check is the whole safety property. Seeding "if this username is missing"
      * would recreate an account the operator deliberately deleted, and seeding unconditionally
      * would reset a changed password on every restart — a silent security regression that nobody
      * would notice until someone tried the default and got in.
+     *
+     * <p>Installations upgraded from before the operator role existed have no local OPS account,
+     * so they get one added once. The {@code seed.local-ops} marker makes that a one-time
+     * migration: deleting the account afterwards is deliberate and is never undone.
      */
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void seedIfEmpty() {
-        if (repository.count() > 0) {
+        if (repository.count() == 0) {
+            create(ADMIN_USERNAME, DEFAULT_PASSWORD, UserRole.ADMIN);
+            create(OPS_USERNAME, DEFAULT_PASSWORD, UserRole.OPS);
+            create(VIEWER_USERNAME, DEFAULT_PASSWORD, UserRole.VIEWER);
+            settings.putBoolean(SystemSettingKey.LOCAL_OPS_SEEDED, true);
+            log.warn("Seeded users '{}' (ADMIN), '{}' (OPS) and '{}' (VIEWER) with the default "
+                    + "password. Change all three before exposing this instance.",
+                    ADMIN_USERNAME, OPS_USERNAME, VIEWER_USERNAME);
             return;
         }
-        create(ADMIN_USERNAME, DEFAULT_PASSWORD, UserRole.ADMIN);
-        create(VIEWER_USERNAME, DEFAULT_PASSWORD, UserRole.VIEWER);
-        log.warn("Seeded users '{}' (ADMIN) and '{}' (VIEWER) with the default password. "
-                + "Change both before exposing this instance.", ADMIN_USERNAME, VIEWER_USERNAME);
+        if (settings.find(SystemSettingKey.LOCAL_OPS_SEEDED).isPresent()) {
+            // Already handled once: an operator who deleted the account meant it.
+            return;
+        }
+        if (repository.countByRole(UserRole.OPS) == 0) {
+            create(OPS_USERNAME, DEFAULT_PASSWORD, UserRole.OPS);
+            log.warn("Upgraded installation: created local '{}' account with the default password. "
+                    + "Change it before exposing this instance.", OPS_USERNAME);
+        }
+        settings.putBoolean(SystemSettingKey.LOCAL_OPS_SEEDED, true);
     }
 
     private void create(String username, String rawPassword, UserRole role) {

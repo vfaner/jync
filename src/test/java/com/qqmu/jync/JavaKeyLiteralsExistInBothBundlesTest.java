@@ -39,6 +39,13 @@ class JavaKeyLiteralsExistInBothBundlesTest {
             "error.db.health.timeout",
             "error.db.health.invalid");
 
+    /**
+     * Keys stored in the metadata database rather than resolved through the message source.
+     * {@code ai.enabled} shares its first segment with the {@code ai.*} UI namespace by
+     * coincidence, so the scan would otherwise demand a sentence for a row key.
+     */
+    private static final Set<String> STORAGE_KEYS = Set.of("ai.enabled");
+
     private static final Pattern STRING_LITERAL =
             Pattern.compile("\"([a-z][A-Za-z0-9]*(?:\\.[a-z0-9][A-Za-z0-9_-]*)+)\"");
 
@@ -56,7 +63,7 @@ class JavaKeyLiteralsExistInBothBundlesTest {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String source = stripComments(Files.readString(file, StandardCharsets.UTF_8));
                 for (String key : keyLiteralsIn(source, namespaces)) {
-                    if (BROWSER_RESOLVED.contains(key)) {
+                    if (BROWSER_RESOLVED.contains(key) || STORAGE_KEYS.contains(key)) {
                         continue;
                     }
                     if (!en.contains(key)) {
