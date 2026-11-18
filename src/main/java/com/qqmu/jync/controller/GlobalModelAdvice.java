@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.UserRole;
+import com.qqmu.jync.service.ai.support.SupportAssistantService;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.settings.AiAvailability;
@@ -42,6 +43,7 @@ public class GlobalModelAdvice {
     private final boolean configuredUpdateCheckEnabled;
     private final ObjectProvider<UpdateCheckResolver> updateCheckResolver;
     private final ObjectProvider<AiAvailability> aiAvailability;
+    private final ObjectProvider<SupportAssistantService> supportAssistant;
     private final DateTimeFormatter buildTimeFormatter;
 
     @Autowired
@@ -51,9 +53,10 @@ public class GlobalModelAdvice {
                              ObjectProvider<BuildProperties> buildProperties,
                              @Value("${app.update-check.enabled:true}") boolean updateCheckEnabled,
                              ObjectProvider<UpdateCheckResolver> updateCheckResolver,
-                             ObjectProvider<AiAvailability> aiAvailability) {
+                             ObjectProvider<AiAvailability> aiAvailability,
+                             ObjectProvider<SupportAssistantService> supportAssistant) {
         this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled,
-                updateCheckResolver, ZoneId.systemDefault(), aiAvailability);
+                updateCheckResolver, ZoneId.systemDefault(), aiAvailability, supportAssistant);
     }
 
     /** Test seam: the display zone is pinned so the rendered stamp does not depend on the JVM. */
@@ -64,7 +67,7 @@ public class GlobalModelAdvice {
                       boolean updateCheckEnabled,
                       ZoneId buildTimeZone) {
         this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled, null,
-                buildTimeZone, null);
+                buildTimeZone, null, null);
     }
 
     GlobalModelAdvice(String githubUrl,
@@ -75,7 +78,7 @@ public class GlobalModelAdvice {
                       ObjectProvider<UpdateCheckResolver> updateCheckResolver,
                       ZoneId buildTimeZone) {
         this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled,
-                updateCheckResolver, buildTimeZone, null);
+                updateCheckResolver, buildTimeZone, null, null);
     }
 
     GlobalModelAdvice(String githubUrl,
@@ -85,7 +88,8 @@ public class GlobalModelAdvice {
                       boolean updateCheckEnabled,
                       ObjectProvider<UpdateCheckResolver> updateCheckResolver,
                       ZoneId buildTimeZone,
-                      ObjectProvider<AiAvailability> aiAvailability) {
+                      ObjectProvider<AiAvailability> aiAvailability,
+                      ObjectProvider<SupportAssistantService> supportAssistant) {
         this.githubUrl = githubUrl;
         this.siteUrl = siteUrl;
         this.properties = properties;
@@ -93,7 +97,29 @@ public class GlobalModelAdvice {
         this.configuredUpdateCheckEnabled = updateCheckEnabled;
         this.updateCheckResolver = updateCheckResolver;
         this.aiAvailability = aiAvailability;
+        this.supportAssistant = supportAssistant;
         this.buildTimeFormatter = BUILD_TIME_FORMATTER.withZone(buildTimeZone);
+    }
+
+    /**
+     * Whether the floating assistant is rendered at all.
+     *
+     * <p>Writer roles only: a VIEWER has no questions about running state they may act on, and
+     * the endpoint refuses them anyway. The availability check is cached inside the service for
+     * a few seconds, because this runs on every page render.
+     */
+    @ModelAttribute("supportEnabled")
+    public boolean supportEnabled() {
+        if (!AccessGuard.current().canWrite()) {
+            return false;
+        }
+        AiAvailability ai = aiAvailability == null ? null : aiAvailability.getIfAvailable();
+        if (ai == null || ai.isHardDisabled()) {
+            return false;
+        }
+        SupportAssistantService service = supportAssistant == null
+                ? null : supportAssistant.getIfAvailable();
+        return service != null && service.isAvailable();
     }
 
     /**

@@ -61,6 +61,12 @@ public enum AuditAction {
     /** The external-authentication settings were saved. The detail never carries the secret. */
     EXTERNAL_AUTH_SAVE,
     /**
+     * The support assistant answered one question. The detail carries the tools used, the
+     * duration and the outcome — never the question or the answer text, which would copy
+     * table names and error details into the append-only audit table.
+     */
+    AI_SUPPORT_ASK,
+    /**
      * Legacy: the 系统配置 metadata-database connection tester wrote this before it was
      * removed. Kept so the append-only rows still load ({@code @Enumerated(STRING)} is
      * strict); nothing records it any more.
