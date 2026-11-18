@@ -707,17 +707,27 @@ public class AiChatClient {
             sys.put("content", system);
         }
         for (Turn turn : turns) {
-            appendOpenAiMessage(messages, turn);
+            if (anthropic) {
+                appendAnthropicMessage(messages, turn);
+            } else {
+                appendOpenAiMessage(messages, turn);
+            }
         }
         if (tools != null && !tools.isEmpty()) {
             ArrayNode defs = body.putArray("tools");
             for (ToolSpec tool : tools) {
                 ObjectNode def = defs.addObject();
-                def.put("type", "function");
-                ObjectNode fn = def.putObject("function");
-                fn.put("name", tool.name());
-                fn.put("description", tool.description());
-                fn.set("parameters", mapper.valueToTree(tool.parameters()));
+                if (anthropic) {
+                    def.put("name", tool.name());
+                    def.put("description", tool.description());
+                    def.set("input_schema", mapper.valueToTree(tool.parameters()));
+                } else {
+                    def.put("type", "function");
+                    ObjectNode fn = def.putObject("function");
+                    fn.put("name", tool.name());
+                    fn.put("description", tool.description());
+                    fn.set("parameters", mapper.valueToTree(tool.parameters()));
+                }
             }
         }
 
@@ -759,12 +769,168 @@ public class AiChatClient {
         }
     }
 
-    /** Replaced by the real implementation in the Anthropic task. */
+    /**
+     * Anthropic puts everything in typed content blocks: the assistant's tool request is a
+     * {@code tool_use} block, and its result comes back as a {@code tool_result} block inside a
+     * {@code user} message rather than a {@code tool} role.
+     */
+    private void appendAnthropicMessage(ArrayNode messages, Turn turn) {
+        ObjectNode message = messages.addObject();
+        if ("tool".equals(turn.role())) {
+            message.put("role", "user");
+            ArrayNode blocks = message.putArray("content");
+            ObjectNode block = blocks.addObject();
+            block.put("type", "tool_result");
+            block.put("tool_use_id", turn.toolCallId() == null ? "" : turn.toolCallId());
+            block.put("content", turn.content() == null ? "" : turn.content());
+            return;
+        }
+        message.put("role", turn.role());
+        ArrayNode blocks = message.putArray("content");
+        if (turn.content() != null && !turn.content().isEmpty()) {
+            ObjectNode text = blocks.addObject();
+            text.put("type", "text");
+            text.put("text", turn.content());
+        }
+        for (ToolCall call : turn.toolCalls()) {
+            ObjectNode use = blocks.addObject();
+            use.put("type", "tool_use");
+            use.put("id", call.id());
+            use.put("name", call.name());
+            JsonNode input = parseOrNull(call.argumentsJson());
+            use.set("input", input == null ? mapper.createObjectNode() : input);
+        }
+        if (blocks.size() == 0) {
+            message.put("content", "");
+        }
+    }
+
     private ToolChatResult converseAnthropic(AiProvider provider, String apiKey, String system,
                                              List<Turn> turns, List<ToolSpec> tools,
                                              int maxTokens,
                                              java.util.function.Consumer<String> sink) {
-        return ToolChatResult.failure("error.ai.notAvailable", 0, false);
+        AiProtocol protocol = AiProtocol.ANTHROPIC;
+        String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
+        String model = provider.getModel() == null ? "" : provider.getModel().trim();
+        long start = System.currentTimeMillis();
+        if (model.isEmpty()) {
+            return ToolChatResult.failure("error.ai.model.required", 0, false);
+        }
+        try {
+            AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
+        } catch (IllegalArgumentException e) {
+            return ToolChatResult.failure(e.getMessage(), 0, false);
+        }
+        Duration timeout = Duration.ofSeconds(provider.getTimeoutSeconds() == null
+                || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());
+        AtomicReference<String> stalledFor = new AtomicReference<>();
+        try {
+            HttpRequest request = buildConverseRequest(protocol, endpoint, model, apiKey,
+                    timeout, system, turns, tools, maxTokens);
+            HttpResponse<java.io.InputStream> response = HTTP_CLIENT.send(request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() / 100 != 2) {
+                String detail = extractError(readAll(response.body()));
+                boolean toolsRejected = response.statusCode() / 100 == 4 && !tools.isEmpty()
+                        && detail.toLowerCase(java.util.Locale.ROOT)
+                                .matches(".*(tool|function|does not support).*");
+                log.warn("AI tool stream to '{}' failed: HTTP {} {}",
+                        provider.getName(), response.statusCode(), detail);
+                return ToolChatResult.failure("HTTP " + response.statusCode()
+                        + (detail.isEmpty() ? "" : " — " + detail),
+                        System.currentTimeMillis() - start, toolsRejected);
+            }
+
+            java.io.InputStream body = response.body();
+            AtomicLong lastActivity = new AtomicLong(System.currentTimeMillis());
+            AtomicBoolean firstLineSeen = new AtomicBoolean(false);
+            long tickMs = Math.max(200L, Math.min(1000L, timeout.toMillis() / 4));
+            ScheduledFuture<?> watchdog = STALL_WATCHDOG.scheduleAtFixedRate(() -> {
+                long budget = firstLineSeen.get() ? timeout.toMillis() : FIRST_LINE_CEILING_MS;
+                if (System.currentTimeMillis() - lastActivity.get() > budget
+                        && stalledFor.compareAndSet(null,
+                                "Stream stalled for over " + (budget / 1000) + "s")) {
+                    try {
+                        body.close();
+                    } catch (IOException ignored) {
+                        // Already closed.
+                    }
+                }
+            }, tickMs, tickMs, TimeUnit.MILLISECONDS);
+
+            StringBuilder text = new StringBuilder();
+            String[] served = {""};
+            Map<Integer, PartialCall> partials = new TreeMap<>();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(body, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    firstLineSeen.set(true);
+                    lastActivity.set(System.currentTimeMillis());
+                    if (!line.startsWith("data:")) {
+                        continue;
+                    }
+                    String data = line.substring(5).trim();
+                    if (data.isEmpty()) {
+                        continue;
+                    }
+                    JsonNode root = parseOrNull(data);
+                    if (root == null) {
+                        continue;
+                    }
+                    String type = root.path("type").asString("");
+                    if (served[0].isEmpty()) {
+                        served[0] = servedModel(root);
+                    }
+                    if ("content_block_start".equals(type)
+                            && "tool_use".equals(root.path("content_block").path("type")
+                                    .asString(""))) {
+                        PartialCall call = partials.computeIfAbsent(
+                                root.path("index").asInt(0), i -> new PartialCall());
+                        call.id = root.path("content_block").path("id").asString(call.id);
+                        call.name = root.path("content_block").path("name").asString(call.name);
+                        JsonNode input = root.path("content_block").path("input");
+                        if (input.isObject() && input.size() > 0) {
+                            call.args.append(input.toString());
+                        }
+                    } else if ("content_block_delta".equals(type)) {
+                        String deltaType = root.path("delta").path("type").asString("");
+                        if ("text_delta".equals(deltaType)) {
+                            String piece = root.path("delta").path("text").asString("");
+                            if (!piece.isEmpty()) {
+                                text.append(piece);
+                                sink.accept(piece);
+                            }
+                        } else if ("input_json_delta".equals(deltaType)) {
+                            PartialCall call = partials.computeIfAbsent(
+                                    root.path("index").asInt(0), i -> new PartialCall());
+                            call.args.append(
+                                    root.path("delta").path("partial_json").asString(""));
+                        }
+                    } else if ("message_stop".equals(type)) {
+                        break;
+                    }
+                }
+            } finally {
+                watchdog.cancel(false);
+            }
+            List<ToolCall> calls = new ArrayList<>();
+            partials.forEach((index, call) -> calls.add(new ToolCall(
+                    call.id.isEmpty() ? "toolu_" + index : call.id,
+                    call.name, call.args.toString())));
+            return ToolChatResult.success(text.toString(), calls, served[0],
+                    System.currentTimeMillis() - start);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ToolChatResult.failure("Interrupted", System.currentTimeMillis() - start, false);
+        } catch (IOException | RuntimeException e) {
+            String stall = stalledFor.get();
+            log.warn("AI tool stream to '{}' failed: {}", provider.getName(),
+                    stall == null ? e.toString() : stall);
+            return ToolChatResult.failure(stall == null
+                    ? (e.getMessage() == null ? e.toString() : e.getMessage()) : stall,
+                    System.currentTimeMillis() - start, false);
+        }
     }
 
     /** Replaced by the real implementation in the Ollama-native task. */
