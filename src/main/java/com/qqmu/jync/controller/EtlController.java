@@ -210,6 +210,16 @@ public class EtlController {
         // would flash an empty extraction box at a Mongo operator.
         model.addAttribute("sourceMongo",
                 isNativeMongo(sources, task == null ? null : task.getSourceDbId()));
+        // The same first-paint rule for the three write-mode fields: a continuation only
+        // applies to append and range overwrite, the range condition only bounds a range
+        // overwrite, and the upsert key only names an upsert's match. A null mode is the
+        // form's overwrite default. The fields stay in the form when hidden, so switching
+        // modes back and forth keeps what was typed.
+        EtlWriteMode mode = task == null ? null : task.getWriteMode();
+        model.addAttribute("rangeApplicable", mode == EtlWriteMode.RANGE_OVERWRITE);
+        // Same rule the runner and the save use, so a mode cannot show a field it never reads.
+        model.addAttribute("resumeApplicable", mode != null && mode.supportsResume());
+        model.addAttribute("upsertApplicable", mode == EtlWriteMode.UPSERT);
     }
 
     /** True when the chosen source is a native MongoDB connection (collection + filter). */

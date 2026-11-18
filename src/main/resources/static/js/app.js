@@ -4189,6 +4189,27 @@
     apply();
   }
 
+  /* ETL 表单只显示当前写入方式用得上的字段：范围覆盖用范围条件，追加/范围覆盖用
+     续传键，主键更新用主键列。首屏已由服务端按已保存的模式渲染，这里只跟随后续
+     切换；隐藏的是属性而不是禁用，来回切模式不丢已填的值，服务端仍按最终模式校验。 */
+  function bindEtlWriteMode() {
+    var select = document.getElementById('writeMode');
+    var rangeGroup = document.querySelector('[data-role="range-group"]');
+    var resumeGroup = document.querySelector('[data-role="resume-group"]');
+    var upsertGroup = document.querySelector('[data-role="upsert-group"]');
+    if (!select || !rangeGroup || !resumeGroup || !upsertGroup) { return; }
+
+    function apply() {
+      var mode = select.value;
+      rangeGroup.hidden = mode !== 'RANGE_OVERWRITE';
+      resumeGroup.hidden = mode !== 'APPEND' && mode !== 'RANGE_OVERWRITE';
+      upsertGroup.hidden = mode !== 'UPSERT';
+    }
+
+    select.addEventListener('change', apply);
+    apply();
+  }
+
   /* 批次的表选择器：源连接选好后读一次它的表清单，渲染成 name="tables" 的复选框。
      新建页跟着源下拉走；编辑页的源已锁定，由 data-source-id 提供。批次内已有的
      目标表禁用并标注，避免两个 OVERWRITE 成员互相覆盖（服务端还会再拒绝一次）。
@@ -4398,6 +4419,7 @@
     bindUserMenu();
     bindSourceSqlFile();
     bindEtlSourceKind();
+    bindEtlWriteMode();
     document.querySelectorAll('[data-role="target-table"]').forEach(bindTargetTablePicker);
     document.querySelectorAll('[data-batch-tables]').forEach(bindBatchTablePicker);
     bindInstantTips();
