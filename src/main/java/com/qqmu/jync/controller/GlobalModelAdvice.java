@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.ModelAttribute;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.UserRole;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.settings.UpdateCheckResolver;
 
@@ -202,6 +203,23 @@ public class GlobalModelAdvice {
         }
         return auth.getAuthorities().stream()
                 .anyMatch(a -> UserRole.ADMIN.authority().equals(a.getAuthority()));
+    }
+
+    /** Per-row ownership questions; templates call {@code access.canEdit(row.ownerUsername)}. */
+    @ModelAttribute("access")
+    public AccessGuard access() {
+        return AccessGuard.current();
+    }
+
+    @ModelAttribute("isOps")
+    public boolean isOps() {
+        return AccessGuard.current().isOps();
+    }
+
+    /** Drives page-level create buttons; row-level controls use {@code access.canEdit(...)}. */
+    @ModelAttribute("canWrite")
+    public boolean canWrite() {
+        return AccessGuard.current().canWrite();
     }
 
     /**

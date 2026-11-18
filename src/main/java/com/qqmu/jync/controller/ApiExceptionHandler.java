@@ -4,6 +4,7 @@ import java.util.Map;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -19,6 +20,15 @@ import lombok.extern.slf4j.Slf4j;
 @RestControllerAdvice(basePackages = "com.qqmu.jync.controller.api")
 @Slf4j
 public class ApiExceptionHandler {
+
+    /**
+     * An ownership check in a service rejected the caller. The message is already the key
+     * {@code error.accessDenied}; the browser localizes it.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<Map<String, Object>> onForbidden(AccessDeniedException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body(false, e.getMessage()));
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> onBadRequest(IllegalArgumentException e) {

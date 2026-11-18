@@ -35,11 +35,11 @@ import com.qqmu.jync.service.metrics.MetricsRange;
 
 /**
  * The shared process resources moved from a project's page to the dashboard, because CPU,
- * heap and GC describe the JVM every task on this server runs in — not one task. The gate
- * moves with them: a viewer may open the dashboard but must never receive these figures.
+ * heap and GC describe the JVM every task on this server runs in — not one task. The figures
+ * describe the machine every signed-in account shares, so every role may read them.
  *
- * <p>Runs against the real filter chain: the admin-only rule lives in {@code SecurityConfig},
- * and a sliced context would not load it, so a refusal asserted there would prove nothing.
+ * <p>Runs against the real filter chain: the rule lives in {@code SecurityConfig}, and a
+ * sliced context would not load it, so an access assertion there would prove nothing.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -68,10 +68,12 @@ class DashboardProcessMetricsTest {
     }
 
     @Test
-    void aViewerIsRefusedTheProcessCurves() throws Exception {
-        mvc.perform(get("/dashboard/process-metrics").with(as(UserRole.VIEWER)))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/?denied"));
+    void everyRoleGetsTheProcessCurves() throws Exception {
+        givenView();
+
+        mvc.perform(get("/dashboard/process-metrics?range=1h").with(as(UserRole.VIEWER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.current.cpu").value(12.5));
     }
 
     @Test

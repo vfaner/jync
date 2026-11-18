@@ -122,6 +122,10 @@ class SecurityConfigTest {
         return as("view", UserRole.VIEWER);
     }
 
+    private static RequestPostProcessor asOps() {
+        return as("ops", UserRole.OPS);
+    }
+
     private static RequestPostProcessor asAdmin() {
         return as("admin", UserRole.ADMIN);
     }
@@ -285,6 +289,103 @@ class SecurityConfigTest {
     void aViewerCanOpenTheChangePasswordPage() throws Exception {
         assertThat(statusOf(get("/account/password").with(asViewer())))
                 .isEqualTo(200);
+    }
+
+    // ── OPS ────────────────────────────────────────────────────────────────────
+
+    /**
+     * The system surface is the administrator's on both verbs. The webhook URL, the SSO
+     * endpoints and shared secret, the audit trail, the update poll and driver discovery all
+     * answer an operator exactly as they answer a viewer.
+     */
+    @Test
+    void anOpsIsDeniedTheSystemSurface() throws Exception {
+        for (String page : new String[] {"/system-config", "/external-auth", "/oa/settings",
+                "/alert-settings", "/audits", "/ai/new", "/ai/1/edit"}) {
+            assertThat(statusOf(get(page).with(asOps()))).as(page).isEqualTo(302);
+        }
+        assertThat(statusOf(get("/api/upgrade/status").with(asOps()))).isEqualTo(403);
+        assertThat(statusOf(get("/api/databases/discover-drivers").with(asOps())))
+                .isEqualTo(403);
+
+        for (String path : new String[] {"/system-config/update-check", "/external-auth",
+                "/alert-settings", "/ai/1/delete", "/change-logs/clear"}) {
+            org.springframework.test.web.servlet.MvcResult result =
+                    mvc.perform(post(path).with(asOps()).with(csrf())).andReturn();
+            assertThat(result.getResponse().getRedirectedUrl()).as(path).isEqualTo("/?denied");
+        }
+    }
+
+    /** The AI list stays readable so an operator can see which provider is enabled. */
+    @Test
+    void anOpsCanReadTheAiListButNotEditProviders() throws Exception {
+        assertThat(statusOf(get("/ai").with(asOps()))).isEqualTo(200);
+        assertThat(statusOf(get("/ai/new").with(asOps()))).isEqualTo(302);
+    }
+
+    @Test
+    void anOpsReachesTheBusinessFormPages() throws Exception {
+        for (String page : new String[] {"/databases/new", "/projects/new", "/projects/bulk",
+                "/etl/new", "/etl/batches/new", "/migrations/connections", "/redis/targets",
+                "/redis/targets/new"}) {
+            assertThat(statusOf(get(page).with(asOps()))).as(page).isEqualTo(200);
+        }
+    }
+
+    /** CPU, heap and GC describe the JVM every task shares, so no role has a reason to hide them. */
+    @Test
+    void theProcessMetricsFeedIsOpenToEveryRole() throws Exception {
+        assertThat(statusOf(get("/dashboard/process-metrics").with(asViewer()))).isEqualTo(200);
+        assertThat(statusOf(get("/dashboard/process-metrics").with(asOps()))).isEqualTo(200);
+        assertThat(statusOf(get("/dashboard/process-metrics").with(asAdmin()))).isEqualTo(200);
+    }
+
+    /**
+     * The role split's other half: every POST either belongs to the system surface and stays
+     * administrator-only, or belongs to the business surface and admits an operator past the
+     * filter chain. Ownership (which row) is checked after that, in the handlers, and is not
+     * visible from the rules alone.
+     *
+     * <p>Read out of the dispatcher for the same reason as the viewer sweep: a new endpoint is
+     * a new case without anyone remembering to add it.
+     */
+    @Test
+    void everyWriteEndpointIsEitherSystemOnlyOrWriterAllowed() throws Exception {
+        org.springframework.util.AntPathMatcher matcher =
+                new org.springframework.util.AntPathMatcher();
+        Set<String> writes = mappedPaths(RequestMethod.POST);
+        assertThat(writes).as("POST endpoints discovered").hasSizeGreaterThan(15);
+
+        Set<String> matchedSystemPatterns = new LinkedHashSet<>();
+        for (String pattern : writes) {
+            String path = concrete(pattern);
+            String systemPattern = java.util.Arrays.stream(SecurityConfig.ADMIN_ONLY_POST)
+                    .filter(p -> matcher.match(p, pattern))
+                    .findFirst().orElse(null);
+            if (systemPattern != null) {
+                matchedSystemPatterns.add(systemPattern);
+                org.springframework.test.web.servlet.MvcResult result = mvc.perform(
+                        post(path).with(asOps()).with(csrf())).andReturn();
+                int status = result.getResponse().getStatus();
+                if (pattern.startsWith("/api/")) {
+                    assertThat(status).as(pattern).isEqualTo(403);
+                } else {
+                    assertThat(result.getResponse().getRedirectedUrl())
+                            .as(pattern).isEqualTo("/?denied");
+                }
+            } else {
+                org.springframework.test.web.servlet.MvcResult result = mvc.perform(
+                        post(path).with(asOps()).with(csrf())).andReturn();
+                assertThat(result.getResponse().getRedirectedUrl())
+                        .as(pattern).isNotEqualTo("/?denied");
+                assertThat(result.getResponse().getStatus()).as(pattern).isNotEqualTo(403);
+            }
+        }
+
+        assertThat(matchedSystemPatterns)
+                .as("stale entries in ADMIN_ONLY_POST")
+                .containsExactlyInAnyOrderElementsOf(
+                        java.util.Arrays.asList(SecurityConfig.ADMIN_ONLY_POST));
     }
 
     // ── Default password must be changed before anything else ──────────────────

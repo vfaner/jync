@@ -79,14 +79,47 @@ public class SecurityConfig {
     };
 
     /**
-     * Pages that only render a form, plus the driver-discovery lookup they use.
+     * The administrative surface: settings, credentials of other systems, and the audit trail.
+     *
+     * <p>An operator edits business configuration, not the installation; these pages and polls
+     * belong to the administrator alone. The matching writes are listed in
+     * {@link #ADMIN_ONLY_POST} so the blanket writer rule below cannot reach them.
+     */
+    static final String[] ADMIN_ONLY_GET = {
+            "/ai/new", "/ai/*/edit",
+            // The external-authentication page holds the endpoints credentials are sent to and
+            // the shared secret's configuration; only an administrator configures SSO. The
+            // pre-1.8 URL stays listed so its redirect is admin-only too, rather than
+            // advertising the new address.
+            "/external-auth",
+            "/oa/settings",
+            // The alerting page holds the webhook URL — a bearer credential — and every POST
+            // that changes it is admin-only anyway, so the GET is locked with them.
+            "/alert-settings",
+            // System settings writes the metadata-database test, the transport-security switch,
+            // the AI switch and the configuration package — every one of them an administrative
+            // action, and every POST is admin-only by the rules below.
+            "/system-config",
+            // The audit trail is about what administrators did; an operator has no use for it,
+            // and showing one would advertise that their own actions are never in it.
+            "/audits",
+            // One-click upgrade is an administrator action end to end; an operator is never
+            // shown the button, so the status poll must not answer for one either.
+            "/api/upgrade/status",
+            // Driver discovery discloses server-side filesystem paths; the database form is a
+            // business configuration page, but this lookup is an administrator's tool.
+            "/api/databases/discover-drivers"
+    };
+
+    /**
+     * Pages that only render a form, plus the lookups they use.
      *
      * <p>None of these writes anything, so the verb rule below would let a viewer open them. They
      * are locked anyway: handing a read-only user a form whose Save button is guaranteed to fail
-     * is a worse experience than not offering it, and the driver lookup discloses server-side
-     * filesystem paths to someone who has no use for them.
+     * is a worse experience than not offering it. An operator may open every one of them; which
+     * rows that operator may then edit is the handler's ownership check, not this list's.
      */
-    private static final String[] ADMIN_ONLY_GET = {
+    static final String[] WRITER_ONLY_GET = {
             "/databases/new", "/databases/*/edit",
             // The connection's performance page reads the target database's own runtime
             // counters (sessions, cache hit, locks) — figures about every user of that server,
@@ -94,66 +127,42 @@ public class SecurityConfig {
             "/databases/*/performance", "/databases/*/metrics",
             "/projects/new", "/projects/*/edit",
             // The bulk wizard reads a whole source's table listing and creates tasks in one
-            // go; the POSTs are admin-only by the blanket rule below, so the GET must be too
+            // go; the POSTs follow the blanket writer rule below, so the GET must too
             // — otherwise a viewer is shown a form whose every submit is refused.
             "/projects/bulk",
+            "/projects/*/performance", "/projects/*/metrics",
             // ETL forms are the same kind of configuration page; the listing itself stays
             // readable so a viewer can see what is scheduled. The batch form sits one level
             // deeper, so /etl/*/edit does not cover it.
             "/etl/new", "/etl/*/edit",
             "/etl/batches/new", "/etl/batches/*/edit",
             // Dedicated-migration tasks copy whole indices and can delete the target index
-            // in OVERWRITE mode; their forms, like every other configuration form, are
-            // admin-only. The landing pages and task details stay readable for viewers. The
+            // in OVERWRITE mode; their forms, like every other configuration form, are for
+            // writers. The landing pages and task details stay readable for viewers. The
             // connection pages hold search-endpoint credentials, so they are locked too.
             "/migrations/connections", "/migrations/connections/new",
             "/migrations/connections/*/edit",
-            // Redis targets hold connection credentials and are edited by admins only; the
-            // list is a configuration page too, like every other connection listing.
+            // Redis targets hold connection credentials; the list is a configuration page
+            // too, like every other connection listing.
             "/redis/targets", "/redis/targets/new", "/redis/targets/*/edit",
             "/migrations/*/new", "/migrations/*/*/edit",
             // Index discovery dials the configured search endpoint to list indices; advisory
             // for the form, but still a call into another system, like the health dots.
             "/api/migrations/indices",
-            "/ai/new", "/ai/*/edit",
-            // The external-authentication page holds the endpoints credentials are sent to and
-            // the shared secret's configuration; a viewer has no use for it, and its Save button
-            // is admin-only anyway. The pre-1.8 URL stays listed so its redirect is admin-only
-            // too, rather than advertising the new address to a viewer.
-            "/external-auth",
-            "/oa/settings",
-            // The dashboard's process card: CPU, heap and GC of the JVM every task on this
-            // server shares, so the figures describe every account using the machine. The
-            // dashboard page itself stays readable for viewers; this one feed does not.
-            "/dashboard/process-metrics",
-            // The alerting page holds the webhook URL — a bearer credential — and every POST
-            // that changes it is admin-only anyway, so the GET is locked with them.
-            "/alert-settings",
-            // System settings writes the metadata-database test, the transport-security switch
-            // and the configuration package — every one of them an administrative action, and
-            // every POST is admin-only by the blanket rule anyway.
-            "/system-config",
-            "/api/databases/discover-drivers",
             // Health dots open one connection per listed database. Read-only in the HTTP
             // sense, but it dials production sources, exactly like the probes below; the
-            // column is admin-only in the page for the same reason.
+            // column is hidden from viewers in the page for the same reason.
             "/api/databases/health",
             // The ETL form's target-table picker opens a connection to the freshly chosen
             // target to list its tables. Advisory for the form, but still a dial into a
-            // production database, so it is admin-only like the probe above.
+            // production database, so it is locked like the probe above.
             "/api/databases/*/tables",
-            // The audit trail is about what admins did; a viewer has no use for it, and
-            // showing one would advertise that their own actions are never in it.
-            "/audits",
-            // One-click upgrade is an admin action end to end; a viewer is never shown the
-            // button, so the status poll must not answer for one either.
-            "/api/upgrade/status",
             // Preview returns row data straight out of the configured databases, and the two
             // lookups expose an arbitrary table's schema. The CDC probe is read-only in the
             // HTTP sense but opens a connection to the configured source and runs capability
             // queries there. Row-count opens both connections and scans whole tables. The
             // precheck likewise dials both sides and reads their metadata. All six back
-            // admin-only controls on the project detail page; a viewer must not call them
+            // writer-only controls on the project detail page; a viewer must not call them
             // directly.
             "/api/projects/*/preview",
             "/api/projects/*/columns",
@@ -161,6 +170,21 @@ public class SecurityConfig {
             "/api/projects/*/cdc-probe",
             "/api/projects/*/row-count",
             "/api/projects/*/precheck"
+    };
+
+    /**
+     * Writes that belong to the administrator even though every writer may POST elsewhere.
+     *
+     * <p>These must precede the blanket POST rule: it would otherwise admit an operator to the
+     * system surface one verb later. Every entry is asserted against the real mappings by
+     * {@code SecurityConfigTest}, so this list cannot quietly go stale.
+     */
+    static final String[] ADMIN_ONLY_POST = {
+            "/system-config/**", "/external-auth/**", "/alert-settings/**",
+            "/ai/**", "/api/ai/**",
+            "/api/upgrade/**", "/api/diagnostics/**",
+            "/change-logs/clear",
+            "/api/version/ignore", "/api/version/artifact/dismiss"
     };
 
     @Bean
@@ -303,8 +327,17 @@ public class SecurityConfig {
 
                         .requestMatchers(HttpMethod.GET, ADMIN_ONLY_GET).hasRole("ADMIN")
 
+                        // Must precede the blanket writer rule below, or an operator would
+                        // reach the system surface one verb later.
+                        .requestMatchers(HttpMethod.POST, ADMIN_ONLY_POST).hasRole("ADMIN")
+
+                        // Only writers reach the form pages; which rows they may edit is the
+                        // handler's ownership check, not this list's.
+                        .requestMatchers(HttpMethod.GET, WRITER_ONLY_GET)
+                        .hasAnyRole("ADMIN", "OPS")
+
                         // Every mutation in the app is a POST; see the class comment.
-                        .requestMatchers(HttpMethod.POST, "/**").hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.POST, "/**").hasAnyRole("ADMIN", "OPS")
 
                         // Everything left is a read.
                         .anyRequest().authenticated())
