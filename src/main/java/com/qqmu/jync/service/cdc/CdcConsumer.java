@@ -264,6 +264,13 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     // Cycle boundary: the position throttle may still hold the newest
                     // committed position; write it before the connection goes away.
                     flushPosition(projectId);
+                    // This iteration's client is replaced by the next one, so it must be
+                    // disconnected HERE. A dropped BinaryLogClient keeps its keepalive
+                    // thread: every ~1 minute it reconnects with the same server_id and
+                    // kicks the current connection off (SERVER_ID_CONFLICT), the loop
+                    // reconnects and kicks it back, until the project parks in ERROR.
+                    // disconnect() is the only call that shuts that thread down.
+                    disconnectQuietly(client);
                 }
                 stats.setConnected(false);
                 if (!running) {
@@ -559,6 +566,24 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 // compiled column rules instead of rebuilding them per transaction.
                 targetTransactions.writePlans(ctx)::cleanser);
         handler.attachClient(client);                            // R1:choke 时自行断连
+        // A committed transaction that touched no tracked table still moves the log
+        // forward. Advancing the stored position with it is loss-free (nothing was applied
+        // because nothing was selected) and keeps an idle project's position from falling
+        // behind the binlog until the source purges it.
+        handler.onEmptyTransaction(mark -> {
+            if (!ctx.renewLease()) {
+                return;                                          // 接管节点拥有位点,不推进
+            }
+            String file = mark.getFile() != null ? mark.getFile() : lastFile;
+            if (file == null) {
+                return;                                          // NULL-FILE 守卫
+            }
+            positionStore.advance(project.getId(), file, mark.getPos(), mark.getGtidSet(),
+                    null, supplier.consumeDdlSeen());
+            stats.recordPosition(file, mark.getPos(), mark.getGtidSet());
+            stats.touchActivity();
+            lastFile = file;
+        });
         client.registerEventListener(handler);
         client.registerLifecycleListener(new BinaryLogClient.AbstractLifecycleListener() {
             @Override

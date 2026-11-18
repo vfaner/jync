@@ -151,6 +151,13 @@ public class CdcConsumerManager {
      */
     private volatile boolean ready;
 
+    /**
+     * Set before the first stop is requested and never cleared: once the context is closing,
+     * a start that slips in — a UI click, a supervise tick, a strategy switch — would take a
+     * lease and run a consumer past the shutdown join, with nothing left to stop it.
+     */
+    private volatile boolean shuttingDown;
+
     @Autowired
     public CdcConsumerManager(ProjectRepository projectRepository,
                               SyncTaskRepository taskRepository,
@@ -268,6 +275,11 @@ public class CdcConsumerManager {
         long stopGeneration;
         SyncLockService.LockHandle lock;
         synchronized (this) {
+            if (shuttingDown) {
+                log.debug("CDC project {} start refused: the context is shutting down",
+                        projectId);
+                return;
+            }
             if (registry.containsKey(projectId)) {
                 // 幂等:已在本节点运行。注意这里只回答"有没有消费者在跑",不回答"跑的是
                 // 不是该策略的那个":策略切换必须先经 ensureStopped 把旧消费者 join 掉
@@ -497,7 +509,7 @@ public class CdcConsumerManager {
      */
     @Scheduled(fixedDelayString = "${sync.cdc.supervise-interval-ms:10000}")
     public void supervise() {
-        if (!ready) {
+        if (!ready || shuttingDown) {
             return;
         }
         registry.entrySet().removeIf(entry -> {
@@ -581,6 +593,9 @@ public class CdcConsumerManager {
      */
     @EventListener(ContextClosedEvent.class)
     public void onShutdown() {
+        // Before the empty-registry early return: that path must still leave the bar up, or
+        // a start racing the shutdown takes a lease no one will release until the JVM dies.
+        shuttingDown = true;
         if (registry.isEmpty()) {
             return;
         }

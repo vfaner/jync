@@ -939,4 +939,38 @@ class CdcEventStreamHandlerTest {
         assertThat(sink.changes.get(0).deletes().get(0)).containsEntry("id", 1L);
         assertThat(sink.changes.get(0).deletes().get(1)).containsEntry("id", 2L);
     }
+
+    // —— 空事务推进位点:事务没触及任何被追踪的表时没有数据要应用,但位点必须前进 ——
+    // 旧行为是「空缓冲永不 flush」:空闲期后重启仍从旧位点找起,源库轮转/purge 后
+    // 直接 PURGED 停车。数据安全不受影响(argv 为空=没有任何可丢的行)。
+
+    @Test
+    void anEmptyTransactionAdvancesThePositionWithoutCallingTheSink() {
+        List<CdcPositionMark> advanced = new ArrayList<>();
+        handler.onEmptyTransaction(advanced::add);
+        RotateEventData rotate = new RotateEventData();
+        rotate.setBinlogFilename("mysql-bin.000010");
+        handler.onEvent(event(EventType.ROTATE, rotate, 4L));
+
+        xid(250L);
+
+        assertThat(sink.marks).isEmpty();          // 绝不以空 changes 调 sink
+        assertThat(advanced).hasSize(1);
+        assertThat(advanced.get(0).getFile()).isEqualTo("mysql-bin.000010");
+        assertThat(advanced.get(0).getPos()).isEqualTo(250L);
+        assertThat(advanced.get(0).getGtidSet()).isEqualTo("uuid:1-7");
+    }
+
+    @Test
+    void anEmptyTransactionWhileABranchIsPreparedKeepsThePosition() {
+        List<CdcPositionMark> advanced = new ArrayList<>();
+        handler.onEmptyTransaction(advanced::add);
+        query("XA START 'b'");
+        query("XA END 'b'");
+        query("XA PREPARE 'b'");
+
+        xid(260L);
+
+        assertThat(advanced).isEmpty();            // prepared 分支的行还没提交:不许越过
+    }
 }

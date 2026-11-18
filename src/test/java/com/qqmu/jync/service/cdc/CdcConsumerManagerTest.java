@@ -565,4 +565,19 @@ class CdcConsumerManagerTest {
         manager.ensureStopped(20L);
         manager.ensureStopped(21L);
     }
+
+    // —— 停机姿态:onShutdown 之后不得再拉起消费者 ——
+    // 旧代码在注册表为空时直接 return,不留下任何「正在停机」的痕迹:同一瞬间落在
+    // ensureStarted 里的调用(UI 启动、巡检 tick、策略切换)仍会拿租约、建连、起线程,
+    // 而 ContextClosedEvent 已经跑完 —— 这个消费者会带着租约活到 JVM 退出。
+
+    @Test
+    void ensureStartedIsIgnoredOnceShutdownHasBegun() {
+        manager.onShutdown();                                // 注册表为空:旧代码在此直接返回
+        manager.ensureStarted(cdcProject(9L, true));
+
+        assertThat(starter.last).isNull();                   // 没有起任何消费者线程
+        verify(lockService, never()).tryAcquireForDaemon(any(), anyLong()); // 连租约都不试
+        verify(contextFactory, never()).build(any(), anyString(), any());
+    }
 }

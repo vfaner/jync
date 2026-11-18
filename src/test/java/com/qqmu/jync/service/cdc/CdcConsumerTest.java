@@ -45,6 +45,7 @@ import com.github.shyiko.mysql.binlog.event.EventType;
 import com.github.shyiko.mysql.binlog.event.QueryEventData;
 import com.github.shyiko.mysql.binlog.event.RotateEventData;
 import com.github.shyiko.mysql.binlog.event.TableMapEventData;
+import com.github.shyiko.mysql.binlog.event.XidEventData;
 import com.github.shyiko.mysql.binlog.network.ServerException;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
@@ -699,8 +700,9 @@ class CdcConsumerTest {
         verify(taskStore).recordCdcFailure(eq(12L), detail.capture());
         assertThat(detail.getValue()).startsWith("DESERIALIZATION_STRIKE_OUT:")
                 .contains("target down");
-        // 每次 choke 都当场断连(6 次),退出时 finally 再无条件断连一次以关掉 keepalive。
-        verify(client, times(7)).disconnect();
+        // 每次 choke 都当场断连(6 次);每轮的循环 finally 再断一次本轮 client(6 次,
+        // 关掉它的 keepalive 线程);退出时 finally 兜底再断一次。
+        verify(client, times(13)).disconnect();
     }
 
     @Test
@@ -1142,7 +1144,8 @@ class CdcConsumerTest {
         ArgumentCaptor<String> detail = ArgumentCaptor.forClass(String.class);
         verify(taskStore).recordCdcFailure(eq(19L), detail.capture());
         assertThat(detail.getValue()).startsWith("SERVER_ID_CONFLICT:");
-        verify(client).disconnect();                             // keepalive 必须被关掉
+        // 本轮循环 finally 断一次(keepalive 就此关掉),退出 finally 兜底再断一次。
+        verify(client, times(2)).disconnect();
     }
 
     @Test
@@ -1191,5 +1194,93 @@ class CdcConsumerTest {
         meta.getColumns().add(name);
         meta.getPrimaryKeys().add("id");
         return CdcTableBinding.of("src", "orders", meta, "orders", null);
+    }
+
+    // —— 每轮重连必须断开本轮自己的 client ——
+    // 旧代码只在退出时断 this.client:上一轮的 BinaryLogClient 连同它的 keepalive 线程
+    // 被直接丢弃。keepalive 用同一个 server_id 每分钟自动重连,与当前连接互踢
+    // (SERVER_ID_CONFLICT),最终把项目钉死在 ERROR。disconnect() 是唯一关掉 keepalive
+    // 线程的入口,所以每轮结束必须自己断开。
+
+    @Test
+    void eachReconnectDisconnectsItsOwnClientSoTheOldKeepaliveStops() throws Exception {
+        Project project = project(13L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true, true, false);      // 两轮建流后第三轮租约失败退出
+        SyncContext ctx = SyncContext.builder()
+                .project(project).config(new SyncConfig()).build();
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(13L)).thenReturn(Optional.of(
+                baselineDonePosition(13L, "mysql-bin.000004")));
+        BinaryLogClient first = mock(BinaryLogClient.class);
+        BinaryLogClient second = mock(BinaryLogClient.class);
+        BinlogClientFactory clientFactory = mock(BinlogClientFactory.class);
+        when(clientFactory.createClient(any(), anyLong(), any())).thenReturn(first, second);
+        SyncProperties props = new SyncProperties();
+        props.getCdc().setReconnectBackoffMs(1L);
+        props.getCdc().setReconnectBackoffMaxMs(1L);
+
+        CdcConsumer consumer = new CdcConsumer(project, lock, ctx, clientFactory, positionStore,
+                mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                mock(SyncStateWriter.class), mock(DataSourceManager.class),
+                new CdcRuntimeStats(), props);
+        Thread thread = new Thread(consumer, "cdc-test-13");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        verify(first, times(1)).disconnect();                 // 本轮 finally 必断
+        verify(second, times(2)).disconnect();                // 本轮 finally + 退出兜底
+    }
+
+    // —— 空事务推进位点 ——
+    // 事务没触及任何被追踪的表时没有数据要应用,但位点必须前进:否则空闲期后的重启
+    // 仍从很久以前的位点找起,源库轮转/purge 后直接 PURGED 停车。
+
+    @Test
+    void anEmptyTransactionAdvancesTheStoredPosition() throws Exception {
+        Project project = project(14L);
+        SyncLockService.LockHandle lock = mock(SyncLockService.LockHandle.class);
+        when(lock.renew()).thenReturn(true, false);
+        SyncContext ctx = SyncContext.builder()
+                .project(project).config(new SyncConfig()).build();
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(14L)).thenReturn(Optional.of(
+                baselineDonePosition(14L, "mysql-bin.000009")));
+
+        BinaryLogClient client = mock(BinaryLogClient.class);
+        when(client.getGtidSet()).thenReturn("uuid:1-7");
+        AtomicReference<BinaryLogClient.EventListener> listener = new AtomicReference<>();
+        AtomicReference<BinaryLogClient.LifecycleListener> lifecycle = new AtomicReference<>();
+        doAnswer(inv -> {
+            listener.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerEventListener(any());
+        doAnswer(inv -> {
+            lifecycle.set(inv.getArgument(0));
+            return null;
+        }).when(client).registerLifecycleListener(any());
+        doAnswer(inv -> {
+            lifecycle.get().onConnect(client);
+            RotateEventData rotate = new RotateEventData();
+            rotate.setBinlogFilename("mysql-bin.000010");
+            listener.get().onEvent(event(EventType.ROTATE, rotate, 4L));
+            listener.get().onEvent(event(EventType.XID, new XidEventData(), 250L));
+            return null;
+        }).when(client).connect(anyLong());
+        BinlogClientFactory clientFactory = mock(BinlogClientFactory.class);
+        when(clientFactory.createClient(any(), anyLong(), any())).thenReturn(client);
+
+        CdcConsumer consumer = new CdcConsumer(project, lock, ctx, clientFactory, positionStore,
+                mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                mock(SyncStateWriter.class), mock(DataSourceManager.class),
+                new CdcRuntimeStats(), new SyncProperties());
+        Thread thread = new Thread(consumer, "cdc-test-14");
+        thread.start();
+        thread.join(10_000);
+
+        assertThat(thread.isAlive()).isFalse();
+        verify(positionStore).advance(eq(14L), eq("mysql-bin.000010"), eq(250L),
+                eq("uuid:1-7"), any(), eq(false));
     }
 }

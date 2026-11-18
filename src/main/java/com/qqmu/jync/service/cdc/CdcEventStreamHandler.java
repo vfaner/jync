@@ -178,6 +178,19 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     /** The client this handler must disconnect when event handling fails; set at wire time. */
     private volatile BinaryLogClient attachedClient;
 
+    /**
+     * Reports a transaction boundary that buffered no tracked change. The data needs no
+     * apply, but the position must still advance — otherwise an idle period leaves the
+     * stored position behind the binlog, and a restart after a rotation/purge parks the
+     * project as PURGED. Never wired by hand-built callers; a no-op then.
+     */
+    @FunctionalInterface
+    public interface EmptyTransactionSink {
+        void accept(CdcPositionMark mark);
+    }
+
+    private volatile EmptyTransactionSink emptyTransactionSink = mark -> { };
+
     public CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
                                  CdcRowMapper mapper, CdcRuntimeStats stats,
                                  Supplier<String> gtidSetSupplier, TransactionSink sink) {
@@ -256,6 +269,11 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      */
     public void attachClient(BinaryLogClient client) {
         this.attachedClient = client;
+    }
+
+    /** Wires the empty-transaction position hook; {@code null} restores the no-op. */
+    public void onEmptyTransaction(EmptyTransactionSink sink) {
+        this.emptyTransactionSink = sink == null ? mark -> { } : sink;
     }
 
     /**
@@ -767,9 +785,13 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         }
         if (changes.isEmpty()) {
             // The transaction touched nothing we track (other schemas, unselected or
-            // unsupported tables, only unmappable rows): never call the sink — an empty
-            // apply would push the position forward with no data behind it.
+            // unsupported tables, only unmappable rows): never call the data sink — an
+            // empty apply would be a write with no data behind it. The position itself
+            // must still advance: the consumer's hook persists it, so an idle project
+            // does not resume from a position the source has since purged.
             clearBuffer();
+            emptyTransactionSink.accept(
+                    new CdcPositionMark(currentFile, pos, gtidSetSupplier.get()));
             return;
         }
         CdcPositionMark mark = new CdcPositionMark(currentFile, pos, gtidSetSupplier.get());
