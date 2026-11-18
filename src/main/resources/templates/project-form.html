@@ -17,6 +17,10 @@
         </div>
     </div>
 
+    <!--/* 草稿已过期、已被使用或不属于当前账号：退回空白表单，并说明原因一次 */-->
+    <div class="alert alert-warn" th:if="${draftExpired}" th:text="#{support.draft.expired}">Draft expired</div>
+    <div class="alert alert-info" th:if="${draftSuggestion}" th:text="${draftSuggestion}">Suggestion</div>
+
     <div th:if="${#lists.isEmpty(sourceDatabases) and #lists.isEmpty(targetDatabases)}"
          class="alert alert-warn">
         <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>

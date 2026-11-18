@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
+import com.qqmu.jync.service.ai.support.SupportDraftStore;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.config.SyncProperties;
@@ -72,6 +74,8 @@ public class ProjectController {
     private final RedisTargetService redisTargetService;
     private final I18nConfig.MessageSourceAccessorHolder messages;
     private final SyncProperties properties;
+    /** Absent in MVC slices that do not import the support assistant. */
+    private final ObjectProvider<SupportDraftStore> draftStore;
 
     public ProjectController(ProjectService projectService,
                             DatabaseConfigService databaseConfigService,
@@ -80,7 +84,8 @@ public class ProjectController {
                             CdcPositionStore cdcPositionStore,
                             RedisTargetService redisTargetService,
                             I18nConfig.MessageSourceAccessorHolder messages,
-                            SyncProperties properties) {
+                            SyncProperties properties,
+                            ObjectProvider<SupportDraftStore> draftStore) {
         this.projectService = projectService;
         this.databaseConfigService = databaseConfigService;
         this.cdcOperationsService = cdcOperationsService;
@@ -89,6 +94,7 @@ public class ProjectController {
         this.redisTargetService = redisTargetService;
         this.messages = messages;
         this.properties = properties;
+        this.draftStore = draftStore;
     }
 
     @GetMapping
@@ -131,9 +137,31 @@ public class ProjectController {
      */
     @GetMapping("/new")
     public String createForm(@RequestParam(name = "from", required = false) Long from,
+                             @RequestParam(name = "draft", required = false) String draft,
                              Model model) {
         Project project = new Project();
-        Project source = from == null ? null : projectService.findById(from).orElse(null);
+        boolean prefilled = false;
+        SupportDraftStore store = draftStore == null ? null : draftStore.getIfAvailable();
+        if (draft != null && store != null) {
+            // The token is the AI draft's only handle; it is consumed here so a refresh
+            // cannot silently re-apply a suggestion the user already decided about.
+            var taken = store.take(draft, AccessGuard.current().username());
+            if (taken.isPresent()) {
+                SupportDraftStore.Draft d = taken.get();
+                project.setName(d.project().getName());
+                project.setDescription(d.project().getDescription());
+                project.setSourceDbId(d.project().getSourceDbId());
+                project.setTargetDbId(d.project().getTargetDbId());
+                project.setTargetKind(d.project().getTargetKind());
+                project.setTargetRedisId(d.project().getTargetRedisId());
+                model.addAttribute("draftSuggestion", d.suggestion());
+                prefilled = true;
+            } else {
+                model.addAttribute("draftExpired", true);
+            }
+        }
+        Project source = !prefilled && from != null
+                ? projectService.findById(from).orElse(null) : null;
         if (source != null) {
             project.setName(cloneName(source.getName()));
             project.setDescription(source.getDescription());
