@@ -95,6 +95,26 @@ class EtlPrecheckServiceTest {
         assertThat(check(result, "etl.precheck.column.error").detail()).contains("ID");
     }
 
+    /**
+     * The runner refuses the run while reading the result metadata, because one label cannot
+     * name two columns of the INSERT. The precheck reports the same condition up front.
+     */
+    @Test
+    void aRepeatedResultColumnLabelIsAnError() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+
+        // Quoted, so the derived table H2 builds for the probe accepts it; the labels still
+        // fold together once written unquoted.
+        EtlPrecheckResult result = service.check(form("SELECT id, name AS \"Id\" FROM src", "dst",
+                EtlWriteMode.APPEND), source, target, connections);
+
+        assertThat(result.passed()).isFalse();
+        EtlPrecheckResult.Check failure = check(result, "etl.precheck.column.duplicate");
+        assertThat(failure.level()).isEqualTo(EtlPrecheckResult.Level.ERROR);
+        assertThat(failure.detail()).isEqualToIgnoringCase("id");
+    }
+
     @Test
     void aResumeKeyMissingFromTheResultIsAnError() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");

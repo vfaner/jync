@@ -183,6 +183,13 @@ class EtlUpsertSqlTest {
     }
 
     @Test
+    void aKeyConfiguredTwiceIsUsedOnce() {
+        // A duplicated key reached the DDL as PRIMARY KEY (id, id) and PostgreSQL's
+        // ON CONFLICT (id, id); both reject it.
+        assertThat(EtlUpsertSql.parse("id, ID, id")).containsExactly("id");
+    }
+
+    @Test
     void keysResolveAgainstTheResultLabelsIgnoringCase() {
         assertThat(EtlUpsertSql.resolve(List.of("ID", "name"), List.of("id")))
                 .containsExactly("ID");
@@ -192,6 +199,7 @@ class EtlUpsertSqlTest {
     void aKeyThatIsNotInTheResultIsNamedInTheError() {
         assertThatThrownBy(() -> EtlUpsertSql.resolve(List.of("id"), List.of("id", "tenant")))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("tenant");
+                // The run history translates the part before the colon.
+                .hasMessage("error.etl.upsertKey.missing:tenant");
     }
 }

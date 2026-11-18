@@ -6,7 +6,10 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
@@ -46,11 +49,18 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
 
     private static List<EtlSourceColumn> columns(ResultSetMetaData meta) throws SQLException {
         List<EtlSourceColumn> columns = new ArrayList<>();
+        // Unquoted identifiers fold, so two labels that differ only in case name the same
+        // target column and the INSERT cannot carry both. Refusing here is before the runner
+        // deletes anything; the statement would otherwise fail after the write-mode DELETE.
+        Set<String> labels = new HashSet<>();
         for (int i = 1; i <= meta.getColumnCount(); i++) {
             String label = meta.getColumnLabel(i);
             if (label == null || !EtlSqlSupport.PLAIN_IDENTIFIER.matcher(label).matches()) {
                 throw new EtlProgramException("result column '" + label
                         + "' is not a plain identifier; alias it in the extraction SQL");
+            }
+            if (!labels.add(label.toLowerCase(Locale.ROOT))) {
+                throw new EtlProgramException("error.etl.column.duplicate:" + label);
             }
             int precision = meta.getPrecision(i);
             int scale = meta.getScale(i);

@@ -24,7 +24,11 @@ final class EtlUpsertSql {
     private EtlUpsertSql() {
     }
 
-    /** Splits the configured comma-separated key list; blanks are dropped. */
+    /**
+     * Splits the configured comma-separated key list; blanks are dropped and a key named twice
+     * is used once. A repeated key would reach the DDL as {@code PRIMARY KEY (id, id)} and
+     * PostgreSQL's {@code ON CONFLICT (id, id)}, which both reject the statement.
+     */
     static List<String> parse(String configured) {
         if (configured == null || configured.isBlank()) {
             return List.of();
@@ -32,7 +36,7 @@ final class EtlUpsertSql {
         List<String> keys = new ArrayList<>();
         for (String part : configured.split(",")) {
             String key = part.trim();
-            if (!key.isEmpty()) {
+            if (!key.isEmpty() && !containsIgnoreCase(keys, key)) {
                 keys.add(key);
             }
         }
@@ -55,8 +59,9 @@ final class EtlUpsertSql {
                 }
             }
             if (label == null) {
-                throw new IllegalArgumentException(
-                        "upsert key column not found in the extraction result: " + key);
+                // The key is appended after ':' like the runner's other program messages, so
+                // the run history can translate the sentence and still name the column.
+                throw new IllegalArgumentException("error.etl.upsertKey.missing:" + key);
             }
             resolved.add(label);
         }

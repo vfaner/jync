@@ -11,7 +11,10 @@ import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -158,6 +161,9 @@ final class JdbcEtlSource implements EtlSource {
         int count = meta.getColumnCount();
         List<EtlSourceColumn> columns = new ArrayList<>();
         List<EtlSourceIssue> issues = new ArrayList<>();
+        // Two labels that fold together cannot both appear in the unquoted INSERT, and the
+        // failure would land after the write-mode DELETE; the runner refuses the same shape.
+        Set<String> folded = new HashSet<>();
         for (int i = 1; i <= count; i++) {
             String label = meta.getColumnLabel(i);
             // The runner writes unquoted, so a label the target cannot reproduce as a column
@@ -165,6 +171,11 @@ final class JdbcEtlSource implements EtlSource {
             if (label == null || !EtlSqlSupport.PLAIN_IDENTIFIER.matcher(label).matches()) {
                 issues.add(new EtlSourceIssue(EtlPrecheckResult.Level.ERROR,
                         "etl.precheck.column.error", String.valueOf(label)));
+                continue;
+            }
+            if (!folded.add(label.toLowerCase(Locale.ROOT))) {
+                issues.add(new EtlSourceIssue(EtlPrecheckResult.Level.ERROR,
+                        "etl.precheck.column.duplicate", label));
                 continue;
             }
             columns.add(column(meta, i, label));

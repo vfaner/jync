@@ -420,6 +420,64 @@ class EtlRunnerTest {
         assertThat(result.skippedColumns()).hasSize(1);
     }
 
+    /**
+     * An extraction can repeat a label without meaning to (`SELECT a.id, b.id` from a join).
+     * The INSERT cannot name the same column twice, so the run could only fail after the
+     * write-mode DELETE had already emptied the target. The metadata is read before anything is
+     * deleted, so the run stops there instead.
+     */
+    @Test
+    void aRepeatedResultColumnLabelFailsBeforeThePreSqlAndTheDelete() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)", "INSERT INTO dst VALUES (99)");
+        EtlTask task = task("SELECT id, name AS id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPreSql("DELETE FROM dst");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage()).contains("error.etl.column.duplicate")
+                .containsIgnoringCase("id");
+        assertThat(rows("SELECT id FROM dst")).as("neither pre-sql nor DELETE ran")
+                .containsExactly("99");
+    }
+
+    /**
+     * The NULL-key guard indexes the written row, which is pruned. Naming the column from the
+     * full extraction result would blame an unrelated source-only column.
+     */
+    @Test
+    void aNullUpsertKeyIsNamedByItsWrittenColumnEvenWhenAnEarlierColumnWasSkipped()
+            throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (extra VARCHAR(20), id INT)",
+                "INSERT INTO src VALUES ('x', NULL)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        EtlTask task = task("SELECT extra, id FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage())
+                .isEqualToIgnoringCase("error.etl.upsertKey.null:id");
+    }
+
+    @Test
+    void aUpsertKeyConfiguredTwiceIsAppliedOnce() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a')");
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id, id");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id, name FROM dst")).containsExactly("1|a");
+    }
+
     @Test
     void upsertCreatesTheTargetTableWithTheConfiguredPrimaryKey() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
