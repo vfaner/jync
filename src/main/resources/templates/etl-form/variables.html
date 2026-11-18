@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* 变量框放在取数来源之前：先定义取值，再写引用它们的 SQL。它不属于 source-sql
+     分组 —— 原生 MongoDB 源没有取数 SQL，但预执行/后处理 SQL 照样使用变量。 */-->
+<div class="field" th:fragment="block">
+    <label for="variables" th:text="#{etl.variables}">SQL variables</label>
+    <textarea class="input mono" id="variables" name="variables" rows="3"
+              wrap="off" spellcheck="false"
+              th:text="${task.variables}"></textarea>
+    <div class="help" th:text="#{etl.variables.hint}">Optional: one name=value per line, referenced as ${name} in the extraction SQL, pre-sql, post-sql or the range condition.</div>
+</div>
+</body>
+</html>

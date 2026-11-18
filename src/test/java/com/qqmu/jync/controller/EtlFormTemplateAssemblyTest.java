@@ -10,8 +10,8 @@ import java.nio.file.Path;
 import org.junit.jupiter.api.Test;
 
 /**
- * ETL 任务表单按「一段一块」组装：连接、取数来源（SQL / 原生 MongoDB）、目标写入、
- * 调度、上次运行、预检各自成文件，壳模板只保留页头装配与表单骨架。
+ * ETL 任务表单按「一段一块」组装：连接、SQL 变量、取数来源（SQL / 原生 MongoDB）、
+ * 目标写入、调度、上次运行、预检各自成文件，壳模板只保留页头装配与表单骨架。
  *
  * <p>与任务详情页同一套边界：改 Mongo 源的字段摸不到 SQL 源，改调度摸不到预检。
  * 源/目标引擎将来有专属参数时，在 basic 卡片的两个插槽下各加一个
@@ -55,6 +55,7 @@ class EtlFormTemplateAssemblyTest {
 
         assertThat(basic)
                 .contains("etl-form/connections :: block")
+                .contains("etl-form/variables :: block")
                 .contains("etl-form/source-sql :: block")
                 .contains("etl-form/source-mongo :: block")
                 .contains("etl-form/target :: block")
@@ -62,6 +63,10 @@ class EtlFormTemplateAssemblyTest {
                 .doesNotContain("name=\"sourceSql\"")
                 .doesNotContain("name=\"sourceCollection\"")
                 .doesNotContain("name=\"targetTable\"");
+        // Define the values, then write the query that references them — and keep the box
+        // outside the SQL-only group, because pre-/post-SQL use it for a Mongo source too.
+        assertThat(basic.indexOf("etl-form/variables :: block"))
+                .isLessThan(basic.indexOf("etl-form/source-sql :: block"));
     }
 
     @Test
@@ -87,7 +92,9 @@ class EtlFormTemplateAssemblyTest {
                 .contains("name=\"postSql\"")
                 .contains("name=\"rangeCondition\"")
                 .contains("name=\"resumeKeyColumn\"")
-                .doesNotContain("name=\"writeMode\"");
+                .doesNotContain("name=\"writeMode\"")
+                // The box belongs to the extraction template, not to the write options.
+                .doesNotContain("name=\"variables\"");
     }
 
     @Test
@@ -96,6 +103,7 @@ class EtlFormTemplateAssemblyTest {
         assertFragment("head.html", "alerts");
         assertFragment("basic.html", "card");
         assertFragment("connections.html", "block");
+        assertFragment("variables.html", "block");
         assertFragment("source-sql.html", "block");
         assertFragment("source-mongo.html", "block");
         assertFragment("target.html", "block");

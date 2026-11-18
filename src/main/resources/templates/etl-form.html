@@ -6,7 +6,7 @@
 <div th:remove="tag">
 
     <!--/* ETL 表单只做装配：每段一个模块文件（etl-form/）。
-           连接、取数来源（SQL / 原生 MongoDB）、目标写入、脚本选项各自成文件；
+           连接、SQL 变量、取数来源（SQL / 原生 MongoDB）、目标写入、脚本选项各自成文件；
            调度、上次运行、预检也各自独立。改 Mongo 源的字段碰不到 SQL 源，改调度
            碰不到预检。源/目标引擎的专属参数在 basic 卡片的两个插槽里接。 */-->
     <th:block th:replace="~{etl-form/head :: pageHead}"/>

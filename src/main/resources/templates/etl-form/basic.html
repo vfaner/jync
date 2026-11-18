@@ -21,6 +21,7 @@
         </div>
 
         <th:block th:replace="~{etl-form/connections :: block}"/>
+        <th:block th:replace="~{etl-form/variables :: block}"/>
         <th:block th:replace="~{etl-form/source-sql :: block}"/>
         <th:block th:replace="~{etl-form/source-mongo :: block}"/>
         <!--/* 源引擎专属参数插槽：MongoDB 已由上面的独立模块承接；Hive / Impala /

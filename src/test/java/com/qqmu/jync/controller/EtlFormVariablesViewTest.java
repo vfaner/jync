@@ -92,6 +92,20 @@ class EtlFormVariablesViewTest {
                 "${year}", "${taskName}", "${targetTable}");
     }
 
+    /** Read order: define the values first, then write the query that references them. */
+    @Test
+    void theBoxSitsAboveTheExtractionSqlItAnswers() throws Exception {
+        when(etlTaskService.connections()).thenReturn(List.of(
+                connection(1L, "mysql-src", DatabaseType.MYSQL)));
+
+        String page = html(mvc.perform(get("/etl/new").with(asAdmin()))
+                .andExpect(status().isOk()));
+
+        assertThat(page.indexOf("id=\"variables\""))
+                .as("variables box rendered before the extraction SQL")
+                .isBetween(0, page.indexOf("id=\"sourceSql\"") - 1);
+    }
+
     @Test
     void theSavedDefinitionsAreShownAgain() throws Exception {
         when(etlTaskService.connections()).thenReturn(List.of(

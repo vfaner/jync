@@ -42,16 +42,6 @@
         <div class="help" th:text="#{etl.upsertKey.hint}">Required for upsert: one or more result columns, comma-separated. The target needs a primary key or unique index on them.</div>
     </div>
 </div>
-
-<div class="field">
-    <label for="variables" th:text="#{etl.variables}">SQL variables</label>
-    <textarea class="input mono" id="variables" name="variables" rows="4"
-              wrap="off" spellcheck="false"
-              th:text="${task.variables}"></textarea>
-    <div class="help" th:text="#{etl.variables.hint}">Optional: one name=value per line. Write ${name} in the extraction SQL, pre-sql, post-sql or the range condition; the value is inserted exactly as written, without quotes.</div>
-    <div class="help" th:text="#{etl.variables.builtins}">Built-in, no definition needed: ${date} (yyyy-MM-dd), ${datetime} (yyyy-MM-dd HH:mm:ss), ${yesterday}, ${month} (yyyy-MM), ${year}, ${taskName}, ${targetTable} (schema-qualified when the target connection sets one).</div>
-    <div class="help" th:text="#{etl.variables.syntax}">Only ${name} with a plain ASCII name is replaced; other ${...} text stays as written, and there is no escape syntax.</div>
-</div>
 </th:block>
 </body>
 </html>
