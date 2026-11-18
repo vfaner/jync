@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlRun;
 import com.qqmu.jync.model.EtlTask;
@@ -136,6 +137,15 @@ public class EtlTaskService {
                 }
             }
         }
+
+        // The form may name any existing connection; only the caller's own are a legal
+        // reference. validate() above already refused a missing one.
+        databaseConfigService.findById(form.getSourceDbId())
+                .ifPresent(db -> Ownership.requireReferenceable(
+                        db.getOwnerUsername(), db.getName(), actor));
+        databaseConfigService.findById(form.getTargetDbId())
+                .ifPresent(db -> Ownership.requireReferenceable(
+                        db.getOwnerUsername(), db.getName(), actor));
 
         entity.setName(form.getName().trim());
         entity.setDescription(trimToNull(form.getDescription()));

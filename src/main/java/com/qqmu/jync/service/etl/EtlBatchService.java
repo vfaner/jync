@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlBatch;
 import com.qqmu.jync.model.EtlTask;
@@ -105,6 +106,11 @@ public class EtlBatchService {
         DatabaseConfig source = EtlTaskValidation.validateConnections(databaseConfigService,
                 form.getSourceDbId(), form.getTargetDbId());
         DatabaseConfig target = targetConfig(form.getTargetDbId());
+        // addTables and the settings save leave the connections alone: they were checked once,
+        // here, when the batch was created. A new batch belongs to its creator, so only the
+        // creator's own connections are a legal reference.
+        Ownership.requireReferenceable(source.getOwnerUsername(), source.getName(), actor);
+        Ownership.requireReferenceable(target.getOwnerUsername(), target.getName(), actor);
         ConnectionCatalogService.Tables catalog = catalogService.listTables(form.getSourceDbId());
         List<String> ordered = validateTables(chosen, catalog, Set.of(), target);
 

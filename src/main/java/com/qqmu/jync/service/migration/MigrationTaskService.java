@@ -17,6 +17,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.dto.MigrationTaskForm;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.audit.AuditDetail;
@@ -108,6 +109,8 @@ public class MigrationTaskService {
         if (!handler.targetKinds().contains(target.getKind())) {
             throw new IllegalArgumentException("error.migration.target.kind");
         }
+        Ownership.requireReferenceable(source.getOwnerUsername(), source.getName(), actor);
+        Ownership.requireReferenceable(target.getOwnerUsername(), target.getName(), actor);
 
         JsonNode options = handler.parseOptions(formOptions);
         String cron = trimToNull(form.getCronExpression());

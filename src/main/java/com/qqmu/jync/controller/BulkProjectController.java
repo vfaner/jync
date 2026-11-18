@@ -155,12 +155,23 @@ public class BulkProjectController {
      * to choose between two identical outcomes.
      */
     private void addOptions(Model model, Long sourceDbId) {
-        List<DatabaseConfig> sources = new ArrayList<>(
-                databaseConfigService.findByRole(ConnectionRole.SOURCE));
+        // Bulk create only ever makes new projects, owned by the caller, so the selectors list
+        // the caller's connections (everything, for an administrator).
+        String scope = optionScope(AccessGuard.current());
+        List<DatabaseConfig> allSources = databaseConfigService.findByRole(ConnectionRole.SOURCE);
+        List<DatabaseConfig> sources = new ArrayList<>(scoped(allSources, scope));
+        // A rejected save re-renders with the submitted source; it must stay selected even when
+        // it has since left the scope.
+        if (sourceDbId != null
+                && sources.stream().noneMatch(db -> sourceDbId.equals(db.getId()))) {
+            allSources.stream().filter(db -> sourceDbId.equals(db.getId()))
+                    .findFirst().ifPresent(sources::add);
+        }
         // Analytic / search engines are read-only sync sources: they may appear as the source,
         // never as the target. Filtering here (rather than in the role of the connection) keeps
         // the connection usable for ETL, where several of them can be a target.
-        List<DatabaseConfig> targets = databaseConfigService.findByRole(ConnectionRole.TARGET)
+        List<DatabaseConfig> targets = scoped(
+                databaseConfigService.findByRole(ConnectionRole.TARGET), scope)
                 .stream()
                 .filter(db -> !db.pollingOnlySource())
                 .collect(Collectors.toCollection(ArrayList::new));
@@ -192,6 +203,19 @@ public class BulkProjectController {
         model.addAttribute("sourceStrategies", asAttribute);
         model.addAttribute("selectedStrategies", selected);
         model.addAttribute("strategyLabels", labels);
+    }
+
+    /**
+     * The connection scope for the bulk form: the caller's own connections, everything for an
+     * administrator.
+     */
+    private static String optionScope(AccessGuard access) {
+        return access.isAdmin() ? null : access.username();
+    }
+
+    private static List<DatabaseConfig> scoped(List<DatabaseConfig> all, String scope) {
+        return scope == null ? all
+                : all.stream().filter(db -> scope.equals(db.getOwnerUsername())).toList();
     }
 
     /** The i18n key for a strategy's display name (the same keys the detail page uses). */

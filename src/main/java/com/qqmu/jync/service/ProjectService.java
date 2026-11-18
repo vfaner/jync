@@ -34,6 +34,7 @@ import tools.jackson.databind.node.ObjectNode;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.dto.RedisProjectionConfig;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
@@ -49,6 +50,7 @@ import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SyncTask;
@@ -328,6 +330,11 @@ public class ProjectService {
             // Syncing a database onto itself would loop changes back onto the source.
             throw new IllegalArgumentException("error.project.same.database");
         }
+        if (project.getSourceDbId() != null) {
+            databaseConfigRepository.findById(project.getSourceDbId())
+                    .ifPresent(db -> Ownership.requireReferenceable(
+                            db.getOwnerUsername(), db.getName(), actor));
+        }
         if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             if (project.getTargetRedisId() == null) {
                 throw new IllegalArgumentException("error.project.redis.target.required");
@@ -335,7 +342,9 @@ public class ProjectService {
             // The id must name a saved target, and the source must be able to produce
             // change events: a cache projection is CDC-only, so a source with no log
             // capture (H2, ClickHouse, ...) can never feed one.
-            redisPolicy.requireTarget(project);
+            RedisTarget redisTarget = redisPolicy.requireTarget(project);
+            Ownership.requireReferenceable(
+                    redisTarget.getOwnerUsername(), redisTarget.getName(), actor);
             redisPolicy.requireCdcCapableSource(project.getSourceDbId() == null ? null
                     : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null));
             // A Redis target replaces the JDBC one. The target dropdown is hidden but still
@@ -348,6 +357,11 @@ public class ProjectService {
             // to JDBC) must not survive into the row: the target dropdown on the next edit
             // would otherwise disagree with the actual target kind.
             project.setTargetRedisId(null);
+            if (project.getTargetDbId() != null) {
+                databaseConfigRepository.findById(project.getTargetDbId())
+                        .ifPresent(db -> Ownership.requireReferenceable(
+                                db.getOwnerUsername(), db.getName(), actor));
+            }
         }
 
         boolean isNew = project.getId() == null;

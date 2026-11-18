@@ -10,6 +10,7 @@ import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.RedisTargetRepository;
 import com.qqmu.jync.service.CaptureStrategyParser;
@@ -47,14 +48,13 @@ public class RedisProjectionPolicy {
     }
 
     /** A Redis project's target must be a saved row, not just a non-null id. */
-    public void requireTarget(Project project) {
+    public RedisTarget requireTarget(Project project) {
         Long targetId = project.getTargetRedisId();
         if (targetId == null) {
             throw new IllegalArgumentException("error.project.redis.target.required");
         }
-        if (!targets.existsById(targetId)) {
-            throw new IllegalArgumentException("error.redis.target.not.found");
-        }
+        return targets.findById(targetId)
+                .orElseThrow(() -> new IllegalArgumentException("error.redis.target.not.found"));
     }
 
     /**

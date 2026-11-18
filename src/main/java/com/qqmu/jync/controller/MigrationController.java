@@ -130,7 +130,8 @@ public class MigrationController {
             return "redirect:/migrations/" + type;
         }
         model.addAttribute("task", formFor(task));
-        addFormOptions(model, resolved, handler, storedOptions(task, handler));
+        addFormOptions(model, resolved, handler, storedOptions(task, handler),
+                task.getOwnerUsername());
         return "migration-form";
     }
 
@@ -157,7 +158,8 @@ public class MigrationController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
             MigrationTypeHandler handler = registry.find(resolved).orElse(null);
-            addFormOptions(model, resolved, handler, displayOptions(handler, submitted));
+            addFormOptions(model, resolved, handler, displayOptions(handler, submitted),
+                    storedOwner(form));
             return "migration-form";
         }
     }
@@ -187,7 +189,7 @@ public class MigrationController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             model.addAttribute("error", e.getMessage());
         }
-        addFormOptions(model, resolved, handler, options);
+        addFormOptions(model, resolved, handler, options, storedOwner(form));
         return "migration-form";
     }
 
@@ -323,10 +325,24 @@ public class MigrationController {
 
     private void addFormOptions(Model model, MigrationType type, MigrationTypeHandler handler,
                                 JsonNode options) {
+        addFormOptions(model, type, handler, options, null);
+    }
+
+    /**
+     * @param resourceOwner the owner of the task being edited, or null for a new task — a new
+     *                      task belongs to the caller, so its selectors list the caller's
+     *                      connections; an edit keeps the stored owner's scope
+     */
+    private void addFormOptions(Model model, MigrationType type, MigrationTypeHandler handler,
+                                JsonNode options, String resourceOwner) {
         List<MigrationConnection> all = connectionService.findAll();
         List<MigrationConnection> sources = new ArrayList<>();
         List<MigrationConnection> targets = new ArrayList<>();
+        String scope = optionScope(resourceOwner, AccessGuard.current());
         for (MigrationConnection connection : all) {
+            if (scope != null && !scope.equals(connection.getOwnerUsername())) {
+                continue;
+            }
             if (handler != null && handler.sourceKinds().contains(connection.getKind())) {
                 sources.add(connection);
             }
@@ -334,11 +350,47 @@ public class MigrationController {
                 targets.add(connection);
             }
         }
+        // The saved picks are appended even when they fall outside the scope: the selector
+        // must render the stored reference instead of silently offering another one.
+        MigrationTaskForm form = (MigrationTaskForm) model.getAttribute("task");
+        if (form != null) {
+            appendSelected(all, sources, form.getSourceConnectionId());
+            appendSelected(all, targets, form.getTargetConnectionId());
+        }
         model.addAttribute("type", type);
         model.addAttribute("handler", handler);
         model.addAttribute("options", options == null ? JSON.createObjectNode() : options);
         model.addAttribute("sourceConnections", sources);
         model.addAttribute("targetConnections", targets);
+    }
+
+    /** The stored task's owner for a form that only carries its id, or null for a new task. */
+    private String storedOwner(MigrationTaskForm form) {
+        if (form == null || form.getId() == null) {
+            return null;
+        }
+        return taskService.findById(form.getId())
+                .map(MigrationTask::getOwnerUsername)
+                .orElse(null);
+    }
+
+    private static void appendSelected(List<MigrationConnection> all,
+                                       List<MigrationConnection> options, Long selectedId) {
+        if (selectedId == null || options.stream().anyMatch(c -> selectedId.equals(c.getId()))) {
+            return;
+        }
+        all.stream().filter(c -> selectedId.equals(c.getId())).findFirst().ifPresent(options::add);
+    }
+
+    /**
+     * The connection scope for a form: the owner of the task being edited, otherwise the
+     * caller. An administrator gets everything only when neither applies.
+     */
+    private static String optionScope(String resourceOwner, AccessGuard access) {
+        if (resourceOwner != null) {
+            return resourceOwner;
+        }
+        return access.isAdmin() ? null : access.username();
     }
 
     private Map<Long, String> connectionNames() {

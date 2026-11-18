@@ -19,6 +19,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.bulk.BulkPlan;
 import com.qqmu.jync.dto.bulk.BulkPlanRequest;
@@ -115,6 +116,15 @@ public class BulkPlanService {
         if (request.sourceDbId().equals(request.targetDbId())) {
             throw new IllegalArgumentException("error.project.same.database");
         }
+        // Preview, create and export all pass through here, so one check covers every bulk
+        // entry point. Both connections are checked: the form submits both, and a preview
+        // that names someone else's target would still describe a plan the caller cannot own.
+        databaseConfigService.findById(request.sourceDbId())
+                .ifPresent(db -> Ownership.requireReferenceable(
+                        db.getOwnerUsername(), db.getName(), actor));
+        databaseConfigService.findById(request.targetDbId())
+                .ifPresent(db -> Ownership.requireReferenceable(
+                        db.getOwnerUsername(), db.getName(), actor));
         if (request.taskCount() < 1) {
             // The form's min=1 does not guard a direct POST; silently turning 0 into one
             // task would create a plan the user never asked for.

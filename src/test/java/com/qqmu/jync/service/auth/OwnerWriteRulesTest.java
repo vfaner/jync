@@ -102,6 +102,45 @@ class OwnerWriteRulesTest {
     }
 
     @Test
+    void anOperatorCannotReferenceAnotherOperatorsConnection() {
+        DatabaseConfig bobDb = databaseConfigs.save(connection("bobs-db"), "pw", null, BOB);
+        Project project = new Project();
+        project.setName("ref-1");
+        project.setSourceDbId(bobDb.getId());
+
+        assertThatThrownBy(() -> projects.save(project, ALICE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.ownership.reference:bobs-db");
+    }
+
+    @Test
+    void theSystemOwnerIsNotReferenceableByAnOperator() {
+        DatabaseConfig legacy = databaseConfigs.save(connection("legacy-db"), "pw", null,
+                AccessGuard.system());
+        assertThat(legacy.getOwnerUsername()).isNull();
+        Project project = new Project();
+        project.setName("ref-2");
+        project.setSourceDbId(legacy.getId());
+
+        assertThatThrownBy(() -> projects.save(project, ALICE))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.ownership.reference:legacy-db");
+    }
+
+    @Test
+    void anAdminMayReferenceAnything() {
+        DatabaseConfig bobDb = databaseConfigs.save(connection("bobs-db-2"), "pw", null, BOB);
+        DatabaseConfig aliceDb = databaseConfigs.save(targetConnection("alices-db"), "pw", null,
+                ALICE);
+        Project project = new Project();
+        project.setName("ref-3");
+        project.setSourceDbId(bobDb.getId());
+        project.setTargetDbId(aliceDb.getId());
+
+        assertThat(projects.save(project, ADMIN).getOwnerUsername()).isEqualTo("admin");
+    }
+
+    @Test
     void aNewBatchAndItsMembersInheritTheCreator() {
         DatabaseConfig source = databaseConfigs.save(connection("b-src"), "pw", null, ALICE);
         DatabaseConfig target = databaseConfigs.save(targetConnection("b-dst"), "pw", null, ALICE);

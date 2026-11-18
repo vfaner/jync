@@ -142,7 +142,7 @@ public class ProjectController {
         }
         model.addAttribute("project", project);
         addDatabaseOptions(model, project);
-        addRedisOptions(model);
+        addRedisOptions(model, project);
         return "project-form";
     }
 
@@ -189,7 +189,7 @@ public class ProjectController {
             // verdict up front so the user does not fill in a whole edit that cannot save.
             model.addAttribute("topologyLocked", projectService.isRunning(project));
             addDatabaseOptions(model, project);
-            addRedisOptions(model);
+            addRedisOptions(model, project);
             return "project-form";
         }).orElseGet(() -> {
             flash.addFlashAttribute("error", "error.project.not.found");
@@ -203,28 +203,33 @@ public class ProjectController {
      * data edge case), so the selector renders the real value instead of silently losing it.
      */
     private void addDatabaseOptions(Model model, Project project) {
+        String scope = optionScope(project.getOwnerUsername(), AccessGuard.current());
         model.addAttribute("sourceDatabases",
-                optionsForRole(ConnectionRole.SOURCE, project.getSourceDbId()));
+                optionsForRole(ConnectionRole.SOURCE, project.getSourceDbId(), scope));
         model.addAttribute("targetDatabases",
-                optionsForRole(ConnectionRole.TARGET, project.getTargetDbId()));
+                optionsForRole(ConnectionRole.TARGET, project.getTargetDbId(), scope));
     }
 
     /**
      * Redis endpoints are not {@link DatabaseConfig}s and carry no role: they are always a
      * sync target, never a source, so the form gets them as one flat list.
      */
-    private void addRedisOptions(Model model) {
-        model.addAttribute("redisTargets", redisTargetService.findAll());
+    private void addRedisOptions(Model model, Project project) {
+        String scope = optionScope(project.getOwnerUsername(), AccessGuard.current());
+        model.addAttribute("redisTargets", scoped(redisTargetService.findAll(), scope,
+                RedisTarget::getOwnerUsername));
     }
 
-    private List<DatabaseConfig> optionsForRole(ConnectionRole role, Long selectedId) {
+    private List<DatabaseConfig> optionsForRole(ConnectionRole role, Long selectedId,
+                                               String scope) {
         // The two selectors ask different questions: a polling-only engine can read a source
         // but must never appear as a target.
         java.util.function.Predicate<DatabaseConfig> eligible =
                 role == ConnectionRole.TARGET
                         ? DatabaseConfig::supportsSyncTarget
                         : DatabaseConfig::supportsSyncSource;
-        List<DatabaseConfig> options = databaseConfigService.findByRole(role).stream()
+        List<DatabaseConfig> options = scoped(databaseConfigService.findByRole(role), scope,
+                DatabaseConfig::getOwnerUsername).stream()
                 .filter(eligible)
                 .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
         // The current selection is appended even when it is no longer eligible: an existing
@@ -234,6 +239,23 @@ public class ProjectController {
             databaseConfigService.findById(selectedId).ifPresent(options::add);
         }
         return options;
+    }
+
+    /**
+     * The connection scope for a form: the owner of the resource being edited, otherwise the
+     * caller. An administrator gets everything only when neither applies.
+     */
+    private static String optionScope(String resourceOwner, AccessGuard access) {
+        if (resourceOwner != null) {
+            return resourceOwner;
+        }
+        return access.isAdmin() ? null : access.username();
+    }
+
+    private static <T> List<T> scoped(List<T> all, String scope,
+                                      java.util.function.Function<T, String> owner) {
+        return scope == null ? all
+                : all.stream().filter(item -> scope.equals(owner.apply(item))).toList();
     }
 
     @PostMapping("/save")

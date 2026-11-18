@@ -44,6 +44,7 @@ import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.service.projection.redis.RedisProjectionPolicy;
 import com.qqmu.jync.service.cdc.LogCapture;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -90,6 +91,7 @@ class ProjectServiceTest {
     @Mock private com.qqmu.jync.service.cdc.CdcPositionStore positionStore;
     @Mock private com.qqmu.jync.repository.TaskMetricSampleRepository taskMetricSampleRepository;
     @Mock private com.qqmu.jync.repository.AlertStateRepository alertStateRepository;
+    @Mock private RedisProjectionPolicy redisPolicy;
 
     private final com.qqmu.jync.config.SyncProperties properties =
             new com.qqmu.jync.config.SyncProperties();
@@ -102,8 +104,7 @@ class ProjectServiceTest {
                 progressRepository, changeLogRepository, checkpointRepository, dataSourceManager,
                 readerFactory, snapshotService, contextFactory, scheduler, taskRunner, taskStore,
                 syncEngine, lockService, auditService, cdcManager, stateWriter, positionStore,
-                taskMetricSampleRepository, alertStateRepository, properties,
-                mock(RedisProjectionPolicy.class));
+                taskMetricSampleRepository, alertStateRepository, properties, redisPolicy);
     }
 
     private Project project(Long id) {
@@ -557,7 +558,7 @@ class ProjectServiceTest {
                 new MetadataReaderFactory(java.util.List.of(familyReader)), snapshotService,
                 contextFactory, scheduler, taskRunner, taskStore, syncEngine, lockService,
                 auditService, cdcManager, stateWriter, positionStore, taskMetricSampleRepository,
-                alertStateRepository, properties, mock(RedisProjectionPolicy.class));
+                alertStateRepository, properties, redisPolicy);
 
         assertThat(service.listSourceObjects(1L).getTables()).containsExactly("pg_orders");
         assertThat(service.listTableColumns(1L, "pg_orders")).containsExactly("total");
@@ -895,6 +896,14 @@ class ProjectServiceTest {
         oldSource.setId(10L);
         oldSource.setType(DatabaseType.POSTGRESQL);
         when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(oldSource));
+        DatabaseConfig newSource = new DatabaseConfig();
+        newSource.setId(11L);
+        newSource.setType(DatabaseType.POSTGRESQL);
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(newSource));
+        DatabaseConfig target = new DatabaseConfig();
+        target.setId(20L);
+        target.setType(DatabaseType.MYSQL);
+        when(databaseConfigRepository.findById(20L)).thenReturn(Optional.of(target));
         Connection conn = mock(Connection.class);
         Statement st = mock(Statement.class);
         when(conn.createStatement()).thenReturn(st);
@@ -921,6 +930,14 @@ class ProjectServiceTest {
         oldSource.setId(10L);
         oldSource.setType(DatabaseType.YASHANDB);
         when(databaseConfigRepository.findById(10L)).thenReturn(Optional.of(oldSource));
+        DatabaseConfig newSource = new DatabaseConfig();
+        newSource.setId(11L);
+        newSource.setType(DatabaseType.YASHANDB);
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(newSource));
+        DatabaseConfig target = new DatabaseConfig();
+        target.setId(20L);
+        target.setType(DatabaseType.MYSQL);
+        when(databaseConfigRepository.findById(20L)).thenReturn(Optional.of(target));
         Connection conn = mock(Connection.class);
         Statement st = mock(Statement.class);
         java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
@@ -1332,6 +1349,9 @@ class ProjectServiceTest {
         clone.setSourceDbId(1L);
         clone.setTargetKind(SyncTargetKind.REDIS);
         clone.setTargetRedisId(7L);
+        RedisTarget redisTarget = new RedisTarget();
+        redisTarget.setName("cache");
+        when(redisPolicy.requireTarget(any())).thenReturn(redisTarget);
 
         Project saved = service.saveAsClone(clone, 1L, AccessGuard.system());
 

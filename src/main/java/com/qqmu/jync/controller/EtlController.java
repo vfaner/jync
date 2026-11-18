@@ -205,8 +205,12 @@ public class EtlController {
                     .ifPresent(batch -> model.addAttribute("batch", batch));
         }
         List<DatabaseConfig> connections = etlTaskService.connections();
+        // A new task belongs to its creator; an edit keeps the stored owner's scope, so even an
+        // administrator sees the connections the task was built from.
+        String scope = EtlConnectionOptions.optionScope(
+                stored == null ? null : stored.getOwnerUsername(), AccessGuard.current());
         List<DatabaseConfig> sources = EtlConnectionOptions.sources(connections,
-                task == null ? null : task.getSourceDbId());
+                task == null ? null : task.getSourceDbId(), scope);
         Map<Long, String> connectionNames = new HashMap<>();
         for (DatabaseConfig config : connections) {
             connectionNames.put(config.getId(), config.getName());
@@ -214,7 +218,7 @@ public class EtlController {
         model.addAttribute("connectionNames", connectionNames);
         model.addAttribute("connections", sources);
         model.addAttribute("targetConnections", EtlConnectionOptions.targets(connections,
-                task == null ? null : task.getTargetDbId()));
+                task == null ? null : task.getTargetDbId(), scope));
         model.addAttribute("writeModes", EtlWriteMode.values());
         // The form shows the SQL box or the Mongo fields, never both. Render the half the
         // task actually uses on the first paint rather than letting app.js correct it, which

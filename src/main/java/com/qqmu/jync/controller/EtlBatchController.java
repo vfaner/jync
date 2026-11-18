@@ -197,10 +197,13 @@ public class EtlBatchController {
 
     private void addFormOptions(Model model, EtlBatch batch) {
         List<DatabaseConfig> connections = etlTaskService.connections();
+        // A new batch belongs to its creator; an edit keeps the stored owner's scope.
+        String scope = EtlConnectionOptions.optionScope(
+                batch == null ? null : batch.getOwnerUsername(), AccessGuard.current());
         model.addAttribute("connections", EtlConnectionOptions.sources(connections,
-                batch == null ? null : batch.getSourceDbId()));
+                batch == null ? null : batch.getSourceDbId(), scope));
         model.addAttribute("targetConnections", EtlConnectionOptions.targets(connections,
-                batch == null ? null : batch.getTargetDbId()));
+                batch == null ? null : batch.getTargetDbId(), scope));
         // The edit form shows the locked pair by name; the selects are gone there.
         Map<Long, String> names = new HashMap<>();
         for (DatabaseConfig config : connections) {
