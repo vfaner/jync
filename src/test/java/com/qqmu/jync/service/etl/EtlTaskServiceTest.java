@@ -195,11 +195,29 @@ class EtlTaskServiceTest {
     void saveRejectsAResumeKeyThatIsNotAPlainColumnName() {
         stubConnections(1L, 2L);
         EtlTask task = form(1L, 2L);
+        task.setWriteMode(EtlWriteMode.APPEND);
         task.setResumeKeyColumn("id; DROP TABLE dst");
 
         assertThatThrownBy(() -> service.save(task))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.etl.resumeKey.invalid");
+    }
+
+    /**
+     * The resume key field is hidden for the modes that never read it, but it is still
+     * submitted. A value left there while trying another mode must not block the save: the
+     * operator would be refused over a field the form no longer shows.
+     */
+    @Test
+    void aResumeKeyInAModeThatNeverReadsItIsNotValidated() {
+        stubConnections(1L, 2L);
+        EtlTask task = form(1L, 2L);
+        task.setResumeKeyColumn("id; DROP TABLE dst");
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.save(task);
+
+        verify(taskRepository).save(any());
     }
 
     @Test

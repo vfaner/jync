@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.EtlTask;
+import com.qqmu.jync.model.EtlWriteMode;
 
 /**
  * The {@code ${name}} placeholders an ETL task may write in its SQL.
@@ -100,6 +101,10 @@ final class EtlSqlVariables {
     /**
      * Refuses a reference no definition or built-in can answer. The Mongo collection name and
      * filter are not scanned: they are not SQL, and the native source never reads SQL.
+     *
+     * <p>The range condition is scanned only by a range overwrite. The form hides that field
+     * for the other modes but still submits whatever was typed in it, so an unknown name left
+     * there must not refuse a save over a statement the mode never executes.
      */
     static void validateReferences(EtlTask task, boolean sqlSource) {
         Set<String> known = new LinkedHashSet<>(BUILT_INS);
@@ -188,7 +193,10 @@ final class EtlSqlVariables {
         resolved.setPostSql(substitute(task.getPostSql(), values));
         resolved.setTargetTable(task.getTargetTable());
         resolved.setWriteMode(task.getWriteMode());
-        resolved.setRangeCondition(substitute(task.getRangeCondition(), values));
+        // The condition only runs inside a range overwrite's DELETE; elsewhere it is copied
+        // as typed rather than resolved, so a stale value cannot fail the run.
+        resolved.setRangeCondition(task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE
+                ? substitute(task.getRangeCondition(), values) : task.getRangeCondition());
         resolved.setResumeKeyColumn(task.getResumeKeyColumn());
         resolved.setUpsertKeyColumns(task.getUpsertKeyColumns());
         resolved.setTimeoutSeconds(task.getTimeoutSeconds());
@@ -202,7 +210,9 @@ final class EtlSqlVariables {
         }
         texts.add(task.getPreSql());
         texts.add(task.getPostSql());
-        texts.add(task.getRangeCondition());
+        if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE) {
+            texts.add(task.getRangeCondition());
+        }
         return texts;
     }
 }

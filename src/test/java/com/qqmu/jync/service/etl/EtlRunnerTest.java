@@ -270,6 +270,33 @@ class EtlRunnerTest {
     }
 
     /**
+     * The resume key is only read by the modes that resume. The form hides it for the others
+     * but still submits it, so a value left there must not make a run fail over a field the
+     * mode never executes — and the run must agree with save, which accepts the same value.
+     */
+    @Test
+    void aResumeKeyInAModeThatNeverReadsItDoesNotFailTheRun() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY)",
+                "INSERT INTO src VALUES (1)");
+
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setResumeKeyColumn("id; DROP TABLE dst");
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id FROM dst")).containsExactly("1");
+
+        // The same value is a defect in a mode that does use the key.
+        EtlTask appending = task("SELECT id FROM src", "dst", EtlWriteMode.APPEND);
+        appending.setResumeKeyColumn("id; DROP TABLE dst");
+        EtlRunResult refused = runner.run(appending, source, target, connections);
+
+        assertThat(refused.success()).isFalse();
+        assertThat(refused.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(refused.errorMessage()).contains("resume key must be a plain column name");
+    }
+
+    /**
      * The checkpoint column holds 1024 characters. A longer key would fail only at the JPA
      * flush, after the batch was committed — every retry then re-reads and re-inserts the same
      * batch. Detect it while reading the row, before anything is written.

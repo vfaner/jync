@@ -88,7 +88,10 @@ final class EtlTaskValidation {
                 }
             }
         }
-        if (task.getResumeKeyColumn() != null && !task.getResumeKeyColumn().isBlank()
+        // Only the modes that resume read the key. The form hides the field for the others
+        // but still submits it, so a value left there must not block a save over a field the
+        // operator can no longer see.
+        if (resumable(task)
                 && !EtlSqlSupport.RESUME_KEY.matcher(task.getResumeKeyColumn().trim()).matches()) {
             throw new IllegalArgumentException("error.etl.resumeKey.invalid");
         }

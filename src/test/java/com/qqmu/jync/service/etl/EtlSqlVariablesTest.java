@@ -150,6 +150,29 @@ class EtlSqlVariablesTest {
         assertThat(resolved.getRangeCondition()).isEqualTo("dt >= '2026-03-01'");
     }
 
+    /**
+     * Only a range overwrite executes the range condition. Switching mode leaves whatever was
+     * typed in that (now hidden) field in the form, so an unknown name there must not refuse a
+     * save or a run that never reads it — the same stance {@link EtlRunner} takes for the
+     * fields the active mode does not execute.
+     */
+    @Test
+    void theRangeConditionOnlyMattersToARangeOverwrite() {
+        EtlTask task = task("SELECT * FROM t");
+        task.setWriteMode(EtlWriteMode.APPEND);
+        task.setRangeCondition("dt >= '${nope}'");
+
+        assertThatCode(() -> EtlSqlVariables.validateReferences(task, true))
+                .doesNotThrowAnyException();
+        assertThat(EtlSqlVariables.resolve(task, true, CLOCK, target()).getRangeCondition())
+                .isEqualTo("dt >= '${nope}'");
+
+        task.setWriteMode(EtlWriteMode.RANGE_OVERWRITE);
+        assertThatThrownBy(() -> EtlSqlVariables.validateReferences(task, true))
+                .isInstanceOf(EtlVariableException.class)
+                .hasMessage("error.etl.var.unknown:nope");
+    }
+
     @Test
     void theOriginalTaskIsNeverChanged() {
         EtlTask task = task("SELECT * FROM t WHERE dt = '${date}'");

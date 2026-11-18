@@ -439,7 +439,11 @@ public class EtlRunner {
         if (task == null) {
             throw new EtlProgramException("task is missing");
         }
-        if (notBlank(task.getResumeKeyColumn())
+        // Only a resumable mode reads the key, so only it judges the value: the form hides
+        // the field for the others but still submits what was typed there, and a run must
+        // agree with the save that accepted it.
+        if (task.getWriteMode() != null && task.getWriteMode().supportsResume()
+                && notBlank(task.getResumeKeyColumn())
                 && !EtlSqlSupport.RESUME_KEY.matcher(task.getResumeKeyColumn().trim()).matches()) {
             throw new EtlProgramException(
                     "resume key must be a plain column name: " + task.getResumeKeyColumn());
