@@ -709,6 +709,8 @@ public class AiChatClient {
         for (Turn turn : turns) {
             if (anthropic) {
                 appendAnthropicMessage(messages, turn);
+            } else if (nativeOllama) {
+                appendOllamaMessage(messages, turn);
             } else {
                 appendOpenAiMessage(messages, turn);
             }
@@ -933,12 +935,135 @@ public class AiChatClient {
         }
     }
 
-    /** Replaced by the real implementation in the Ollama-native task. */
+    /**
+     * Ollama's native wire keeps OpenAI's message shape but wants tool arguments as a JSON
+     * object, not the string OpenAI packs them into.
+     */
+    private void appendOllamaMessage(ArrayNode messages, Turn turn) {
+        ObjectNode message = messages.addObject();
+        if ("tool".equals(turn.role())) {
+            message.put("role", "tool");
+            message.put("content", turn.content() == null ? "" : turn.content());
+            return;
+        }
+        message.put("role", turn.role());
+        message.put("content", turn.content() == null ? "" : turn.content());
+        if ("assistant".equals(turn.role()) && !turn.toolCalls().isEmpty()) {
+            ArrayNode calls = message.putArray("tool_calls");
+            for (ToolCall call : turn.toolCalls()) {
+                ObjectNode c = calls.addObject();
+                ObjectNode fn = c.putObject("function");
+                fn.put("name", call.name());
+                JsonNode args = parseOrNull(call.argumentsJson());
+                fn.set("arguments", args == null ? mapper.createObjectNode() : args);
+            }
+        }
+    }
+
     private ToolChatResult converseOllamaNative(AiProvider provider, String apiKey, String system,
                                                 List<Turn> turns, List<ToolSpec> tools,
                                                 int maxTokens,
                                                 java.util.function.Consumer<String> sink) {
-        return ToolChatResult.failure("error.ai.notAvailable", 0, false);
+        AiProtocol protocol = AiProtocol.OLLAMA_NATIVE;
+        String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
+        String model = provider.getModel() == null ? "" : provider.getModel().trim();
+        long start = System.currentTimeMillis();
+        if (model.isEmpty()) {
+            return ToolChatResult.failure("error.ai.model.required", 0, false);
+        }
+        try {
+            AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
+        } catch (IllegalArgumentException e) {
+            return ToolChatResult.failure(e.getMessage(), 0, false);
+        }
+        Duration timeout = Duration.ofSeconds(provider.getTimeoutSeconds() == null
+                || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());
+        AtomicReference<String> stalledFor = new AtomicReference<>();
+        try {
+            HttpRequest request = buildConverseRequest(protocol, endpoint, model, apiKey,
+                    timeout, system, turns, tools, maxTokens);
+            HttpResponse<java.io.InputStream> response = HTTP_CLIENT.send(request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() / 100 != 2) {
+                String detail = extractError(readAll(response.body()));
+                boolean toolsRejected = response.statusCode() / 100 == 4 && !tools.isEmpty()
+                        && detail.toLowerCase(java.util.Locale.ROOT)
+                                .matches(".*(tool|function|does not support).*");
+                log.warn("AI tool stream to '{}' failed: HTTP {} {}",
+                        provider.getName(), response.statusCode(), detail);
+                return ToolChatResult.failure("HTTP " + response.statusCode()
+                        + (detail.isEmpty() ? "" : " — " + detail),
+                        System.currentTimeMillis() - start, toolsRejected);
+            }
+
+            java.io.InputStream body = response.body();
+            AtomicLong lastActivity = new AtomicLong(System.currentTimeMillis());
+            AtomicBoolean firstLineSeen = new AtomicBoolean(false);
+            long tickMs = Math.max(200L, Math.min(1000L, timeout.toMillis() / 4));
+            ScheduledFuture<?> watchdog = STALL_WATCHDOG.scheduleAtFixedRate(() -> {
+                long budget = firstLineSeen.get() ? timeout.toMillis() : FIRST_LINE_CEILING_MS;
+                if (System.currentTimeMillis() - lastActivity.get() > budget
+                        && stalledFor.compareAndSet(null,
+                                "Stream stalled for over " + (budget / 1000) + "s")) {
+                    try {
+                        body.close();
+                    } catch (IOException ignored) {
+                        // Already closed.
+                    }
+                }
+            }, tickMs, tickMs, TimeUnit.MILLISECONDS);
+
+            StringBuilder text = new StringBuilder();
+            String[] served = {""};
+            List<ToolCall> calls = new ArrayList<>();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(body, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    firstLineSeen.set(true);
+                    lastActivity.set(System.currentTimeMillis());
+                    JsonNode chunk = parseOrNull(line);
+                    if (chunk == null) {
+                        continue;
+                    }
+                    if (served[0].isEmpty()) {
+                        served[0] = servedModel(chunk);
+                    }
+                    String piece = chunk.path("message").path("content").asString("");
+                    if (!piece.isEmpty()) {
+                        text.append(piece);
+                        sink.accept(piece);
+                    }
+                    for (JsonNode call : chunk.path("message").path("tool_calls")) {
+                        JsonNode fn = call.path("function");
+                        // Native responses give an object; a proxy in between may hand back a
+                        // string. Both must end up as the JSON text the registry parses.
+                        String argsJson = fn.path("arguments").isObject()
+                                ? fn.path("arguments").toString()
+                                : fn.path("arguments").asString("");
+                        calls.add(new ToolCall("call_" + calls.size(),
+                                fn.path("name").asString(""), argsJson));
+                    }
+                    if (chunk.path("done").asBoolean(false)) {
+                        break;
+                    }
+                }
+            } finally {
+                watchdog.cancel(false);
+            }
+            return ToolChatResult.success(text.toString(), calls, served[0],
+                    System.currentTimeMillis() - start);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ToolChatResult.failure("Interrupted", System.currentTimeMillis() - start, false);
+        } catch (IOException | RuntimeException e) {
+            String stall = stalledFor.get();
+            log.warn("AI tool stream to '{}' failed: {}", provider.getName(),
+                    stall == null ? e.toString() : stall);
+            return ToolChatResult.failure(stall == null
+                    ? (e.getMessage() == null ? e.toString() : e.getMessage()) : stall,
+                    System.currentTimeMillis() - start, false);
+        }
     }
 
     /**
