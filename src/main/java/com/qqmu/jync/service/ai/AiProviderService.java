@@ -13,6 +13,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.repository.AiProviderRepository;
+import com.qqmu.jync.service.settings.AiAvailability;
 import com.qqmu.jync.util.AiEndpointValidator;
 import com.qqmu.jync.util.CryptoUtil;
 
@@ -33,6 +34,8 @@ public class AiProviderService {
     private final AiConnectionTestService testService;
     private final CryptoUtil cryptoUtil;
     private final SyncProperties properties;
+    /** The global switch: the deployment hard off or the 系统配置 page value. */
+    private final AiAvailability aiAvailability;
     /**
      * Used to keep the enable flip atomic WITHOUT holding a transaction across the HTTP
      * probe. A method-annotation @Transactional cannot do both: the probe must sit between
@@ -45,11 +48,13 @@ public class AiProviderService {
                              AiConnectionTestService testService,
                              CryptoUtil cryptoUtil,
                              SyncProperties properties,
+                             AiAvailability aiAvailability,
                              PlatformTransactionManager transactionManager) {
         this.repository = repository;
         this.testService = testService;
         this.cryptoUtil = cryptoUtil;
         this.properties = properties;
+        this.aiAvailability = aiAvailability;
         this.transactions = new TransactionTemplate(transactionManager);
     }
 
@@ -69,7 +74,7 @@ public class AiProviderService {
      * any outbound request at all.
      */
     public Optional<AiProvider> activeProvider() {
-        if (!properties.getAi().isEnabled()) {
+        if (!aiAvailability.isEnabled()) {
             return Optional.empty();
         }
         return repository.findFirstByEnabledTrue();

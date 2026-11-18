@@ -70,6 +70,10 @@ public class OaAuthConfig {
     @Column(name = "admin_users", length = 1024)
     private String adminUsers;
 
+    /** Comma-separated exact user names granted the OPS role; admins still win. */
+    @Column(name = "ops_users", length = 1024)
+    private String opsUsers;
+
     /** Where an unauthenticated visitor is sent when there is no local form to show. */
     @Lob
     @Column(name = "login_entry_url", length = Integer.MAX_VALUE)

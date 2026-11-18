@@ -545,6 +545,7 @@ public class ConfigImportService {
         config.setEnabled(dto.enabled());
         config.setMode(dto.mode());
         config.setAdminUsers(dto.adminUsers());
+        config.setOpsUsers(dto.opsUsers());
         config.setLoginEntryUrl(dto.loginEntryUrl());
         config.setLogoutRedirectUrl(dto.logoutRedirectUrl());
         config.setLocalLoginEnabled(dto.localLoginEnabled());

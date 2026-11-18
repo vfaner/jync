@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -26,6 +27,9 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import com.qqmu.jync.service.ProjectService;
+import com.qqmu.jync.service.settings.AiAvailability;
+import com.qqmu.jync.service.ai.AiDisabledException;
 import com.qqmu.jync.service.ai.AiSqlAssistant;
 import com.qqmu.jync.service.ai.CandidateValidator;
 import com.qqmu.jync.service.ai.ConversionAssistService;
@@ -54,6 +58,10 @@ class ConversionApiControllerTest {
 
     @MockitoBean
     private ConversionAssistService assistService;
+    @MockitoBean
+    private ProjectService projectService;
+    @MockitoBean
+    private AiAvailability aiAvailability;
 
     /**
      * Builds candidates and validation results through their real factory methods.
@@ -282,5 +290,19 @@ class ConversionApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("error.connection.missing"));
+    }
+
+    @Test
+    @DisplayName("a switched-off AI answers 403, not a 200 toast")
+    void aSwitchedOffAiIsA403() throws Exception {
+        doThrow(new AiDisabledException()).when(aiAvailability).requireEnabled();
+
+        mvc.perform(post("/api/projects/1/conversions/PROCEDURE/GET_TOTAL/draft").with(csrf()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message").value("error.ai.disabled"));
+
+        // The refusal must happen before the model is ever asked for a draft.
+        verify(assistService, never()).draft(anyLong(), anyString(), anyString());
     }
 }

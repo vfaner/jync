@@ -368,7 +368,8 @@ public class ConfigExportService {
 
     private static ConfigPackageDtos.OaAuthConfigDto toDto(OaAuthConfig config) {
         return new ConfigPackageDtos.OaAuthConfigDto(config.isEnabled(), config.getMode(),
-                config.getAdminUsers(), config.getLoginEntryUrl(), config.getLogoutRedirectUrl(),
+                config.getAdminUsers(), config.getOpsUsers(), config.getLoginEntryUrl(),
+                config.getLogoutRedirectUrl(),
                 config.getLocalLoginEnabled(), config.getUserHeader(), config.getAdminHeader(),
                 config.getSecretHeaderName(), config.getSecretHeaderValue(), config.getValidateUrl(),
                 config.getValidateMethod(), config.getTicketParam(), config.getLoginUrl(),

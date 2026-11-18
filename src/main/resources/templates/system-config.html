@@ -516,6 +516,40 @@
                 </div>
             </div>
 
+            <!-- AI 总开关：关掉后菜单与转写页的 AI 入口一起隐藏，任何 AI 请求都 403。
+                 sync.ai.enabled=false 是部署级硬关，优先级最高，页面开关不可覆盖。 -->
+            <div class="card">
+                <div class="card-head">
+                    <h2><svg class="ico"><use href="#cpu"/></svg>
+                        <span th:text="#{systemConfig.ai}">AI assistant</span></h2>
+                </div>
+                <div class="card-body">
+                    <dl class="dl pairs">
+                        <div class="kv">
+                            <dt th:text="#{systemConfig.aiCurrent}">Current state</dt>
+                            <dd>
+                                <span class="chip chip-ok" th:if="${aiEnabled}"
+                                      th:text="#{systemConfig.aiOn}">On</span>
+                                <span class="chip" th:unless="${aiEnabled}"
+                                      th:text="#{systemConfig.aiOff}">Off</span>
+                            </dd>
+                        </div>
+                    </dl>
+                    <p class="help" th:text="#{systemConfig.aiHelp}">When off, the AI menu disappears and no AI request is sent.</p>
+                    <p class="help" th:if="${aiHardDisabled}"
+                       th:text="#{systemConfig.aiEnvControlled}">This switch is pinned off by sync.ai.enabled=false and cannot be changed here.</p>
+                    <div class="btn-row" style="margin-top:16px">
+                        <form method="post" th:action="@{/system-config/ai-enabled}">
+                            <input type="hidden" name="enabled" th:value="${!aiEnabled}"/>
+                            <button class="btn btn-sm" type="submit"
+                                    th:classappend="${aiEnabled} ? 'btn-ghost' : 'btn-primary'"
+                                    th:disabled="${aiHardDisabled}"
+                                    th:text="${aiEnabled} ? #{systemConfig.aiDisable} : #{systemConfig.aiEnable}">Disable</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </div>
 

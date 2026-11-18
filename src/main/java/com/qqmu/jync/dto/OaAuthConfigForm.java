@@ -27,6 +27,7 @@ public class OaAuthConfigForm {
     private String adminField;
     private String adminValue;
     private String adminUsers;
+    private String opsUsers;
     private String loginEntryUrl;
     private String logoutRedirectUrl;
     private boolean localLoginEnabled = true;
@@ -57,6 +58,7 @@ public class OaAuthConfigForm {
         config.setAdminField(adminField);
         config.setAdminValue(adminValue);
         config.setAdminUsers(adminUsers);
+        config.setOpsUsers(opsUsers);
         config.setLoginEntryUrl(loginEntryUrl);
         config.setLogoutRedirectUrl(logoutRedirectUrl);
         config.setLocalLoginEnabled(Boolean.valueOf(localLoginEnabled));

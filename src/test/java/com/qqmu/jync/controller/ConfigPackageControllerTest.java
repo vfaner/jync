@@ -38,6 +38,7 @@ import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.config.ConfigExportService;
 import com.qqmu.jync.service.config.ConfigImportService;
 import com.qqmu.jync.service.config.ConfigPackageException;
+import com.qqmu.jync.service.settings.AiAvailability;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
@@ -84,6 +85,9 @@ class ConfigPackageControllerTest {
     // SystemConfigViewTest. The mock keeps the controller's constructor satisfied.
     @MockitoBean
     private TlsCertificateService tlsCertificateService;
+    /** The AI card shares this controller; its own switch is covered by SystemConfigViewTest. */
+    @MockitoBean
+    private AiAvailability aiAvailability;
 
     // --- export --------------------------------------------------------------------------
 

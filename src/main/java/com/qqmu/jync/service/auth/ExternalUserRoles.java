@@ -12,10 +12,14 @@ public final class ExternalUserRoles {
     /**
      * {@code adminUsers} is a comma-separated list of exact (trimmed, case-sensitive) user names.
      * A mode-specific marker (a response field or an admin header) can grant the role too.
+     * {@code opsUsers} uses the same matching for the operator role, but the administrator
+     * decision is taken first: a name on both lists is an administrator.
      */
     public static UserRole resolve(OaAuthConfig config, String username, boolean responseAdmin) {
-        return matchesUsername(config.getAdminUsers(), username) || responseAdmin
-                ? UserRole.ADMIN : UserRole.VIEWER;
+        if (matchesUsername(config.getAdminUsers(), username) || responseAdmin) {
+            return UserRole.ADMIN;
+        }
+        return matchesUsername(config.getOpsUsers(), username) ? UserRole.OPS : UserRole.VIEWER;
     }
 
     public static boolean matchesUsername(String commaSeparated, String username) {

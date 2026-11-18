@@ -2,6 +2,8 @@ package com.qqmu.jync.service.ai;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 
@@ -15,6 +17,7 @@ import com.qqmu.jync.model.AiProtocol;
 import com.qqmu.jync.model.AiProvider;
 import com.qqmu.jync.model.AiReasoningEffort;
 import com.qqmu.jync.repository.AiProviderRepository;
+import com.qqmu.jync.service.settings.AiAvailability;
 import com.qqmu.jync.util.CryptoUtil;
 
 /**
@@ -60,6 +63,7 @@ class AiProviderServiceTest {
 
     private StubTestService probe;
     private SyncProperties properties;
+    private AiAvailability aiAvailability;
 
     @BeforeEach
     void setUp() {
@@ -67,7 +71,12 @@ class AiProviderServiceTest {
         properties.setCryptoPassword("test-key");
         properties.setCryptoSalt("5c0744940b5c369b");
         probe = new StubTestService();
-        service = new AiProviderService(repository, probe, new CryptoUtil(properties), properties, txManager);
+        // The page switch lives in a separate component now; this test exercises the
+        // provider rules with the feature switched on.
+        aiAvailability = mock(AiAvailability.class);
+        when(aiAvailability.isEnabled()).thenReturn(true);
+        service = new AiProviderService(repository, probe, new CryptoUtil(properties),
+                properties, aiAvailability, txManager);
     }
 
     private AiProvider newProvider(String name) {
@@ -122,7 +131,7 @@ class AiProviderServiceTest {
         service.enable(p.getId());
         assertThat(service.isAssistAvailable()).isTrue();
 
-        properties.getAi().setEnabled(false);
+        when(aiAvailability.isEnabled()).thenReturn(false);
 
         // An air-gapped deployment must be able to shut this off without deleting rows.
         assertThat(service.activeProvider()).isEmpty();
@@ -287,7 +296,7 @@ class AiProviderServiceTest {
         org.mockito.Mockito.when(mockRepo.findById(9L))
                 .thenReturn(java.util.Optional.of(disappearing), java.util.Optional.empty());
         AiProviderService svc = new AiProviderService(mockRepo, probe,
-                new CryptoUtil(properties), properties, txManager);
+                new CryptoUtil(properties), properties, aiAvailability, txManager);
 
         assertThatThrownBy(() -> svc.enable(9L))
                 .isInstanceOf(IllegalArgumentException.class)

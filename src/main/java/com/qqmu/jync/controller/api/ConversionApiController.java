@@ -17,9 +17,12 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.AiSqlAssistant;
 import com.qqmu.jync.service.ai.CandidateValidator;
 import com.qqmu.jync.service.ai.ConversionAssistService;
+import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.settings.AiAvailability;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -42,6 +45,8 @@ public class ConversionApiController {
     private static final long STREAM_TIMEOUT_MS = 10 * 60 * 1000L;
 
     private final ConversionAssistService assistService;
+    private final ProjectService projectService;
+    private final AiAvailability aiAvailability;
 
     /** Small daemon pool: drafts are a one-reviewer-at-a-time workflow, not a throughput path. */
     private final ExecutorService executor = Executors.newFixedThreadPool(4, r -> {
@@ -50,8 +55,27 @@ public class ConversionApiController {
         return t;
     });
 
-    public ConversionApiController(ConversionAssistService assistService) {
+    public ConversionApiController(ConversionAssistService assistService,
+                                   ProjectService projectService,
+                                   AiAvailability aiAvailability) {
         this.assistService = assistService;
+        this.projectService = projectService;
+        this.aiAvailability = aiAvailability;
+    }
+
+    /**
+     * Both answers the endpoints owe before any work starts: the caller may edit this project,
+     * and the feature is on.
+     *
+     * <p>Run on the servlet thread, before the draft is handed to the pool — an exception
+     * raised on a pool thread has no request to attach to and would reach the page only as an
+     * emitter timeout. Both exceptions are unchecked and neither is an
+     * {@link IllegalArgumentException} or {@link IllegalStateException}, so the existing
+     * catches leave them to the API advice (403).
+     */
+    private void requireAssist(Long projectId) {
+        projectService.requireEditable(projectId, AccessGuard.current());
+        aiAvailability.requireEnabled();
     }
 
     @PreDestroy
@@ -72,6 +96,7 @@ public class ConversionApiController {
     @PostMapping("/{kind}/{name:.+}/draft")
     public ResponseEntity<?> draft(@PathVariable Long projectId, @PathVariable String kind,
                                    @PathVariable String name) {
+        requireAssist(projectId);
         try {
             return ResponseEntity.ok(payload(assistService.draft(projectId, kind, name)));
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -92,6 +117,7 @@ public class ConversionApiController {
                  produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter draftStream(@PathVariable Long projectId, @PathVariable String kind,
                                   @PathVariable String name) {
+        requireAssist(projectId);
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
         emitter.onTimeout(emitter::complete);
         executor.execute(() -> {
@@ -180,6 +206,7 @@ public class ConversionApiController {
             return ResponseEntity.badRequest().body(Map.of("success", false, "message", "Missing parameters"));
         }
 
+        requireAssist(projectId);
         try {
             CandidateValidator.ValidationResult result = assistService.validate(projectId, name, sql);
             String message = result.getMessage();

@@ -19,6 +19,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.settings.AiAvailability;
 import com.qqmu.jync.service.settings.UpdateCheckResolver;
 
 /**
@@ -40,6 +41,7 @@ public class GlobalModelAdvice {
     /** The configuration-file value, and the stand-in when the resolver bean is absent. */
     private final boolean configuredUpdateCheckEnabled;
     private final ObjectProvider<UpdateCheckResolver> updateCheckResolver;
+    private final ObjectProvider<AiAvailability> aiAvailability;
     private final DateTimeFormatter buildTimeFormatter;
 
     @Autowired
@@ -48,9 +50,10 @@ public class GlobalModelAdvice {
                              SyncProperties properties,
                              ObjectProvider<BuildProperties> buildProperties,
                              @Value("${app.update-check.enabled:true}") boolean updateCheckEnabled,
-                             ObjectProvider<UpdateCheckResolver> updateCheckResolver) {
+                             ObjectProvider<UpdateCheckResolver> updateCheckResolver,
+                             ObjectProvider<AiAvailability> aiAvailability) {
         this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled,
-                updateCheckResolver, ZoneId.systemDefault());
+                updateCheckResolver, ZoneId.systemDefault(), aiAvailability);
     }
 
     /** Test seam: the display zone is pinned so the rendered stamp does not depend on the JVM. */
@@ -61,7 +64,7 @@ public class GlobalModelAdvice {
                       boolean updateCheckEnabled,
                       ZoneId buildTimeZone) {
         this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled, null,
-                buildTimeZone);
+                buildTimeZone, null);
     }
 
     GlobalModelAdvice(String githubUrl,
@@ -71,12 +74,25 @@ public class GlobalModelAdvice {
                       boolean updateCheckEnabled,
                       ObjectProvider<UpdateCheckResolver> updateCheckResolver,
                       ZoneId buildTimeZone) {
+        this(githubUrl, siteUrl, properties, buildProperties, updateCheckEnabled,
+                updateCheckResolver, buildTimeZone, null);
+    }
+
+    GlobalModelAdvice(String githubUrl,
+                      String siteUrl,
+                      SyncProperties properties,
+                      ObjectProvider<BuildProperties> buildProperties,
+                      boolean updateCheckEnabled,
+                      ObjectProvider<UpdateCheckResolver> updateCheckResolver,
+                      ZoneId buildTimeZone,
+                      ObjectProvider<AiAvailability> aiAvailability) {
         this.githubUrl = githubUrl;
         this.siteUrl = siteUrl;
         this.properties = properties;
         this.buildProperties = buildProperties;
         this.configuredUpdateCheckEnabled = updateCheckEnabled;
         this.updateCheckResolver = updateCheckResolver;
+        this.aiAvailability = aiAvailability;
         this.buildTimeFormatter = BUILD_TIME_FORMATTER.withZone(buildTimeZone);
     }
 
@@ -160,14 +176,17 @@ public class GlobalModelAdvice {
     }
 
     /**
-     * Whether the AI menu is shown at all.
+     * Whether the AI feature is shown at all.
      *
-     * <p>Read from configuration on every request rather than cached, so an air-gapped
-     * deployment can hide the feature without a code change.
+     * <p>The page switch wins over the configuration default, so an operator can hide the
+     * feature without a restart; {@code sync.ai.enabled=false} still pins it off. A slice that
+     * imports this advice without the availability bean (no database) keeps the configuration
+     * value it was handed, so layout tests stay self-contained.
      */
     @ModelAttribute("aiEnabled")
     public boolean aiEnabled() {
-        return properties.getAi().isEnabled();
+        AiAvailability ai = aiAvailability == null ? null : aiAvailability.getIfAvailable();
+        return ai == null ? properties.getAi().isEnabled() : ai.isEnabled();
     }
 
     /**

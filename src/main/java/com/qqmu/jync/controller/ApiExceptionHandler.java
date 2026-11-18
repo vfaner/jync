@@ -8,6 +8,8 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
+import com.qqmu.jync.service.ai.AiDisabledException;
+
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -27,6 +29,15 @@ public class ApiExceptionHandler {
      */
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<Map<String, Object>> onForbidden(AccessDeniedException e) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body(false, e.getMessage()));
+    }
+
+    /**
+     * The AI feature is switched off. 403 rather than 409: the request was fine, the feature
+     * is off, and the page's toast localizes the key.
+     */
+    @ExceptionHandler(AiDisabledException.class)
+    public ResponseEntity<Map<String, Object>> onAiDisabled(AiDisabledException e) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN).body(body(false, e.getMessage()));
     }
 

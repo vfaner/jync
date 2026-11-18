@@ -25,6 +25,7 @@ import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.auth.SyncUserDetails;
+import com.qqmu.jync.service.settings.AiAvailability;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingService;
 import com.qqmu.jync.service.settings.UpdateCheckResolver;
@@ -69,6 +70,8 @@ class SystemConfigViewTest {
     private TlsCertificateService tlsCertificateService;
     @MockitoBean
     private UpdateCheckResolver updateCheckResolver;
+    @MockitoBean
+    private AiAvailability aiAvailability;
 
     private static RequestPostProcessor as(UserRole role) {
         AppUser user = new AppUser();
@@ -92,6 +95,8 @@ class SystemConfigViewTest {
         when(updateCheckResolver.effective()).thenReturn(
                 new UpdateCheckResolver.Effective(true, UpdateCheckResolver.Source.DEFAULT));
         when(updateCheckResolver.isConfigControlled()).thenReturn(false);
+        when(aiAvailability.isEnabled()).thenReturn(true);
+        when(aiAvailability.isHardDisabled()).thenReturn(false);
     }
 
     private String render(UserRole role, TlsPageState tls) throws Exception {
@@ -187,6 +192,26 @@ class SystemConfigViewTest {
 
         assertThat(page).contains("该开关由配置文件固定");
         int form = page.indexOf("action=\"/system-config/update-check\"");
+        assertThat(form).isGreaterThan(-1);
+        assertThat(page.substring(form, page.indexOf("</form>", form))).contains("disabled");
+    }
+
+    @Test
+    void theAiCardIsAnActionOnThisPage() throws Exception {
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("<span>AI 辅助</span>")
+                .contains("action=\"/system-config/ai-enabled\"");
+    }
+
+    @Test
+    void aHardDisabledAiSwitchIsReadOnlyAndSaysWhy() throws Exception {
+        when(aiAvailability.isEnabled()).thenReturn(false);
+        when(aiAvailability.isHardDisabled()).thenReturn(true);
+        String page = render(UserRole.ADMIN);
+
+        assertThat(page).contains("sync.ai.enabled");
+        int form = page.indexOf("action=\"/system-config/ai-enabled\"");
         assertThat(form).isGreaterThan(-1);
         assertThat(page.substring(form, page.indexOf("</form>", form))).contains("disabled");
     }

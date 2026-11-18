@@ -82,6 +82,15 @@
                         </div>
 
                         <div class="field">
+                            <label for="opsUsers" th:text="#{oa.opsUsers}">Operator user names</label>
+                            <input type="text" class="input" id="opsUsers" th:field="*{opsUsers}"
+                                   maxlength="1024" placeholder="bob,carol">
+                            <div class="help" th:text="#{oa.opsUsersHelp}">
+                                Comma-separated; a match grants the operator role. Administrator matches win.
+                            </div>
+                        </div>
+
+                        <div class="field">
                             <label for="logoutRedirectUrl" th:text="#{oa.logoutRedirectUrl}">Sign-out address</label>
                             <input type="text" class="input" id="logoutRedirectUrl"
                                    th:field="*{logoutRedirectUrl}" maxlength="2048"

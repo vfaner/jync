@@ -14,6 +14,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.audit.AuditDetail;
+import com.qqmu.jync.service.settings.AiAvailability;
 import com.qqmu.jync.service.settings.RequireHttpsResolver;
 import com.qqmu.jync.service.settings.SystemSettingKey;
 import com.qqmu.jync.service.settings.SystemSettingService;
@@ -42,17 +43,20 @@ public class SystemConfigController {
     private final SystemSettingService settings;
     private final AdminAuditService audit;
     private final TlsCertificateService tls;
+    private final AiAvailability aiAvailability;
 
     public SystemConfigController(RequireHttpsResolver requireHttps,
                                   UpdateCheckResolver updateCheck,
                                   SystemSettingService settings,
                                   AdminAuditService audit,
-                                  TlsCertificateService tls) {
+                                  TlsCertificateService tls,
+                                  AiAvailability aiAvailability) {
         this.requireHttps = requireHttps;
         this.updateCheck = updateCheck;
         this.settings = settings;
         this.audit = audit;
         this.tls = tls;
+        this.aiAvailability = aiAvailability;
     }
 
     @GetMapping("/system-config")
@@ -73,6 +77,8 @@ public class SystemConfigController {
         model.addAttribute("httpsBlockedKey", httpsBlockedKey(tlsState));
         model.addAttribute("updateCheck", updateCheck.effective());
         model.addAttribute("updateCheckConfigControlled", updateCheck.isConfigControlled());
+        model.addAttribute("aiEnabled", aiAvailability.isEnabled());
+        model.addAttribute("aiHardDisabled", aiAvailability.isHardDisabled());
         return "system-config";
     }
 
@@ -107,6 +113,39 @@ public class SystemConfigController {
         flash.addFlashAttribute("message", enabled
                 ? "msg.systemConfig.updateCheck.enabled"
                 : "msg.systemConfig.updateCheck.disabled");
+        return "redirect:/system-config";
+    }
+
+    /**
+     * Turns the AI assistant on or off on the page.
+     *
+     * <p>{@code sync.ai.enabled=false} is the deployment's hard off: it pins the feature off
+     * and the page may not fight it, because an air-gapped or policy-bound installation must
+     * not have AI switched back on from the browser.
+     */
+    @PostMapping("/system-config/ai-enabled")
+    public String saveAiEnabled(@RequestParam(required = false) Boolean enabled,
+                                HttpServletRequest request,
+                                RedirectAttributes flash) {
+        if (enabled == null) {
+            flash.addFlashAttribute("error", "error.systemConfig.setting.invalid");
+            return "redirect:/system-config";
+        }
+        if (aiAvailability.isHardDisabled()) {
+            flash.addFlashAttribute("error", "error.systemConfig.ai.envControlled");
+            return "redirect:/system-config";
+        }
+
+        Optional<Boolean> previous = settings.putBoolean(SystemSettingKey.AI_ENABLED, enabled);
+        audit.record(AuditAction.SYSTEM_SETTING_SAVE,
+                AuditDetail.of("audit.detail.systemSettingSave", AuditOrigin.of(request),
+                        SystemSettingKey.AI_ENABLED.key(),
+                        previous.map(String::valueOf).orElse(""),
+                        String.valueOf(enabled)));
+
+        flash.addFlashAttribute("message", enabled
+                ? "msg.systemConfig.ai.enabled"
+                : "msg.systemConfig.ai.disabled");
         return "redirect:/system-config";
     }
 

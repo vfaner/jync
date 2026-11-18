@@ -203,6 +203,7 @@ public final class ConfigPackageDtos {
     public record OaAuthConfigDto(boolean enabled,
                                   OaAuthConfig.Mode mode,
                                   String adminUsers,
+                                  String opsUsers,
                                   String loginEntryUrl,
                                   String logoutRedirectUrl,
                                   Boolean localLoginEnabled,
