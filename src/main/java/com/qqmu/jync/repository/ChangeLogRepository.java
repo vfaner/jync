@@ -2,6 +2,7 @@ package com.qqmu.jync.repository;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -163,6 +164,14 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
                                                                         Pageable pageable);
 
     Page<ChangeLog> findBySuccessFalseOrderByOccurredAtDesc(Pageable pageable);
+
+    /**
+     * The newest failure of one project — the row an operator means by "what went wrong".
+     *
+     * <p>A derived single-result query, not the paged failure view: the AI support assistant
+     * asks for exactly one row and must not pay for a count query it will never read.
+     */
+    Optional<ChangeLog> findFirstByProjectIdAndSuccessFalseOrderByOccurredAtDesc(Long projectId);
 
     long countByProjectIdAndSuccessFalse(Long projectId);
 
