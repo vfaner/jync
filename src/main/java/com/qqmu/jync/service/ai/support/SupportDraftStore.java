@@ -29,11 +29,15 @@ public class SupportDraftStore {
     private final SecureRandom random = new SecureRandom();
 
     public String put(String username, Project project, String suggestion) {
+        // An unused draft is never removed by any other path, so sweep the expired ones on
+        // every put; the map only ever holds drafts from the last five minutes.
+        Instant now = Instant.now();
+        drafts.values().removeIf(draft -> draft.expiresAt().isBefore(now));
+
         byte[] bytes = new byte[16];
         random.nextBytes(bytes);
         String token = HexFormat.of().formatHex(bytes);
-        drafts.put(token, new Draft(username, project, suggestion,
-                Instant.now().plusMillis(TTL_MILLIS)));
+        drafts.put(token, new Draft(username, project, suggestion, now.plusMillis(TTL_MILLIS)));
         return token;
     }
 
@@ -47,6 +51,11 @@ public class SupportDraftStore {
             return Optional.empty();
         }
         return Optional.ofNullable(drafts.remove(token));
+    }
+
+    /** Test seam: how many tokens are still held (expired ones included until a put). */
+    int sizeForTests() {
+        return drafts.size();
     }
 
     /** Test seam: move one token past its expiry without sleeping. */

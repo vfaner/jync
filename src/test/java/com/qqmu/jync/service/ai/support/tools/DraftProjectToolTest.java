@@ -101,6 +101,31 @@ class DraftProjectToolTest {
     }
 
     @Test
+    void aRedisTargetRequiresACdcCapableSource() throws Exception {
+        when(actor.username()).thenReturn("alice");
+        when(actor.canEdit("alice")).thenReturn(true);
+        // Doris reads fine but has no change log, so the save path would refuse the project
+        // this draft turns into; the draft must refuse it too.
+        when(configs.findById(1L)).thenReturn(Optional.of(
+                db(1L, ConnectionRole.SOURCE, DatabaseType.DORIS, "alice")));
+        RedisTarget target = new RedisTarget();
+        target.setId(9L);
+        target.setName("cache-prod");
+        target.setOwnerUsername("alice");
+        when(redis.findById(9L)).thenReturn(Optional.of(target));
+
+        var args = mapper.createObjectNode();
+        args.put("name", "cache-orders");
+        args.put("sourceDbId", 1);
+        args.put("targetKind", "REDIS");
+        args.put("targetRedisId", 9);
+        var out = mapper.readTree(mapper.writeValueAsString(tool().execute(args, ctx)));
+
+        assertThat(out.path("ok").asBoolean()).isFalse();
+        assertThat(out.toString()).contains("error.project.redis.sourceNoCdc");
+    }
+
+    @Test
     void aRedisTargetUsesTheRedisId() throws Exception {
         when(actor.username()).thenReturn("alice");
         when(actor.canEdit("alice")).thenReturn(true);

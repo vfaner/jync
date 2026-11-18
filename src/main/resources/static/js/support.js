@@ -74,13 +74,20 @@
     var max = !root.classList.contains('is-max');
     root.classList.toggle('is-max', max);
     if (max) {
-      // 最大化由样式表的 inset 接管；内联 left/top 会压过它，先清掉（位置留在会话状态里）。
+      // 最大化由样式表的 inset 接管；内联 left/top/size 会压过它，先清掉（位置与
+      // 尺寸留在会话状态里）。
       panel.style.left = '';
       panel.style.top = '';
       panel.style.right = '';
       panel.style.bottom = '';
+      panel.style.width = '';
+      panel.style.height = '';
     } else {
       var s = state();
+      if (s.w && s.h) {
+        panel.style.width = s.w + 'px';
+        panel.style.height = s.h + 'px';
+      }
       if (s.x != null && s.y != null) place(s.x, s.y);
     }
     setMaxLabel(max);
@@ -224,12 +231,13 @@
   function restore() {
     var s = state();
     if (s.open) open();
-    if (s.max) toggleMax();
     if (s.w && s.h) {
       panel.style.width = s.w + 'px';
       panel.style.height = s.h + 'px';
     }
-    if (!s.max && s.x != null && s.y != null) place(s.x, s.y);
+    if (s.x != null && s.y != null) place(s.x, s.y);
+    // 最大化放在最后：它要清掉上面刚写入的内联位置与尺寸。
+    if (s.max) toggleMax();
     (s.turns || []).forEach(function (turn) {
       appendBubble(turn.role, turn.text, turn.role === 'assistant');
     });
@@ -523,6 +531,7 @@
   var dragging = false;
   var startX = 0, startY = 0, startW = 0, startH = 0, startLeft = 0, startTop = 0;
   resize.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return;
     dragging = true;
     startX = e.clientX; startY = e.clientY;
     var rect = panel.getBoundingClientRect();

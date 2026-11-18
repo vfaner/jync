@@ -43,6 +43,17 @@ class SupportDraftStoreTest {
     }
 
     @Test
+    void expiredTokensDoNotAccumulate() {
+        SupportDraftStore store = new SupportDraftStore();
+        String stale = store.put("alice", project, null);
+        store.expireForTests(stale);
+
+        store.put("alice", project, null);
+
+        assertThat(store.sizeForTests()).isEqualTo(1);
+    }
+
+    @Test
     void aForeignTakeDoesNotBurnTheToken() {
         SupportDraftStore store = new SupportDraftStore();
         String token = store.put("alice", project, null);

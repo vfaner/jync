@@ -8,12 +8,14 @@ import java.util.Set;
 
 import org.springframework.stereotype.Component;
 
+import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.repository.RedisTargetRepository;
+import com.qqmu.jync.service.CaptureStrategyParser;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportDraftStore;
@@ -83,6 +85,7 @@ public class DraftProjectTool implements SupportTool {
         Long sourceDbId = SupportArgs.optionalLong(args, "sourceDbId");
         DatabaseConfig source = sourceDbId == null
                 ? null : configs.findById(sourceDbId).orElse(null);
+        boolean sourceUsable = false;
         if (source == null) {
             errors.add(error("sourceDbId", "error.project.source.required"));
         } else {
@@ -91,6 +94,8 @@ public class DraftProjectTool implements SupportTool {
                         ctx.actor());
                 if (source.getRole() != ConnectionRole.SOURCE || !source.supportsSyncSource()) {
                     errors.add(error("sourceDbId", "error.project.source.invalid"));
+                } else {
+                    sourceUsable = true;
                 }
             } catch (IllegalArgumentException e) {
                 errors.add(error("sourceDbId", e.getMessage()));
@@ -117,6 +122,12 @@ public class DraftProjectTool implements SupportTool {
                 }
             }
             targetLabel = target == null ? "" : target.getName();
+            // A cache projection is CDC-only. The save path refuses a source with no change
+            // log, so a draft that skipped the check would hand the user a token whose form
+            // cannot be saved.
+            if (sourceUsable && !cdcCapable(source)) {
+                errors.add(error("sourceDbId", "error.project.redis.sourceNoCdc"));
+            }
         } else {
             DatabaseConfig target = targetDbId == null
                     ? null : configs.findById(targetDbId).orElse(null);
@@ -168,6 +179,13 @@ public class DraftProjectTool implements SupportTool {
         out.put("summary", suggestion == null ? "" : suggestion);
         out.put("fields", fields);
         return out;
+    }
+
+    /** Mirrors {@code RedisProjectionPolicy.requireCdcCapableSource} without its service deps. */
+    private static boolean cdcCapable(DatabaseConfig source) {
+        return CaptureStrategyParser.supportedFor(source.getType(), source.resolvedFamily())
+                .stream()
+                .anyMatch(CaptureStrategy::isLogCdc);
     }
 
     private Map<String, Object> error(String field, String messageKey) {
