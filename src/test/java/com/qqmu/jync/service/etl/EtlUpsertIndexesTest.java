@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -133,6 +134,51 @@ class EtlUpsertIndexesTest {
         assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("id"))).isFalse();
     }
 
+    /**
+     * With no schema argument, a driver reports {@code dst}'s indexes in EVERY schema of the
+     * database. The unqualified target resolves in the connection's own schema, so another
+     * schema's same-named table must not answer for it: the native upsert would then run
+     * against a table that carries no such constraint (PostgreSQL rejects it outright).
+     */
+    @Test
+    void aSameNamedTableInAnotherSchemaDoesNotAnswerForAnUnqualifiedTarget() throws SQLException {
+        Connection target = mock(Connection.class);
+        DatabaseMetaData metadata = mock(DatabaseMetaData.class);
+        when(target.getMetaData()).thenReturn(metadata);
+        when(target.getCatalog()).thenReturn("APP");
+        when(target.getSchema()).thenReturn("PUBLIC");
+        ResultSet otherSchema = indexRows(new IndexRow("PRIMARY", "ID", "dst", true));
+        ResultSet ownSchema = indexRows();
+        when(metadata.getIndexInfo(eq("APP"), isNull(), eq("dst"), eq(true), eq(true)))
+                .thenReturn(otherSchema);
+        when(metadata.getIndexInfo(eq("APP"), eq("PUBLIC"), eq("dst"), eq(true), eq(true)))
+                .thenReturn(ownSchema);
+
+        assertThat(EtlUpsertIndexes.coversKeys(target, "dst", List.of("id"))).isFalse();
+    }
+
+    /**
+     * A qualified target ({@code ODS.dst}) is probed in its own schema. The qualifier of a
+     * non-MySQL target is a schema, not the JDBC catalog, so it belongs in the schema
+     * argument; without it the answer could come from a same-named table elsewhere.
+     */
+    @Test
+    void aQualifiedTargetIsProbedInItsOwnSchema() throws SQLException {
+        Connection target = mock(Connection.class);
+        DatabaseMetaData metadata = mock(DatabaseMetaData.class);
+        when(target.getMetaData()).thenReturn(metadata);
+        when(target.getCatalog()).thenReturn("APP");
+        when(target.getSchema()).thenReturn("PUBLIC");
+        ResultSet anywhere = indexRows();
+        ResultSet odsSchema = indexRows(new IndexRow("PRIMARY", "ID", "dst", true));
+        when(metadata.getIndexInfo(any(), any(), eq("dst"), eq(true), eq(true)))
+                .thenReturn(anywhere);
+        when(metadata.getIndexInfo(eq("APP"), eq("ODS"), eq("dst"), eq(true), eq(true)))
+                .thenReturn(odsSchema);
+
+        assertThat(EtlUpsertIndexes.coversKeys(target, "ODS.dst", List.of("id"))).isTrue();
+    }
+
     // --- harness ------------------------------------------------------------------------
 
     private static Connection target(IndexRow... rows) throws SQLException {
@@ -140,9 +186,15 @@ class EtlUpsertIndexesTest {
         DatabaseMetaData metadata = mock(DatabaseMetaData.class);
         when(connection.getMetaData()).thenReturn(metadata);
         when(connection.getCatalog()).thenReturn("APP");
-        ResultSet indexRows = mock(ResultSet.class);
+        ResultSet indexRows = indexRows(rows);
         when(metadata.getIndexInfo(any(), any(), anyString(), eq(true), eq(true)))
                 .thenReturn(indexRows);
+        return connection;
+    }
+
+    /** A ResultSet over {@code rows}, as {@link DatabaseMetaData#getIndexInfo} returns one. */
+    private static ResultSet indexRows(IndexRow... rows) throws SQLException {
+        ResultSet indexRows = mock(ResultSet.class);
         int[] cursor = {-1};
         when(indexRows.next()).thenAnswer(invocation -> ++cursor[0] < rows.length);
         when(indexRows.getShort("TYPE")).thenReturn(DatabaseMetaData.tableIndexOther);
@@ -158,7 +210,7 @@ class EtlUpsertIndexesTest {
             };
         });
         when(indexRows.getBoolean("NON_UNIQUE")).thenAnswer(invocation -> !rows[cursor[0]].unique());
-        return connection;
+        return indexRows;
     }
 
     private record IndexRow(String index, String column, String table, boolean unique,

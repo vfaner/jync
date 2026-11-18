@@ -46,13 +46,32 @@ final class EtlUpsertIndexes {
             // MySQL keeps the database in the JDBC catalog and reports no schema, so the
             // database belongs in the catalog argument (the same convention
             // DataSyncService and CursorIndexProbe use).
-            String catalog = catalogName(targetName);
-            if (catalog == null || catalog.isBlank()) {
-                catalog = target.getCatalog();
+            String qualifier = catalogName(targetName);
+            String catalog = target.getCatalog();
+            // The index lookup must see the schema the statement will actually resolve in.
+            // With a null schema argument a driver reports every schema's table of that
+            // name, so an index on another schema's same-named table could answer for this
+            // one — native upsert then runs against a table without the constraint
+            // (PostgreSQL rejects it outright).
+            String schema = null;
+            if (qualifier == null || qualifier.isBlank()) {
+                // Unqualified: the name resolves in the connection's own schema. A driver
+                // without getSchema() support answers null, leaving the old behaviour.
+                schema = connectionSchema(target);
+            } else if (catalog != null && !qualifier.equalsIgnoreCase(catalog)) {
+                // The qualifier is not the catalog this connection reports, so it is a
+                // schema (PostgreSQL, Oracle, SQL Server) — the same rule executionSchema
+                // uses for the DDL side.
+                schema = qualifier;
+            } else {
+                // ``db.table`` where the qualifier IS the connection's catalog (or the
+                // driver reports none): MySQL's schema-free form, where the qualifier
+                // belongs in the catalog argument, as before.
+                catalog = qualifier;
             }
             Map<String, Set<String>> columnsByIndex = new HashMap<>();
             Set<String> withExpression = new HashSet<>();
-            try (ResultSet rs = metadata.getIndexInfo(catalog, null, table, true, true)) {
+            try (ResultSet rs = metadata.getIndexInfo(catalog, schema, table, true, true)) {
                 while (rs.next()) {
                     if (rs.getShort("TYPE") == DatabaseMetaData.tableIndexStatistic) {
                         continue;
@@ -117,6 +136,19 @@ final class EtlUpsertIndexes {
             log.warn("Cannot read the unique indexes of {} ({}); using the emulated upsert",
                     targetName, e.toString());
             return false;
+        }
+    }
+
+    /**
+     * The connection's current schema, or null when the driver does not expose one. This is
+     * the schema an unqualified table name resolves in, so it is also the one its index
+     * lookup must be narrowed to.
+     */
+    private static String connectionSchema(Connection target) {
+        try {
+            return target.getSchema();
+        } catch (SQLException | RuntimeException e) {
+            return null;
         }
     }
 

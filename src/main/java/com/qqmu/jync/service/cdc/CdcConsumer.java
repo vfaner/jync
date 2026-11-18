@@ -783,8 +783,11 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 // the at-least-once contract. The thrown exception leaves onTableMap, the
                 // client treats a listener failure as a communication failure and drops
                 // the connection, the reconnect loop classifies it TRANSIENT and replays
-                // the whole transaction from the last position. A permanently broken
-                // metadata read then loops at max backoff — visible, and safe.
+                // the whole transaction from the last position. Each observed handler
+                // failure also counts towards CdcConsumer.run's strike-out, so a metadata
+                // read that stays broken with no successful transaction in between parks
+                // the project as DESERIALIZATION_STRIKE_OUT after MAX_DESERIALIZATION_FAILURES
+                // cycles — the stored detail still names this metadata failure.
                 // (Wrapped because CdcTableMetaSupplier.binding declares no checked
                 // exception; the cause is preserved for CdcFailureClassifier.)
                 throw new IllegalStateException("CDC metadata read failed for "
