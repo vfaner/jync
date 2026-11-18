@@ -107,7 +107,7 @@ class LobBinderLeakTest {
         org.mockito.Mockito.doThrow(new SQLException("ORA-01652"))
                 .when(clob).setString(anyLong(), anyString());
 
-        String text = "x".repeat(40_000); // 超过 Oracle 的 32767 字节内联上限
+        String text = "x".repeat(40_000); // 超过 Oracle 的 4000 字节内联上限
 
         assertThatThrownBy(() -> LobBinder.bind(ps, 1, text, Types.CLOB,
                 new OracleDialect(), LobBinder.newTracker()))

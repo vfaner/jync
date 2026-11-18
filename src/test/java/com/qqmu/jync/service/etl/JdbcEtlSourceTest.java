@@ -17,6 +17,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Time;
 import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.LocalDateTime;
@@ -446,6 +447,41 @@ class JdbcEtlSourceTest {
     }
 
     @Test
+    void aClobColumnIsReadAsTextInsteadOfADriverHandle() throws SQLException {
+        // Oracle's getObject on a CLOB returns an oracle.sql.CLOB handle that is bound to
+        // this ResultSet's connection; handing it to another connection's setObject is at
+        // best driver-specific. The sync reader materializes LOBs for the same reason.
+        when(metadata.getColumnType(1)).thenReturn(Types.CLOB);
+        when(metadata.getColumnTypeName(1)).thenReturn("CLOB");
+        String text = "x".repeat(5000);
+        when(resultSet.getString(1)).thenReturn(text);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.ORACLE)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo(text);
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aBlobColumnIsReadAsBytesInsteadOfADriverHandle() throws SQLException {
+        when(metadata.getColumnType(1)).thenReturn(Types.BLOB);
+        when(metadata.getColumnTypeName(1)).thenReturn("BLOB");
+        byte[] data = new byte[4000];
+        when(resultSet.getBytes(1)).thenReturn(data);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.ORACLE)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isSameAs(data);
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
     void anOracleSourceReadsAZoneLessTimestampAsAWallClock() throws SQLException {
         // Oracle DATE and TIMESTAMP both report Types.TIMESTAMP. getObject builds a
         // Timestamp by reading the wall clock in the JVM zone, and Asia/Shanghai has no
@@ -497,6 +533,174 @@ class JdbcEtlSourceTest {
         assertThat(cursor.next()).isTrue();
         assertThat(cursor.getObject(1)).isEqualTo(raw);
         verify(resultSet, never()).getObject(1, LocalDateTime.class);
+        cursor.close();
+    }
+
+    @Test
+    void aMysqlYearColumnIsReadAsTheIntegerItHolds() throws SQLException {
+        // Connector/J reports YEAR as JDBC DATE while the value is an integer year, and the
+        // target column is created as SMALLINT (YEAR only survives onto a MySQL target).
+        // getObject hands back a java.sql.Date that an integer column cannot take; the sync
+        // reader turns the year back into an int, and the ETL cursor must read it the same
+        // way or every ETL task over a YEAR column fails on the target.
+        when(metadata.getColumnType(1)).thenReturn(Types.DATE);
+        when(metadata.getColumnTypeName(1)).thenReturn("YEAR");
+        when(resultSet.getInt(1)).thenReturn(2024);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.MYSQL)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo(2024);
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aPostgresJsonColumnIsReadAsTextForAnotherTarget() throws SQLException {
+        // PgJDBC answers a json/jsonb column with a driver-private PGobject. A non-PG target
+        // driver cannot infer a bind type for it, so the row fails at insert time. The target
+        // column is created as text by the dialect, which is what the sync reader binds.
+        when(metadata.getColumnType(1)).thenReturn(Types.OTHER);
+        when(metadata.getColumnTypeName(1)).thenReturn("jsonb");
+        when(resultSet.getString(1)).thenReturn("{\"a\":1}");
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.POSTGRESQL)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo("{\"a\":1}");
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aPostgresArrayColumnIsReadAsItsTextLiteral() throws SQLException {
+        // A PG array arrives as a PgArray bound to the source connection; no target driver
+        // accepts it. The "{1,2}" literal is what the text target column stores, and what
+        // the sync reader already produces for the same column.
+        when(metadata.getColumnType(1)).thenReturn(Types.ARRAY);
+        when(metadata.getColumnTypeName(1)).thenReturn("_int4");
+        when(resultSet.getString(1)).thenReturn("{1,2}");
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.POSTGRESQL)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo("{1,2}");
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aSqlServerDatetimeOffsetIsReadAsAPortableOffsetDateTime() throws SQLException {
+        // mssql-jdbc answers getObject with microsoft.sql.DateTimeOffset, a driver-private
+        // class no other target driver can bind. The sync reader runs every column through
+        // JdbcValueNormalizer first; the copy path must too or the same row succeeds on the
+        // sync path and fails or lands garbled here.
+        when(metadata.getColumnType(1)).thenReturn(Types.TIMESTAMP_WITH_TIMEZONE);
+        when(metadata.getColumnTypeName(1)).thenReturn("datetimeoffset");
+        java.time.OffsetDateTime offset =
+                java.time.OffsetDateTime.parse("2026-11-18T10:00:00+08:00");
+        when(resultSet.getObject(1, java.time.OffsetDateTime.class)).thenReturn(offset);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.SQLSERVER)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo(offset);
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void anOracleXmlTypeIsReadAsItsText() throws SQLException {
+        // XMLTYPE is a character large object; getObject hands back the driver's own type
+        // (or throws NoClassDefFoundError without the xdb jar), while getString is the text
+        // every target stores. Same read the sync path makes through the normalizer.
+        when(metadata.getColumnType(1)).thenReturn(Types.SQLXML);
+        when(metadata.getColumnTypeName(1)).thenReturn("XMLTYPE");
+        when(resultSet.getString(1)).thenReturn("<order id=\"1\"/>");
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.ORACLE)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo("<order id=\"1\"/>");
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aSqlServerUniqueIdentifierIsReadAsText() throws SQLException {
+        when(metadata.getColumnType(1)).thenReturn(Types.CHAR);
+        when(metadata.getColumnTypeName(1)).thenReturn("uniqueidentifier");
+        when(resultSet.getString(1)).thenReturn("A1B2C3D4-0000-0000-0000-000000000000");
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.SQLSERVER)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1))
+                .isEqualTo("A1B2C3D4-0000-0000-0000-000000000000");
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aZoneAwareTimestampIsReadAsAnInstantNotTheDriverObject() throws SQLException {
+        // Oracle's TIMESTAMP WITH TIME ZONE column answers getObject with an
+        // oracle.sql.TIMESTAMPTZ bound to the source connection — a driver-private handle no
+        // other target driver can bind. The sync reader reads the instant through
+        // getTimestamp (see readValue), and the copy path must hand the target the same.
+        when(metadata.getColumnType(1)).thenReturn(Types.TIMESTAMP_WITH_TIMEZONE);
+        when(metadata.getColumnTypeName(1)).thenReturn("TIMESTAMP WITH TIME ZONE");
+        Timestamp instant = Timestamp.valueOf("2026-11-18 10:00:00");
+        when(resultSet.getTimestamp(1)).thenReturn(instant);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.ORACLE)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isSameAs(instant);
+        verify(resultSet, never()).getObject(1);
+        cursor.close();
+    }
+
+    @Test
+    void aMysqlTimeValueTheDriverCannotBuildFallsBackToItsLiteral() throws SQLException {
+        // MySQL's TIME domain runs to ±838 hours, which no java.time type can carry:
+        // Connector/J rejects those values while building the object. One such row would
+        // fail the entire task before it is ever bound; the server literal is what the
+        // sync reader keeps, and what a MySQL target takes back verbatim.
+        when(metadata.getColumnType(1)).thenReturn(Types.TIME);
+        when(metadata.getColumnTypeName(1)).thenReturn("TIME");
+        when(resultSet.getObject(1)).thenThrow(new RuntimeException("hours out of range"));
+        when(resultSet.getString(1)).thenReturn("-838:59:59");
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.MYSQL)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isEqualTo("-838:59:59");
+        cursor.close();
+    }
+
+    @Test
+    void anOrdinaryTimeValueKeepsTheDriverObject() throws SQLException {
+        // The literal fallback must not take over for values every target can bind as a
+        // real temporal; those keep the driver's own object.
+        when(metadata.getColumnType(1)).thenReturn(Types.TIME);
+        when(metadata.getColumnTypeName(1)).thenReturn("TIME");
+        Time value = Time.valueOf("12:34:56");
+        when(resultSet.getObject(1)).thenReturn(value);
+        when(resultSet.next()).thenReturn(true, false);
+        EtlSourceCursor cursor = source(DatabaseType.MYSQL)
+                .query(task(EtlWriteMode.APPEND, "id"), null);
+
+        assertThat(cursor.next()).isTrue();
+        assertThat(cursor.getObject(1)).isSameAs(value);
+        verify(resultSet, never()).getString(1);
         cursor.close();
     }
 

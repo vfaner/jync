@@ -56,7 +56,7 @@ import com.qqmu.jync.service.sync.SyncContext;
  *       values must lower that knob too, which the README states.</li>
  * </ul>
  * The incremental window still binds through an Oracle temporary LOB — the path that used to
- * raise {@code ORA-01461} above 32767 bytes. Verification reads only lengths and short
+ * raise {@code ORA-01461} once a value outgrew VARCHAR2. Verification reads only lengths and short
  * substrings via {@code DBMS_LOB}, so the assertions never materialize a value either.
  *
  * <p>Gated by {@code -Djync.lob.memoryIT=true}; {@code -Plob-memory-it} sets the small heap.
@@ -115,7 +115,7 @@ class PostgresToOracleLobIT {
         assertThat(blobPrefixHex(1, 4)).isEqualTo("ABABABAB");
 
         // An incremental window: the new row is written through MERGE, which is the exact
-        // bind path that used to raise ORA-01461 above 32767 bytes.
+        // bind path that used to raise ORA-01461 above the VARCHAR2 inline limit.
         insertSourceRow(ROWS + 1L, ROW_TEXT_CHARS, ROW_BLOB_BYTES);
         DataSyncService.TableSyncResult incremental = sync(progressAfterBaseline());
         assertThat(incremental.isSuccess()).as(incremental.getError()).isTrue();

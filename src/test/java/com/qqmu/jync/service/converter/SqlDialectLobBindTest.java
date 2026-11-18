@@ -18,8 +18,26 @@ import com.qqmu.jync.model.DatabaseType;
 class SqlDialectLobBindTest {
 
     @Test
-    void oracleDeclaresItsInlineBindCeiling() {
-        assertThat(new OracleDialect().maxInlineBindBytes()).isEqualTo(32767);
+    void oracleDeclaresItsVarchar2InlineBindCeiling() {
+        // 4000 is the largest value Oracle still accepts as a VARCHAR2 bind; above it the
+        // driver switches the parameter to a LONG, which a CLOB column rejects with
+        // ORA-01461. 32767 is only the LONG column's own cap and was a dead zone: every
+        // value between 4001 and 32767 bytes went through the failing inline path.
+        assertThat(new OracleDialect().maxInlineBindBytes()).isEqualTo(4000);
+    }
+
+    @Test
+    void oracleDeclaresItsRawInlineBindCeiling() {
+        // RAW caps at 2000 bytes; past it the driver binds a LONG RAW, which a BLOB column
+        // rejects with ORA-01461 just as it rejects an oversized LONG.
+        assertThat(new OracleDialect().maxInlineBinaryBindBytes()).isEqualTo(2000);
+    }
+
+    @Test
+    void dialectsWithoutABinaryCeilingInheritTheTextOne() {
+        assertThat(new MySqlDialect().maxInlineBinaryBindBytes()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(new PostgresDialect().maxInlineBinaryBindBytes()).isEqualTo(Integer.MAX_VALUE);
+        assertThat(new SqlServerDialect().maxInlineBinaryBindBytes()).isEqualTo(Integer.MAX_VALUE);
     }
 
     @Test
@@ -52,7 +70,7 @@ class SqlDialectLobBindTest {
     @Test
     void onlyOracleNeedsAServerSideLobForAStreamedValue() {
         // Oracle's MERGE placeholder is sent as a LONG; a stream bound directly would hit
-        // the same 32767-byte ceiling. Copying into a temporary CLOB is the only way.
+        // the same ORA-01461. Copying into a temporary CLOB is the only way.
         assertThat(new OracleDialect().requiresServerSideLob()).isTrue();
         assertThat(new MySqlDialect().requiresServerSideLob()).isFalse();
         assertThat(new PostgresDialect().requiresServerSideLob()).isFalse();
@@ -88,7 +106,7 @@ class SqlDialectLobBindTest {
     /**
      * 源列本身不是 LOB，但它的宽度会让 Oracle 目标列变成 LOB：{@code varcharType} 把
      * 超过 1000 字符的字符串建成 CLOB，{@code binaryType} 把超过 2000 字节的二进制造
-     * 成 BLOB。这类列的值仍是普通 String/byte[]，绑定类型若不跟着目标走，超过 32767
+     * 成 BLOB。这类列的值仍是普通 String/byte[]，绑定类型若不跟着目标走，超过 4000
      * 字节就不会走临时 CLOB，MERGE 的 LONG 占位符照样 ORA-01461；空串也不会得到
      * ''→空 CLOB 的救援。
      */
@@ -126,7 +144,7 @@ class SqlDialectLobBindTest {
     /**
      * 宽度未知时 Oracle 的 {@code varcharType(0)} 同样建 CLOB（注释写明 unknown/zero
      * sizes 落到 CLOB），绑定类型必须跟着走：否则目标列是 CLOB、占位符却是 VARCHAR，
-     * 超过 32767 字节照样 ORA-01461，空串也拿不到空 CLOB 救援。
+     * 超过 4000 字节照样 ORA-01461，空串也拿不到空 CLOB 救援。
      */
     @Test
     void unknownWidthIsBoundAsClobBecauseOracleCreatesAClob() {

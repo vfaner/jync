@@ -24,8 +24,9 @@ import com.qqmu.jync.service.converter.SqlDialect;
 
 /**
  * Oracle's {@code MERGE INTO t USING (SELECT ? AS c FROM DUAL)} binds a text placeholder as
- * a LONG, whose 32767-byte ceiling raises ORA-01461 for a value that fits the CLOB column
- * perfectly well. No driver-level convenience fixes this — setStringForClob,
+ * a LONG as soon as the value outgrows the 4000-byte VARCHAR2 bind, which raises
+ * ORA-01461 for a value that fits the CLOB column perfectly well. No driver-level
+ * convenience fixes this — setStringForClob,
  * setCharacterStream and setObject(..., Types.CLOB) all fail the same way — so anything
  * above the ceiling (measured in UTF-8 bytes, which over-estimates multibyte server
  * charsets and so errs safe) must go through a temporary CLOB created on the connection.
@@ -61,24 +62,36 @@ class JdbcRowMapperLobBindTest {
     }
 
     @Test
-    void oracleStringOfExactly32767BytesStaysInline() throws Exception {
-        String atCap = "x".repeat(32767);
+    void oracleStringOfExactly4000BytesStaysInline() throws Exception {
+        String atCap = "x".repeat(4000);
         bindWith(new OracleDialect(), atCap, Types.LONGVARCHAR);
         verify(ps).setObject(1, atCap);
         verify(conn, never()).createClob();
     }
 
     @Test
+    void oracleStringOneByteOverTheVarchar2LimitUsesTempClob() throws Exception {
+        // The regression: 4001 bytes already overflow VARCHAR2, so the MERGE projection
+        // sends a LONG and the CLOB column answers ORA-01461. The old 32767 ceiling left
+        // every value in this range on the failing inline path.
+        String over = "x".repeat(4001);
+        bindWith(new OracleDialect(), over, Types.CLOB);
+        verify(clob).setString(1, over);
+        verify(ps).setClob(1, clob);
+        verify(ps, never()).setObject(eq(1), any());
+    }
+
+    @Test
     void oracleCjkStringJustOverTheByteCeilingUsesTempClob() throws Exception {
-        // 10923 * 3 = 32769 bytes, although only 10923 characters.
-        String over = "中".repeat(10923);
+        // 1334 * 3 = 4002 bytes, although only 1334 characters.
+        String over = "中".repeat(1334);
         bindWith(new OracleDialect(), over, Types.CLOB);
         verify(ps).setClob(1, clob);
     }
 
     @Test
     void oracleCjkStringJustUnderTheByteCeilingStaysInline() throws Exception {
-        String under = "中".repeat(10922); // 32766 bytes
+        String under = "中".repeat(1333); // 3999 bytes
         bindWith(new OracleDialect(), under, Types.CLOB);
         verify(ps).setObject(1, under);
         verify(conn, never()).createClob();
@@ -115,6 +128,26 @@ class JdbcRowMapperLobBindTest {
         bindWith(new OracleDialect(), bytes, Types.VARBINARY);
         verify(ps).setBytes(1, bytes);
         verify(conn, never()).createBlob();
+    }
+
+    @Test
+    void oracleBinaryOfExactly2000BytesStaysSetBytes() throws Exception {
+        byte[] bytes = new byte[2000];
+        bindWith(new OracleDialect(), bytes, Types.BLOB);
+        verify(ps).setBytes(1, bytes);
+        verify(conn, never()).createBlob();
+    }
+
+    @Test
+    void oracleBinaryOneByteOverTheRawLimitUsesTempBlob() throws Exception {
+        // 2001 bytes no longer fit RAW, so the MERGE projection sends a LONG RAW — and a
+        // BLOB column refuses that with ORA-01461, exactly like an oversized String. The
+        // shared text ceiling left this range (2001–4000 even after the text fix) inline.
+        byte[] bytes = new byte[2001];
+        bindWith(new OracleDialect(), bytes, Types.BLOB);
+        verify(blob).setBytes(1, bytes);
+        verify(ps).setBlob(1, blob);
+        verify(ps, never()).setBytes(eq(1), any(byte[].class));
     }
 
     @Test

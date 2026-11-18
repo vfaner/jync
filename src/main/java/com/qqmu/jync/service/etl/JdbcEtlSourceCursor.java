@@ -10,6 +10,7 @@ import java.util.List;
 
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
+import com.qqmu.jync.service.sync.JdbcValueNormalizer;
 
 /**
  * A {@link ResultSet} seen as an {@link EtlSourceCursor}. The metadata is read once, before
@@ -21,6 +22,7 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
     private final PreparedStatement statement;
     private final ResultSet resultSet;
     private final List<EtlSourceColumn> columns;
+    private final boolean[] vendorHandled;
     private final int resumeKeyIndex;
     private final DatabaseType sourceType;
 
@@ -32,6 +34,13 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
         this.sourceType = sourceType;
         ResultSetMetaData meta = resultSet.getMetaData();
         this.columns = columns(meta);
+        // Resolved once per task, like the sync reader's RowReadPlan: the vendor-type
+        // check is a function of the column, and running it per cell would allocate an
+        // upper-cased type name on every value.
+        this.vendorHandled = new boolean[columns.size()];
+        for (int i = 0; i < columns.size(); i++) {
+            vendorHandled[i] = JdbcValueNormalizer.handles(columns.get(i).typeName());
+        }
         this.resumeKeyIndex = resumeKeyIndex(resultSet, task, resumable);
     }
 
@@ -89,6 +98,17 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
     @Override
     public Object getObject(int oneBasedIndex) throws SQLException {
         EtlSourceColumn column = columns.get(oneBasedIndex - 1);
+        if (vendorHandled[oneBasedIndex - 1]) {
+            // The same first step as the sync reader: a vendor type whose getObject is a
+            // driver-private object must become the portable value before it crosses to
+            // another connection. SQL Server's datetimeoffset/uniqueidentifier, Oracle's
+            // XMLTYPE and the geometry types are the ones that reach here.
+            Object normalized = JdbcValueNormalizer.read(resultSet, oneBasedIndex,
+                    column.jdbcType(), column.typeName(), sourceType);
+            if (normalized != JdbcValueNormalizer.UNHANDLED) {
+                return normalized;
+            }
+        }
         if (column.jdbcType() == Types.TIMESTAMP
                 && JdbcRowMapper.bindsZoneLessThroughUtcCalendar(sourceType)) {
             // Oracle DATE/TIMESTAMP and PostgreSQL timestamp are zone-less wall clocks; the
@@ -97,7 +117,65 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
             return JdbcRowMapper.readTemporal(resultSet, oneBasedIndex, column.jdbcType(),
                     column.typeName(), sourceType);
         }
-        return resultSet.getObject(oneBasedIndex);
+        // A LOB column's getObject is a driver-private handle (Oracle answers a
+        // {@code oracle.sql.CLOB}) that belongs to this ResultSet's connection; the copy
+        // loop hands the value to another connection's setObject. Materialize it here, the
+        // way the sync reader does, so every target driver receives a String/byte[].
+        switch (column.jdbcType()) {
+            case Types.BLOB:
+            case Types.LONGVARBINARY:
+            case Types.VARBINARY:
+            case Types.BINARY:
+                return resultSet.getBytes(oneBasedIndex);
+            case Types.CLOB:
+            case Types.NCLOB:
+            case Types.LONGVARCHAR:
+            case Types.LONGNVARCHAR:
+                return resultSet.getString(oneBasedIndex);
+            case Types.TIMESTAMP_WITH_TIMEZONE:
+                // A zone-aware timestamp reaches the target as an instant. Oracle's
+                // getObject answers with a driver-private oracle.sql.TIMESTAMPTZ bound
+                // to this source connection, which no other target driver can bind; the
+                // shared reader's getTimestamp is the cross-driver form.
+                return JdbcRowMapper.readValue(resultSet, oneBasedIndex, column.jdbcType(),
+                        column.typeName(), sourceType);
+            case Types.DATE:
+            case Types.OTHER:
+            case Types.ARRAY:
+                // These carry the vendor quirks the shared reader already encodes: MySQL's
+                // YEAR reports DATE but holds an integer (the target column is SMALLINT),
+                // and PostgreSQL json/jsonb/uuid/xml/enums/arrays arrive as driver-private
+                // objects no other target driver can bind. Reading them here instead of
+                // through getObject is what keeps the copy path equal to the sync path.
+                return JdbcRowMapper.readValue(resultSet, oneBasedIndex, column.jdbcType(),
+                        column.typeName(), sourceType);
+            case Types.TIME:
+            case Types.TIME_WITH_TIMEZONE:
+                return timeValue(oneBasedIndex);
+            default:
+                return resultSet.getObject(oneBasedIndex);
+        }
+    }
+
+    /**
+     * A TIME value, or the server's literal when the driver refuses to build one. MySQL's
+     * TIME domain runs to ±838 hours, which no {@code java.time}/JDBC type can carry, and
+     * Connector/J rejects such a value while reading the object; one extreme row would
+     * otherwise fail the whole task before it is bound. Ordinary values keep the driver's
+     * object so every target can bind a real temporal value, exactly as before.
+     */
+    private Object timeValue(int oneBasedIndex) throws SQLException {
+        try {
+            return resultSet.getObject(oneBasedIndex);
+        } catch (RuntimeException driverFailure) {
+            String literal = resultSet.getString(oneBasedIndex);
+            if (literal == null) {
+                // The fallback produced nothing either: surface the driver's own failure
+                // instead of silently turning the cell into NULL.
+                throw driverFailure;
+            }
+            return literal;
+        }
     }
 
     @Override

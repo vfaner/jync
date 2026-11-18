@@ -461,6 +461,22 @@ final class JdbcEtlSource implements EtlSource {
                                 JdbcRowMapper.bindsZoneLessThroughUtcCalendar(sourceType));
                     }
                     break;
+                case Types.TIMESTAMP_WITH_TIMEZONE:
+                    // PostgreSQL has no timestamptz > varchar operator, so the text the
+                    // checkpoint stores (the driver's own rendering, offset included) is
+                    // rejected by the continuation query. Bind the instant it carries
+                    // instead. Oracle's zone-aware columns keep the text: the NLS format
+                    // getString rendered is what its implicit VARCHAR2 conversion parses
+                    // back, and a zone-less Timestamp parameter would be read in the
+                    // session zone instead.
+                    java.time.OffsetDateTime zoneAware = isPostgres(sourceType)
+                            ? zoneAwareText(value) : null;
+                    if (zoneAware != null) {
+                        statement.setTimestamp(1, Timestamp.from(zoneAware.toInstant()));
+                    } else {
+                        statement.setString(1, value);
+                    }
+                    break;
                 default:
                     statement.setString(1, value);
                     break;
@@ -468,6 +484,32 @@ final class JdbcEtlSource implements EtlSource {
         } catch (IllegalArgumentException e) {
             throw new EtlProgramException("stored resume value '" + value
                     + "' cannot be read back as JDBC type " + checkpoint.jdbcType());
+        }
+    }
+
+    private static boolean isPostgres(DatabaseType type) {
+        return type != null
+                && type.getFamily() == DatabaseType.DialectFamily.POSTGRES;
+    }
+
+    /**
+     * The text as an offset-carrying instant, or null when it is not one. PostgreSQL renders
+     * {@code timestamptz} as "yyyy-MM-dd HH:mm:ss[.f…]±HH[:mm]", not as ISO text.
+     */
+    private static java.time.OffsetDateTime zoneAwareText(String text) {
+        String t = text == null ? "" : text.trim();
+        if (t.isEmpty()) {
+            return null;
+        }
+        String iso = t.indexOf(' ') >= 0 ? t.replace(' ', 'T') : t;
+        try {
+            return java.time.OffsetDateTime.parse(iso);
+        } catch (java.time.format.DateTimeParseException e) {
+            try {
+                return java.time.Instant.parse(iso).atOffset(java.time.ZoneOffset.UTC);
+            } catch (java.time.format.DateTimeParseException ignored) {
+                return null;
+            }
         }
     }
 

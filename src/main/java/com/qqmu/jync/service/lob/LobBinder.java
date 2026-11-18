@@ -102,7 +102,7 @@ public final class LobBinder {
         }
         if (value instanceof byte[] && isBinaryLob(targetType)) {
             byte[] bytes = (byte[]) value;
-            if (bytes.length <= dialect.maxInlineBindBytes()) {
+            if (bytes.length <= dialect.maxInlineBinaryBindBytes()) {
                 return false;
             }
             Blob blob = ps.getConnection().createBlob();

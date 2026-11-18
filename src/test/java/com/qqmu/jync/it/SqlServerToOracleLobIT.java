@@ -46,7 +46,7 @@ import com.qqmu.jync.service.sync.SyncContext;
  * SQL Server 2022 → Oracle 23ai：{@code NVARCHAR(MAX)} / {@code VARBINARY(MAX)} 大字段的
  * 全量基线（空表 INSERT-first）与增量 upsert。
  *
- * <p>补齐“SQL Server 源 → Oracle 目标”这一格。值超过 Oracle 的 32767 字节绑定上限，
+ * <p>补齐“SQL Server 源 → Oracle 目标”这一格。值超过 Oracle 的内联绑定上限（VARCHAR2 4000 字节），
  * 增量写入必须走临时 CLOB/BLOB；{@code inline-max-bytes=1024} 让读端走
  * {@code getCharacterStream}/{@code getBinaryStream}，不把整值留在堆里。校验只用
  * {@code DBMS_LOB} 取长度与头尾片段。
@@ -63,7 +63,7 @@ class SqlServerToOracleLobIT {
 
     private static final int BIG_TEXT_CHARS = 200_000;   // ≈ 600 KB of UTF-8
     private static final int BIG_BLOB_BYTES = 1_000_000;
-    /** 40 000 汉字 = 120 000 字节，超过 Oracle 的 32767 字节绑定上限。 */
+    /** 40 000 汉字 = 120 000 字节，超过 Oracle 的内联绑定上限（4000 字节）。 */
     private static final int MEDIUM_TEXT_CHARS = 40_000;
 
     @Container
@@ -116,7 +116,7 @@ class SqlServerToOracleLobIT {
         assertThat(clobPrefix(3, 3)).isEqualTo("文文文");
 
         // Incremental window: the new row is written through Oracle's MERGE, the path that
-        // used to raise ORA-01461 above 32767 bytes.
+        // used to raise ORA-01461 once a value outgrew VARCHAR2.
         insertSourceRow(4, MEDIUM_TEXT_CHARS, 500_000, '字', (byte) 0xcd);
         DataSyncService.TableSyncResult incremental = sync(progressAfterBaseline());
         assertThat(incremental.isSuccess()).as(incremental.getError()).isTrue();

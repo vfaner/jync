@@ -66,19 +66,31 @@ public interface SqlDialect {
     }
 
     /**
-     * Largest string/byte value this dialect can bind inline; anything larger must be sent
-     * as a LOB handle. Oracle's answer is 32767 because a {@code MERGE ... USING (SELECT ?)}
-     * projection binds the placeholder as a LONG — not as the CLOB column it is assigned to —
-     * and a LONG is capped at 32767 bytes, failing with ORA-01461 above it.
+     * Largest string value this dialect can bind inline; anything larger must be sent as a
+     * LOB handle. Oracle's answer is 4000: a {@code MERGE ... USING (SELECT ?)} projection
+     * binds the placeholder as a LONG — not as the CLOB column it is assigned to — as soon
+     * as the value outgrows VARCHAR2, and Oracle answers ORA-01461. Binary values answer to
+     * a different limit; see {@link #maxInlineBinaryBindBytes()}.
      */
     default int maxInlineBindBytes() {
         return Integer.MAX_VALUE;
     }
 
     /**
+     * Largest binary value this dialect can bind inline. Oracle's answer is 2000 — RAW's own
+     * cap. Past it the driver switches to a LONG RAW, and a
+     * {@code MERGE ... USING (SELECT ?)} projection keeps that type, so a BLOB column answers
+     * ORA-01461 exactly as it does for oversized text. Dialects with a single ceiling
+     * inherit their text one here.
+     */
+    default int maxInlineBinaryBindBytes() {
+        return maxInlineBindBytes();
+    }
+
+    /**
      * Whether a streamed LOB must first be copied into a server-side temporary LOB.
      * Oracle's MERGE projection binds the placeholder as a LONG, so
-     * {@code setCharacterStream} hits the same 32767-byte ceiling as {@code setString};
+     * {@code setCharacterStream} fails the same way {@code setString} does;
      * {@code createClob()} + {@code setClob} is the only way to send a larger value.
      */
     default boolean requiresServerSideLob() {

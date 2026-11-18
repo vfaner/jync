@@ -216,9 +216,14 @@ public final class JdbcRowMapper {
     /**
      * Reads one column with the getter its JDBC type needs. Split out of {@link #readRowInto}
      * so the vendor-type normalization above stays the first thing the reader sees.
+     *
+     * <p>Public because the ETL extraction cursor reads through the same method: a column
+     * whose JDBC type misreports its value (MySQL {@code YEAR} reported as {@code DATE}) or
+     * comes back as a driver-private object (PostgreSQL json/enum/array) must be read the
+     * same way on both paths, or the copy path drifts from what the sync reader guarantees.
      */
-    private static Object readValue(ResultSet rs, int idx, int type, String typeName,
-                                    com.qqmu.jync.model.DatabaseType sourceType)
+    public static Object readValue(ResultSet rs, int idx, int type, String typeName,
+                                   com.qqmu.jync.model.DatabaseType sourceType)
             throws SQLException {
         Object value;
         switch (type) {
@@ -442,8 +447,8 @@ public final class JdbcRowMapper {
                                   com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker)
             throws SQLException {
         // A value above the target's inline ceiling (Oracle's MERGE binds placeholders as
-        // LONGs, capped at 32767 bytes) needs a server-side temporary LOB; an empty string
-        // into a CLOB must go the same way, because Oracle binds '' as NULL.
+        // LONGs once they outgrow VARCHAR2's 4000 bytes) needs a server-side temporary LOB;
+        // an empty string into a CLOB must go the same way, because Oracle binds '' as NULL.
         if (com.qqmu.jync.service.lob.LobBinder.bind(ps, idx, value, targetType,
                 targetDialect, lobTracker)) {
             return;
@@ -573,6 +578,27 @@ public final class JdbcRowMapper {
         } catch (SQLException e) {
             ps.setTimestamp(idx, Timestamp.valueOf(value));
         }
+    }
+
+    /**
+     * Binds one value onto a target statement through the same normalization a row write
+     * uses: the temporary-LOB diversion first, then the {@code java.time} and vendor-value
+     * conversions described in {@link #bindValue}.
+     *
+     * <p>Public for the ETL copy loop, which has no {@code Map} row to hand to
+     * {@link #bind(PreparedStatement, Map, List, Map, com.qqmu.jync.service.converter.SqlDialect,
+     * com.qqmu.jync.service.lob.LobBinder.Tracker)}. Bound as a bare {@code setObject} — what
+     * the ETL writer did before — a MySQL {@code BIT(n>1)} byte array lands in an integer
+     * target column as bytes, and a Boolean into a PostgreSQL integer column is rejected.
+     */
+    public static void bindTargetValue(PreparedStatement ps, int idx, Object value,
+                                       Integer targetType,
+                                       com.qqmu.jync.service.converter.SqlDialect targetDialect,
+                                       com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker)
+            throws SQLException {
+        bindValue(ps, idx, value, targetType,
+                targetDialect != null && targetDialect.requiresTypedTemporalBind(),
+                targetDialect, lobTracker);
     }
 
     /**

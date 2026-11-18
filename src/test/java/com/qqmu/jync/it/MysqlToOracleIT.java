@@ -264,9 +264,11 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
     }
 
     /**
-     * 生产事故的回归:大于 32767 字节的文本经 Oracle 的 {@code MERGE ... USING (SELECT ?)}
-     * 绑定时报 ORA-01461 —— 占位符被当成 LONG,而不是它要写入的 CLOB 列。CDC 增量回放
-     * 走的正是 MERGE,基线走 INSERT-first 躲过了这个问题。二进制同理。
+     * 生产事故的回归:文本经 Oracle 的 {@code MERGE ... USING (SELECT ?)} 绑定时报
+     * ORA-01461 —— 占位符一旦超出行内 VARCHAR2(4000 字节)就被当成 LONG,而不是它要写入
+     * 的 CLOB 列。CDC 增量回放走的正是 MERGE,基线走 INSERT-first 躲过了这个问题。
+     * 两档都覆盖:远超上限的大文本/大二进制,以及中段——4001–32767 字节的文本、2001 字节
+     * 以上的二进制。旧实现以为 32767 才是上限,这段区间一直留在会失败的行内路径上。
      */
     @Test
     void largeTextAndBinaryThroughMergeDoNotRaiseOra01461() throws Exception {
@@ -275,6 +277,7 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
             st.execute("CREATE TABLE ora_lob (id BIGINT PRIMARY KEY,"
                     + " body LONGTEXT, bin LONGBLOB)");
             st.execute("INSERT INTO ora_lob VALUES (1, REPEAT('a', 1000), REPEAT(UNHEX('41'), 10))");
+            st.execute("INSERT INTO ora_lob VALUES (2, REPEAT('b', 1000), REPEAT(UNHEX('43'), 10))");
         }
         dropTarget("ORA_LOB");
 
@@ -282,12 +285,15 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
         manager.ensureStarted(project);
         waitFor("baseline done", 180_000, () -> positionStore.find(project.getId())
                 .map(p -> p.isBaselineDone()).orElse(false));
-        waitFor("seeded row", 120_000, () -> countTarget("ORA_LOB") == 1);
+        waitFor("seeded rows", 120_000, () -> countTarget("ORA_LOB") == 2);
 
-        // 120000 个汉字 = 360000 字节,远超 LONG 上限;40 KB 二进制走临时 BLOB。
+        // 行 1:120000 个汉字 = 360000 字节,远超 LONG 上限;40 KB 二进制走临时 BLOB。
+        // 行 2:3000 个汉字 = 9000 字节,落在文本的旧死区;3001 字节二进制超过 RAW(2000)。
         try (Connection src = sourceJdbc(); Statement st = src.createStatement()) {
             st.execute("UPDATE ora_lob SET body = REPEAT('中', 120000),"
                     + " bin = REPEAT(UNHEX('42'), 40000) WHERE id = 1");
+            st.execute("UPDATE ora_lob SET body = REPEAT('文', 3000),"
+                    + " bin = REPEAT(UNHEX('44'), 3001) WHERE id = 2");
         }
         waitFor("streamed large lob", 180_000, () -> {
             try {
@@ -300,6 +306,17 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
                 return false;
             }
         });
+        waitFor("mid-range text and binary", 180_000, () -> {
+            try {
+                Map<String, Object> row = queryTarget(
+                        "SELECT DBMS_LOB.GETLENGTH(body) AS \"tl\","
+                        + " DBMS_LOB.GETLENGTH(bin) AS \"bl\" FROM ORA_LOB WHERE id = 2").get(0);
+                return ((Number) row.get("tl")).longValue() == 3000L
+                        && ((Number) row.get("bl")).longValue() == 3001L;
+            } catch (RuntimeException e) {
+                return false;
+            }
+        });
 
         // JDBC 返回的是 oracle.sql.CLOB 句柄,内容用 SQL 侧函数校验。
         // DBMS_LOB.SUBSTR 的数量/起点按字符计(不是字节)。
@@ -308,6 +325,8 @@ class MysqlToOracleIT extends CdcMySqlContainerHarnessIT {
                 .get(0);
         assertThat(edges.get("head")).isEqualTo("中中中");
         assertThat(edges.get("tail")).isEqualTo("中中中");
+        assertThat(queryTarget("SELECT DBMS_LOB.SUBSTR(body, 3, 1) AS \"head\""
+                + " FROM ORA_LOB WHERE id = 2").get(0).get("head")).isEqualTo("文文文");
 
         manager.ensureStopped(project.getId());
         disableProject(project);

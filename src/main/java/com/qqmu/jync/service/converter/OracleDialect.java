@@ -234,16 +234,33 @@ public class OracleDialect extends AbstractSqlDialect {
     }
 
     /**
-     * A {@code MERGE ... USING (SELECT ? AS c FROM DUAL)} placeholder is bound as a LONG:
-     * 32767 bytes, counted in the server charset. Above it the driver raises ORA-01461 even
-     * though the column is a CLOB, and no driver convenience (setStringForClob,
-     * setCharacterStream, setObject with Types.CLOB) avoids it — only a temporary CLOB does.
+     * The largest value Oracle still accepts as an inline VARCHAR2 bind. Past 4000 bytes the
+     * driver switches the parameter to a LONG, and a
+     * {@code MERGE ... USING (SELECT ? AS c FROM DUAL)} projection has no column type to
+     * go on, so the bind stays a LONG — which a CLOB column refuses with ORA-01461 even
+     * though the value fits it perfectly. No driver convenience (setStringForClob,
+     * setCharacterStream, setObject with Types.CLOB) avoids it; only a temporary CLOB does.
      * The binder measures UTF-8 bytes, which over-estimates AL16UTF16/GBK sized text and so
      * sends a borderline value through the safe path.
+     *
+     * <p>32767 — the LONG column's own cap — is NOT the bound to use: everything between
+     * 4001 and 32767 bytes then stays on the failing inline path. That gap was the
+     * MySQL LONGTEXT → Oracle 12c CLOB ORA-01461 regression.
      */
     @Override
     public int maxInlineBindBytes() {
-        return 32767;
+        return 4000;
+    }
+
+    /**
+     * RAW's own cap, and the same trap as text: past 2000 bytes the driver binds a LONG RAW,
+     * a {@code MERGE ... USING (SELECT ?)} projection keeps it, and a BLOB column rejects it
+     * with ORA-01461. {@link #binaryType(int)} already turns anything wider than RAW(2000)
+     * into a BLOB, so every value above this line belongs on the temporary-BLOB path.
+     */
+    @Override
+    public int maxInlineBinaryBindBytes() {
+        return 2000;
     }
 
     @Override
@@ -274,7 +291,7 @@ public class OracleDialect extends AbstractSqlDialect {
         // varcharType turns anything wider than VARCHAR2(1000 CHAR) — or with no reported
         // width at all — into a CLOB, and binaryType anything over RAW(2000) into a BLOB.
         // The MERGE placeholder type comes from this method, so such a column would keep
-        // binding its ordinary String/byte[]: above 32767 bytes it hits ORA-01461 anyway,
+        // binding its ordinary String/byte[]: past 4000 bytes it hits ORA-01461 anyway,
         // and an empty string misses the ''→empty-CLOB rescue. Follow the type the column
         // was actually created with (mapByJdbcType is the same input CREATE TABLE uses;
         // it never logs, so the per-row CDC path stays quiet).

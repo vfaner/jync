@@ -43,8 +43,8 @@ import com.qqmu.jync.service.sync.SyncContext;
  * Oracle 23ai Free → MySQL 8：{@code CLOB} / {@code BLOB} 大字段的全量基线（目标空表
  * INSERT-first）与之后的增量 upsert。
  *
- * <p>这是矩阵里此前唯一空缺的“Oracle 源 → MySQL 目标”大字段方向。值都超过 Oracle 的
- * 32767 字节绑定上限（{@link #BIG_TEXT_CHARS} 个汉字 ≈ 600 KB），因此两条写入路径都必须
+ * <p>这是矩阵里此前唯一空缺的“Oracle 源 → MySQL 目标”大字段方向。值都远超 Oracle 的
+ * 内联绑定上限（VARCHAR2 4000 字节；{@link #BIG_TEXT_CHARS} 个汉字 ≈ 600 KB），因此两条写入路径都必须
  * 走临时 LOB / 流式绑定；同时 {@code inline-max-bytes=1024} 强制读端走流式，值不会整块
  * 进入堆。校验只取长度、头尾片段，不把整值读回 JVM。
  *
@@ -58,7 +58,7 @@ class OracleToMysqlLobIT {
 
     private static final int BIG_TEXT_CHARS = 200_000;   // ≈ 600 KB of UTF-8
     private static final int BIG_BLOB_BYTES = 1_000_000;
-    /** 40 000 汉字 = 120 000 字节，超过 Oracle 的 32767 字节绑定上限。 */
+    /** 40 000 汉字 = 120 000 字节，超过 Oracle 的内联绑定上限（4000 字节）。 */
     private static final int MEDIUM_TEXT_CHARS = 40_000;
 
     @Container
@@ -96,7 +96,7 @@ class OracleToMysqlLobIT {
         assertThat(medium.get("head")).isEqualTo("文文文");
 
         // Incremental window: the new row is written through the upsert path, which for
-        // Oracle sources has to stream a >32767-byte value without a LONG placeholder.
+        // Oracle sources has to stream a value above the inline limit without a LONG placeholder.
         insertSourceRow(4, MEDIUM_TEXT_CHARS, 500_000, '字', (byte) 0xcd);
         DataSyncService.TableSyncResult incremental = sync(progressAfterBaseline());
         assertThat(incremental.isSuccess()).as(incremental.getError()).isTrue();

@@ -94,6 +94,66 @@ class JdbcEtlSourceResumeKeyTest {
         verify(ps).setObject(1, LocalDateTime.of(1948, 5, 1, 0, 0));
     }
 
+    /**
+     * A zone-aware resume key cannot be bound as text on PostgreSQL: bound as
+     * {@code varchar}, the continuation fails outright with "operator does not exist:
+     * timestamp with time zone &gt; character varying" (docker 实测, pgjdbc 42.7). The
+     * checkpoint text the driver rendered ("2026-11-18 10:00:00+08") carries the instant;
+     * bind that.
+     */
+    @Test
+    void aPostgresZoneAwareResumeKeyBindsTheInstantItCarries() throws Exception {
+        PreparedStatement ps = mock(PreparedStatement.class);
+
+        JdbcEtlSource.bindResumeKey(ps, new EtlCheckpointValue(
+                Types.TIMESTAMP_WITH_TIMEZONE, "2026-11-18 10:00:00+08"),
+                DatabaseType.POSTGRESQL);
+
+        verify(ps).setTimestamp(1, Timestamp.from(
+                java.time.OffsetDateTime.parse("2026-11-18T10:00:00+08:00").toInstant()));
+        verify(ps, never()).setString(eq(1), any());
+    }
+
+    @Test
+    void aSqlRenderedFractionalZoneAwareKeyAlsoBinds() throws Exception {
+        PreparedStatement ps = mock(PreparedStatement.class);
+
+        JdbcEtlSource.bindResumeKey(ps, new EtlCheckpointValue(
+                Types.TIMESTAMP_WITH_TIMEZONE, "2026-11-18 10:00:00.123456+08:00"),
+                DatabaseType.POSTGRESQL);
+
+        verify(ps).setTimestamp(1, Timestamp.from(
+                java.time.OffsetDateTime.parse("2026-11-18T10:00:00.123456+08:00").toInstant()));
+    }
+
+    /**
+     * Oracle renders TIMESTAMP WITH TIME ZONE through the session's NLS format, and its
+     * implicit VARCHAR2 conversion parses that same text back — so the driver text stays
+     * the correct bind there, exactly as before this rule existed.
+     */
+    @Test
+    void aNonPostgresZoneAwareResumeKeyKeepsItsDriverText() throws Exception {
+        PreparedStatement ps = mock(PreparedStatement.class);
+        String driverText = "18-11月-26 10.00.00.000000 上午 +08:00";
+
+        JdbcEtlSource.bindResumeKey(ps, new EtlCheckpointValue(
+                Types.TIMESTAMP_WITH_TIMEZONE, driverText), DatabaseType.ORACLE);
+
+        verify(ps).setString(1, driverText);
+        verify(ps, never()).setTimestamp(eq(1), any(Timestamp.class));
+    }
+
+    @Test
+    void anUnparseableZoneAwareKeyStillBindsAsText() throws Exception {
+        PreparedStatement ps = mock(PreparedStatement.class);
+
+        JdbcEtlSource.bindResumeKey(ps, new EtlCheckpointValue(
+                Types.TIMESTAMP_WITH_TIMEZONE, "14-NOV-26 10.00.00 AM +08:00"),
+                DatabaseType.POSTGRESQL);
+
+        verify(ps).setString(1, "14-NOV-26 10.00.00 AM +08:00");
+    }
+
     @Test
     void aNonTemporalResumeKeyIsUnaffected() throws Exception {
         PreparedStatement ps = mock(PreparedStatement.class);
