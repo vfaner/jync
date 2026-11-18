@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* AI 运维助手：右下角悬浮入口 + 抽屉式对话面板。所有文案、工具名与提交地址
+       由服务端渲染进 data-*，脚本里不出现任何中文/英文界面文案。 */-->
+<th:block th:fragment="widget">
+<div id="support-widget" class="support-widget"
+     th:data-action="@{/api/support/chat}"
+     th:data-draft-url="@{/projects/new}"
+     th:data-label-thinking="#{support.thinking}"
+     th:data-label-timeout="#{support.timeout}"
+     th:data-label-disabled="#{support.disabled}"
+     th:data-label-busy="#{support.busy}"
+     th:data-label-used="#{support.draft.used}"
+     th:data-label-expired="#{support.draft.expired}"
+     th:data-label-open="#{support.draft.open}"
+     th:data-label-send="#{support.send}"
+     th:data-label-restore="#{support.restore}"
+     th:data-label-network="#{error.network}"
+     th:data-tool-list_projects="#{support.tool.list_projects}"
+     th:data-tool-project_status="#{support.tool.project_status}"
+     th:data-tool-project_row_count="#{support.tool.project_row_count}"
+     th:data-tool-database_metrics="#{support.tool.database_metrics}"
+     th:data-tool-list_connections="#{support.tool.list_connections}"
+     th:data-tool-search_docs="#{support.tool.search_docs}"
+     th:data-tool-draft_project="#{support.tool.draft_project}">
+
+  <button type="button" class="support-fab" data-role="support-toggle"
+          th:aria-label="#{support.open}" th:title="#{support.open}">
+    <svg class="ico"><use href="#chat-dots"/></svg>
+  </button>
+
+  <section class="support-panel" data-role="support-panel" hidden
+           th:aria-label="#{support.title}">
+    <header class="support-head" data-role="support-drag">
+      <span class="support-title">
+        <svg class="ico"><use href="#chat-dots"/></svg>
+        <span th:text="#{support.title}">AI assistant</span>
+      </span>
+      <span class="support-actions">
+        <button type="button" class="support-icon-btn" data-role="support-new"
+                th:aria-label="#{support.newSession}" th:title="#{support.newSession}">
+          <svg class="ico"><use href="#plus-lg"/></svg>
+        </button>
+        <button type="button" class="support-icon-btn" data-role="support-max"
+                th:aria-label="#{support.maximize}" th:title="#{support.maximize}">
+          <svg class="ico"><use href="#arrows-angle-expand"/></svg>
+        </button>
+        <button type="button" class="support-icon-btn" data-role="support-close"
+                th:aria-label="#{support.close}" th:title="#{support.close}">
+          <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+      </span>
+    </header>
+
+    <div class="support-log" data-role="support-log" aria-live="polite"
+         th:attr="data-empty=#{support.placeholder}"></div>
+
+    <form class="support-form" data-role="support-form">
+      <textarea class="support-input" data-role="support-input" rows="1" maxlength="4000"
+                th:placeholder="#{support.placeholder}"></textarea>
+      <button type="submit" class="support-send" data-role="support-send"
+              th:aria-label="#{support.send}" th:title="#{support.send}">
+        <svg class="ico"><use href="#send"/></svg>
+      </button>
+    </form>
+
+    <span class="support-resize" data-role="support-resize" aria-hidden="true"></span>
+  </section>
+</div>
+</th:block>
+</body>
+</html>

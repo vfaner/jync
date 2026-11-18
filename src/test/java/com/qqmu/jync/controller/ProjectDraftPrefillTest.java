@@ -89,7 +89,9 @@ class ProjectDraftPrefillTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(page).contains("support.draft.expired");
+        // The message must be translated now that the key exists; a missing key would render
+        // as ??support.draft.expired_zh_CN?? and leak the raw name into the page.
+        assertThat(page).doesNotContain("support.draft.expired");
         assertThat(page).doesNotContain("draftSuggestion");
     }
 }

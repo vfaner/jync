@@ -888,6 +888,11 @@
 <script th:src="@{/js/charts.js(v=${appVersion})}"></script>
 <script th:src="@{/js/app.js(v=${appVersion})}"></script>
 <script th:src="@{/js/sql-highlight.js(v=${appVersion})}"></script>
+<!--/* AI 运维助手：只读视图者与 AI 关闭时整块不渲染；面板样式与脚本随之缺席。 */-->
+<th:block th:if="${supportEnabled}">
+    <div th:replace="~{fragments/support-widget :: widget}"></div>
+    <script th:src="@{/js/support.js(v=${appVersion})}"></script>
+</th:block>
 <th:block th:replace="${scripts} ?: _"></th:block>
 </body>
 </html>

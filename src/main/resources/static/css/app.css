@@ -2136,3 +2136,98 @@ a.type-card:focus-visible {
 [data-theme="dark"] .precheck-ok    { color: #34d399; }
 [data-theme="dark"] .precheck-warn  { color: #fbbf24; }
 [data-theme="dark"] .precheck-error { color: #f87171; }
+
+/* ==========================================================================
+   AI 运维助手悬浮窗
+   收起：右下角渐变按钮；抽屉：380×560；拖拽调大小；最大化覆盖当前页面。
+   z-index：FAB 1340，面板 1350 —— 高于 toast(1080)，低于捐赠弹窗(1400)。
+   ========================================================================== */
+.support-widget { position: fixed; z-index: 1350; right: 20px; bottom: 20px; }
+.support-fab {
+  width: 56px; height: 56px; border: 0; border-radius: 50%; cursor: pointer;
+  display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, var(--brand-light), var(--accent));
+  box-shadow: var(--shadow-brand); transition: transform .15s ease, box-shadow .15s ease;
+}
+.support-fab:hover { transform: translateY(-2px); box-shadow: 0 14px 44px rgba(79,70,229,.35); }
+.support-fab .ico { width: 26px; height: 26px; }
+
+.support-panel {
+  position: fixed; right: 20px; bottom: 20px; width: 380px; height: 560px;
+  min-width: 320px; min-height: 420px; max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px); display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  overflow: hidden; animation: support-in .18s ease-out;
+}
+/* 作者样式的 display:flex 会压过 [hidden] 的 UA 规则，必须显式恢复。 */
+.support-panel[hidden] { display: none; }
+@keyframes support-in { from { opacity: 0; transform: translateY(10px) scale(.98); } }
+.support-widget.is-open .support-fab { display: none; }
+.support-widget.is-max::before {
+  content: ''; position: fixed; inset: 0; background: rgba(15,23,42,.32);
+  z-index: 1345; backdrop-filter: blur(2px);
+}
+.support-widget.is-max .support-panel { inset: 24px; width: auto; height: auto; max-width: none; max-height: none; z-index: 1350; }
+.support-widget.is-max .support-resize { display: none; }
+
+.support-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 12px 14px; color: #fff; cursor: default; user-select: none;
+  background: linear-gradient(120deg, var(--brand-dark), var(--brand-light) 55%, var(--accent));
+}
+.support-title { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
+.support-title .ico { width: 18px; height: 18px; }
+.support-actions { display: inline-flex; gap: 2px; }
+.support-icon-btn {
+  width: 30px; height: 30px; border: 0; border-radius: 8px; cursor: pointer;
+  display: grid; place-items: center; color: #fff; background: transparent;
+}
+.support-icon-btn:hover { background: rgba(255,255,255,.18); }
+.support-icon-btn .ico { width: 16px; height: 16px; }
+
+.support-log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-soft); }
+.support-log:empty::before { content: attr(data-empty); color: var(--ink-mute); font-size: 13px; line-height: 1.6; }
+.support-msg {
+  max-width: 86%; padding: 9px 12px; border-radius: 14px; font-size: 14px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+}
+.support-user { align-self: flex-end; color: #fff; background: linear-gradient(135deg, var(--brand), var(--brand-light)); border-bottom-right-radius: 4px; }
+.support-assistant { align-self: flex-start; background: var(--bg); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.support-error { align-self: center; color: var(--danger); background: var(--fb-danger-08); font-size: 13px; }
+.support-msg.is-thinking { color: var(--ink-mute); font-style: italic; }
+.support-tool { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--ink-soft); font-size: 12px; }
+
+.support-draft {
+  align-self: flex-start; width: 100%; padding: 12px; border-radius: var(--radius);
+  background: var(--fb-brand-06); border: 1px solid var(--fb-brand-20);
+}
+.support-draft strong { display: block; margin-bottom: 4px; }
+.support-draft p { margin: 0 0 10px; color: var(--ink-soft); font-size: 13px; }
+
+.support-form { display: flex; align-items: flex-end; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: var(--bg); }
+.support-input {
+  flex: 1; resize: none; min-height: 40px; max-height: 144px; padding: 10px 12px;
+  border: 1px solid var(--line); border-radius: 12px; font: inherit; font-size: 14px;
+  color: var(--ink); background: var(--bg-soft);
+}
+.support-input:focus { outline: none; border-color: var(--brand-light); box-shadow: 0 0 0 3px var(--fb-brand-12); }
+.support-send {
+  width: 40px; height: 40px; border: 0; border-radius: 12px; cursor: pointer;
+  display: grid; place-items: center; color: #fff;
+  background: linear-gradient(135deg, var(--brand), var(--brand-light));
+}
+.support-send:disabled { opacity: .5; cursor: default; }
+.support-send .ico { width: 18px; height: 18px; }
+
+.support-resize {
+  position: absolute; left: 2px; top: 2px; width: 16px; height: 16px;
+  cursor: nwse-resize; opacity: .45;
+  background: linear-gradient(135deg, var(--line) 0 2px, transparent 2px 100%);
+}
+.support-resize:hover { opacity: 1; }
+
+@media (max-width: 640px) {
+  .support-widget { right: 12px; bottom: 12px; }
+  .support-panel { right: 8px; bottom: 8px; width: calc(100vw - 16px); height: min(560px, calc(100vh - 16px)); }
+}
