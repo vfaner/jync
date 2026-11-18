@@ -73,6 +73,14 @@ public class EtlTask {
     @Column(name = "source_filter", length = 4000)
     private String sourceFilter;
 
+    /**
+     * Optional {@code name=value} lines answering the {@code ${name}} references in this task's
+     * SQL. Kept as text so the form round-trips exactly what the operator wrote.
+     */
+    @Lob
+    @Column(name = "variables", length = Integer.MAX_VALUE)
+    private String variables;
+
     /** Optional SQL executed before extraction: cleanup, deletions, transformations. */
     @Lob
     @Column(name = "pre_sql", length = 2000)

@@ -52,6 +52,9 @@ final class EtlTaskValidation {
     static void validateExtraction(EtlTask task, DatabaseConfigService configs) {
         DatabaseConfig source = validateConnections(configs,
                 task.getSourceDbId(), task.getTargetDbId());
+        // A placeholder nothing can answer would otherwise fail on every scheduled run. The
+        // Mongo collection and filter are not SQL, so a native source scans only pre/post SQL.
+        EtlSqlVariables.validateReferences(task, !isNativeMongo(source));
         if (isNativeMongo(source)) {
             validateMongoExtraction(task);
         } else {

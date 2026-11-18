@@ -158,6 +158,7 @@ public class EtlTaskService {
         entity.setUpsertKeyColumns(trimToNull(form.getUpsertKeyColumns()));
         entity.setPreSql(trimToNull(form.getPreSql()));
         entity.setPostSql(trimToNull(form.getPostSql()));
+        entity.setVariables(trimToNull(form.getVariables()));
         // A member never schedules itself: the batch owns the cron and the enabled flag.
         entity.setCronExpression(member ? null : trimToNull(form.getCronExpression()));
         if (member) {
@@ -364,6 +365,8 @@ public class EtlTaskService {
                 || !Objects.equals(trimToNull(before.getSourceSql()), trimToNull(after.getSourceSql()))
                 || !Objects.equals(trim(before.getSourceCollection()), trim(after.getSourceCollection()))
                 || !Objects.equals(trimToNull(before.getSourceFilter()), trimToNull(after.getSourceFilter()))
+                // The definitions decide what the query asks for just as much as the SQL does.
+                || !Objects.equals(trimToNull(before.getVariables()), trimToNull(after.getVariables()))
                 || !Objects.equals(trim(before.getTargetTable()), trim(after.getTargetTable()))
                 || before.getWriteMode() != after.getWriteMode()
                 || !Objects.equals(trim(before.getRangeCondition()), trim(after.getRangeCondition()))

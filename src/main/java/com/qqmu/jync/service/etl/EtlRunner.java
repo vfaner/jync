@@ -7,6 +7,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -62,19 +63,26 @@ public class EtlRunner {
     private final SqlDialectFactory dialectFactory;
     private final EtlCheckpointStore checkpointStore;
     private final EtlSourceFactory sourceFactory;
+    private final Clock clock;
 
     /** Test-friendly constructor: every source is read through JDBC, as before. */
     public EtlRunner(SqlDialectFactory dialectFactory, EtlCheckpointStore checkpointStore) {
         this(dialectFactory, checkpointStore, (config, connections) ->
-                new JdbcEtlSource(connections.open(config), config));
+                new JdbcEtlSource(connections.open(config), config), Clock.systemDefaultZone());
     }
 
     @Autowired
     public EtlRunner(SqlDialectFactory dialectFactory, EtlCheckpointStore checkpointStore,
                      EtlSourceFactory sourceFactory) {
+        this(dialectFactory, checkpointStore, sourceFactory, Clock.systemDefaultZone());
+    }
+
+    EtlRunner(SqlDialectFactory dialectFactory, EtlCheckpointStore checkpointStore,
+              EtlSourceFactory sourceFactory, Clock clock) {
         this.dialectFactory = dialectFactory;
         this.checkpointStore = checkpointStore;
         this.sourceFactory = sourceFactory;
+        this.clock = clock;
     }
 
     public EtlRunResult run(EtlTask task, DatabaseConfig sourceConfig,
@@ -89,6 +97,17 @@ public class EtlRunner {
         Side stage = Side.PROGRAM;
 
         try {
+            if (task == null) {
+                throw new EtlProgramException("task is missing");
+            }
+            // One resolution for the whole run: pre-sql, the extraction, the range condition
+            // and post-sql cannot straddle midnight, and an unknown name fails as this task's
+            // defect before any connection is opened. Resolution comes before validation so
+            // the checks judge the SQL that will actually run — a definition that empties the
+            // extraction or the range condition is a program defect, not a target-side error.
+            // The entity itself keeps its placeholders.
+            task = EtlSqlVariables.resolve(task,
+                    !EtlTaskValidation.isNativeMongo(sourceConfig), clock, targetConfig);
             validate(task, sourceConfig, targetConfig);
 
             DatabaseType sourceType = sourceConfig.effectiveType();
@@ -436,8 +455,7 @@ public class EtlRunner {
         }
         if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE
                 && !notBlank(task.getRangeCondition())) {
-            throw new EtlProgramException(
-                    "a range overwrite needs a range condition on the target table");
+            throw new EtlProgramException("error.etl.range.required");
         }
         if (task.getWriteMode() == EtlWriteMode.UPSERT) {
             List<String> keys = EtlUpsertSql.parse(task.getUpsertKeyColumns());
@@ -459,7 +477,7 @@ public class EtlRunner {
                 && sourceConfig.effectiveType() == DatabaseType.MONGODB_NATIVE) {
             validateMongoSource(task);
         } else if (!notBlank(task.getSourceSql())) {
-            throw new EtlProgramException("extraction SQL is empty");
+            throw new EtlProgramException("error.etl.sql.required");
         } else {
             // Refuse a script that cannot run before any connection opens; the refusal is a
             // program error whose message is the i18n key.

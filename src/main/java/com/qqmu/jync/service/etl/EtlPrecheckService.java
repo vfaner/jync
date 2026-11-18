@@ -5,6 +5,7 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Clock;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,21 +40,29 @@ public class EtlPrecheckService {
     private final DatabaseConfigService databaseConfigService;
     private final DataSourceManager dataSourceManager;
     private final EtlSourceFactory sourceFactory;
+    private final Clock clock;
 
     /** Test-friendly constructor: every source is probed through JDBC, as before. */
     public EtlPrecheckService(DatabaseConfigService databaseConfigService,
                               DataSourceManager dataSourceManager) {
         this(databaseConfigService, dataSourceManager, (config, connections) ->
-                new JdbcEtlSource(connections.open(config), config));
+                new JdbcEtlSource(connections.open(config), config), Clock.systemDefaultZone());
     }
 
     @org.springframework.beans.factory.annotation.Autowired
     public EtlPrecheckService(DatabaseConfigService databaseConfigService,
                               DataSourceManager dataSourceManager,
                               EtlSourceFactory sourceFactory) {
+        this(databaseConfigService, dataSourceManager, sourceFactory, Clock.systemDefaultZone());
+    }
+
+    EtlPrecheckService(DatabaseConfigService databaseConfigService,
+                       DataSourceManager dataSourceManager, EtlSourceFactory sourceFactory,
+                       Clock clock) {
         this.databaseConfigService = databaseConfigService;
         this.dataSourceManager = dataSourceManager;
         this.sourceFactory = sourceFactory;
+        this.clock = clock;
     }
 
     /** Prechecks a form that has not been saved yet. */
@@ -70,6 +79,10 @@ public class EtlPrecheckService {
 
     EtlPrecheckResult check(EtlTask task, DatabaseConfig sourceConfig,
                             DatabaseConfig targetConfig, EtlConnectionProvider connections) {
+        // The probe must execute the SQL the run would execute, with the same clock instant
+        // the run would see in its own zone. The caller's form keeps its placeholders.
+        task = EtlSqlVariables.resolve(task,
+                !EtlTaskValidation.isNativeMongo(sourceConfig), clock, targetConfig);
         List<EtlPrecheckResult.Check> checks = new ArrayList<>();
         List<EtlPrecheckResult.ColumnInfo> columns = new ArrayList<>();
         int timeout = timeout(task.getTimeoutSeconds());
@@ -138,7 +151,11 @@ public class EtlPrecheckService {
             // Creating the table is the runner's first step, so this is information, not a fault.
             checks.add(ok("etl.precheck.target.missing", name));
             if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE) {
-                checks.add(ok("etl.precheck.range.skipped", null));
+                // Resolution can leave the condition empty even though save saw a non-blank
+                // placeholder; the run refuses that, so the precheck must not stay green.
+                checks.add(rangeConditionBlank(task)
+                        ? error("error.etl.range.required", null)
+                        : ok("etl.precheck.range.skipped", null));
             }
             return;
         }
@@ -234,8 +251,11 @@ public class EtlPrecheckService {
 
     private static void checkRangeCondition(Connection target, String name, EtlTask task,
                                             int timeout, List<EtlPrecheckResult.Check> checks) {
-        if (task.getWriteMode() != EtlWriteMode.RANGE_OVERWRITE
-                || task.getRangeCondition() == null || task.getRangeCondition().isBlank()) {
+        if (task.getWriteMode() != EtlWriteMode.RANGE_OVERWRITE) {
+            return;
+        }
+        if (rangeConditionBlank(task)) {
+            checks.add(error("error.etl.range.required", null));
             return;
         }
         String sql = "SELECT 1 FROM " + name
@@ -251,6 +271,10 @@ public class EtlPrecheckService {
     }
 
     // --- helpers --------------------------------------------------------------------------
+
+    private static boolean rangeConditionBlank(EtlTask task) {
+        return task.getRangeCondition() == null || task.getRangeCondition().isBlank();
+    }
 
     private static int timeout(Integer configured) {
         if (configured == null || configured <= 0) {

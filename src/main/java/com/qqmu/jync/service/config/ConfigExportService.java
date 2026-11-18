@@ -327,7 +327,8 @@ public class ConfigExportService {
     private static ConfigPackageDtos.EtlTaskDto toDto(EtlTask task) {
         return new ConfigPackageDtos.EtlTaskDto(task.getId(), task.getName(), task.getDescription(),
                 task.getSourceDbId(), task.getTargetDbId(), task.getBatchId(), task.getSourceSql(),
-                task.getSourceCollection(), task.getSourceFilter(), task.getPreSql(),
+                task.getSourceCollection(), task.getSourceFilter(), task.getVariables(),
+                task.getPreSql(),
                 task.getPostSql(), task.getTargetTable(), task.getWriteMode(),
                 task.getRangeCondition(), task.getResumeKeyColumn(),
                 task.getUpsertKeyColumns(), task.getCronExpression(),

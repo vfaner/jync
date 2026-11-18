@@ -319,6 +319,7 @@ public class ConfigImportService {
             task.setSourceSql(dto.sourceSql());
             task.setSourceCollection(dto.sourceCollection());
             task.setSourceFilter(dto.sourceFilter());
+            task.setVariables(dto.variables());
             task.setPreSql(dto.preSql());
             task.setPostSql(dto.postSql());
             task.setTargetTable(dto.targetTable());

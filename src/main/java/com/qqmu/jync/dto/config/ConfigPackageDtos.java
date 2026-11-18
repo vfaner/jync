@@ -148,6 +148,7 @@ public final class ConfigPackageDtos {
                              String sourceSql,
                              String sourceCollection,
                              String sourceFilter,
+                             String variables,
                              String preSql,
                              String postSql,
                              String targetTable,
