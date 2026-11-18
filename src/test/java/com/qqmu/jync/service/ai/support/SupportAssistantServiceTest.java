@@ -161,6 +161,17 @@ class SupportAssistantServiceTest {
     }
 
     @Test
+    void theSystemPromptCarriesTheBrandContactAndWebsiteFacts() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("沐沐开源工坊")
+                .contains("https://jync.qqmu.com")
+                .contains("817094")
+                .contains("2912167928")
+                .contains("qqmu66")
+                .contains("426669837");
+    }
+
+    @Test
     void aFailedModelCallIsReportedAndAudited() {
         when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
                 .thenReturn(new AiChatClient.ToolChatResult(

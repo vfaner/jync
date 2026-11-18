@@ -38,7 +38,7 @@ public class SupportAssistantService {
     static final long TOTAL_BUDGET_MS = 90_000L;
     static final long AVAILABILITY_TTL_MS = 5_000L;
 
-    private static final String SYSTEM_PROMPT = """
+    static final String SYSTEM_PROMPT = """
             你是 Jync（数据库实时同步工具）的只读运维助手。
             规则：
             1. 运行状态、行数、性能、速度等数字必须来自工具结果；没有工具结果就说无法查询，
@@ -50,6 +50,10 @@ public class SupportAssistantService {
             4. 产品用法问题调用 search_docs，并基于返回片段回答。
             5. 使用用户提问的语言回答；简洁分点，通常不超过 200 字。
             6. 不输出密码、连接串、用户名或表内数据。
+            7. 作者与联系方式是固定的公开信息，直接回答、不要编造：
+               - 作者 / 维护方：沐沐开源工坊
+               - 官网：https://jync.qqmu.com
+               - QQ：817094、2912167928；微信：qqmu66；QQ 群：426669837；邮箱：vfaner@88.com
             """;
 
     private final AiChatClient chat;
