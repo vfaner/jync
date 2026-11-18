@@ -66,7 +66,7 @@ public final class EtlSqlSupport {
     static String derivedTableSource(String sql, DatabaseType.DialectFamily family) {
         String stripped = stripTrailingSemicolon(sql);
         return wrapsAsDerivedTable(family)
-                ? EtlSqlScript.stripTopLevelOrderBy(stripped) : stripped;
+                ? EtlSqlScript.stripTopLevelOrderBy(stripped, family) : stripped;
     }
 
     /**
@@ -77,7 +77,7 @@ public final class EtlSqlSupport {
      * not either.
      */
     static boolean derivedTableRejects(String sql, DatabaseType.DialectFamily family) {
-        return wrapsAsDerivedTable(family) && EtlSqlScript.startsWithWith(sql);
+        return wrapsAsDerivedTable(family) && EtlSqlScript.startsWithWith(sql, family);
     }
 
     /**

@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
+import com.qqmu.jync.model.DatabaseType.DialectFamily;
+
 /**
  * The extraction box may hold a script: several statements executed in order on one source
  * connection, the last one supplying the rows. Splitting is textual and conservative — a
@@ -18,35 +20,59 @@ final class EtlSqlScript {
     private static final String EMPTY = "error.etl.script.empty";
     private static final String LAST_STATEMENT = "error.etl.script.lastStatement";
 
+    /**
+     * The scanning rules of callers that do not know their source dialect. MySQL is the
+     * historic behaviour (backslash escapes a quote) and stays the default so the no-family
+     * overloads keep their meaning.
+     */
+    private static final DialectFamily DEFAULT_FAMILY = DialectFamily.MYSQL;
+
     private EtlSqlScript() {
     }
 
     /** Refuses a script that cannot run: unterminated syntax, nothing to run, or no rows. */
     static void validate(String sql) {
-        List<String> statements = split(sql);
+        validate(sql, DEFAULT_FAMILY);
+    }
+
+    static void validate(String sql, DialectFamily family) {
+        List<String> statements = split(sql, family);
         if (statements.isEmpty()) {
             throw new IllegalArgumentException(EMPTY);
         }
-        if (statements.size() > 1 && !returnsRows(statements.get(statements.size() - 1))) {
+        if (statements.size() > 1
+                && !returnsRows(statements.get(statements.size() - 1), family)) {
             throw new IllegalArgumentException(LAST_STATEMENT);
         }
     }
 
     /** The row-returning statement of the script, without its trailing semicolon. */
     static String lastStatement(String sql) {
-        List<String> statements = split(sql);
+        return lastStatement(sql, DEFAULT_FAMILY);
+    }
+
+    static String lastStatement(String sql, DialectFamily family) {
+        List<String> statements = split(sql, family);
         return statements.isEmpty() ? null : statements.get(statements.size() - 1);
     }
 
     /** Whether the statement starts with a {@code WITH} clause, after any comments. */
     static boolean startsWithWith(String statement) {
-        List<Token> tokens = topLevelTokens(statement);
+        return startsWithWith(statement, DEFAULT_FAMILY);
+    }
+
+    static boolean startsWithWith(String statement, DialectFamily family) {
+        List<Token> tokens = topLevelTokens(statement, family);
         return !tokens.isEmpty() && isWord(tokens.get(0).word(), "WITH");
     }
 
     /** Whether the statement has an {@code ORDER BY} outside every parentheses level. */
     static boolean hasTopLevelOrderBy(String statement) {
-        return orderByStart(topLevelTokens(statement)) >= 0;
+        return hasTopLevelOrderBy(statement, DEFAULT_FAMILY);
+    }
+
+    static boolean hasTopLevelOrderBy(String statement, DialectFamily family) {
+        return orderByStart(topLevelTokens(statement, family)) >= 0;
     }
 
     /**
@@ -59,7 +85,11 @@ final class EtlSqlScript {
      * its order would change which rows it selects.
      */
     static String stripTopLevelOrderBy(String statement) {
-        List<Token> tokens = topLevelTokens(statement);
+        return stripTopLevelOrderBy(statement, DEFAULT_FAMILY);
+    }
+
+    static String stripTopLevelOrderBy(String statement, DialectFamily family) {
+        List<Token> tokens = topLevelTokens(statement, family);
         if (hasLimitingClause(tokens)) {
             return statement;
         }
@@ -101,6 +131,10 @@ final class EtlSqlScript {
      * order, and a column alias {@code "ORDER"} is not a clause.
      */
     static List<Token> topLevelTokens(String sql) {
+        return topLevelTokens(sql, DEFAULT_FAMILY);
+    }
+
+    static List<Token> topLevelTokens(String sql, DialectFamily family) {
         List<Token> tokens = new ArrayList<>();
         if (sql == null) {
             return tokens;
@@ -116,13 +150,15 @@ final class EtlSqlScript {
                     && (i == 0 || !isNameChar(sql.charAt(i - 1)))) {
                 i = appendAlternativeQuoted(sql, i, clear(sink));
             } else if (c == '\'' || c == '"' || c == '`') {
-                i = appendQuoted(sql, i, c, clear(sink));
+                i = appendQuoted(sql, i, c, clear(sink), backslashEscapes(family));
             } else if (c == '[') {
                 i = appendBracketed(sql, i, clear(sink));
             } else if (c == '-' && next == '-') {
                 i = appendLineComment(sql, i, clear(sink));
+            } else if (c == '#' && hashComments(family)) {
+                i = appendLineComment(sql, i, clear(sink));
             } else if (c == '/' && next == '*') {
-                i = appendBlockComment(sql, i, clear(sink));
+                i = appendBlockComment(sql, i, clear(sink), nestedBlockComments(family));
             } else if (c == '$' && startsDollarQuote(sql, i)) {
                 i = appendDollarQuoted(sql, i, clear(sink));
             } else if (c == '(') {
@@ -157,6 +193,10 @@ final class EtlSqlScript {
 
     /** The statements of the script, in order, without their separating semicolons. */
     static List<String> split(String sql) {
+        return split(sql, DEFAULT_FAMILY);
+    }
+
+    static List<String> split(String sql, DialectFamily family) {
         if (sql == null) {
             return List.of();
         }
@@ -174,14 +214,16 @@ final class EtlSqlScript {
                 i = appendAlternativeQuoted(sql, i, current);
             } else if (c == '\'' || c == '"' || c == '`') {
                 content = true;
-                i = appendQuoted(sql, i, c, current);
+                i = appendQuoted(sql, i, c, current, backslashEscapes(family));
             } else if (c == '[') {
                 content = true;
                 i = appendBracketed(sql, i, current);
             } else if (c == '-' && next == '-') {
                 i = appendLineComment(sql, i, current);
+            } else if (c == '#' && hashComments(family)) {
+                i = appendLineComment(sql, i, current);
             } else if (c == '/' && next == '*') {
-                i = appendBlockComment(sql, i, current);
+                i = appendBlockComment(sql, i, current, nestedBlockComments(family));
             } else if (c == '$' && startsDollarQuote(sql, i)) {
                 content = true;
                 i = appendDollarQuoted(sql, i, current);
@@ -202,12 +244,13 @@ final class EtlSqlScript {
         return statements;
     }
 
-    private static int appendQuoted(String sql, int start, char quote, StringBuilder out) {
+    private static int appendQuoted(String sql, int start, char quote, StringBuilder out,
+                                    boolean backslashEscapes) {
         out.append(quote);
         int i = start + 1;
         while (i < sql.length()) {
             char c = sql.charAt(i);
-            if (c == '\\' && i + 1 < sql.length()) {
+            if (backslashEscapes && c == '\\' && i + 1 < sql.length()) {
                 // MySQL honours the backslash escape; keeping the pair together never splits.
                 out.append(c).append(sql.charAt(i + 1));
                 i += 2;
@@ -316,16 +359,28 @@ final class EtlSqlScript {
         return i;
     }
 
-    private static int appendBlockComment(String sql, int start, StringBuilder out) {
+    private static int appendBlockComment(String sql, int start, StringBuilder out,
+                                          boolean nested) {
         out.append("/*");
+        int depth = 1;
         int i = start + 2;
         while (i < sql.length()) {
             if (sql.charAt(i) == '*' && i + 1 < sql.length() && sql.charAt(i + 1) == '/') {
                 out.append("*/");
-                return i + 2;
+                i += 2;
+                depth--;
+                if (depth == 0) {
+                    return i;
+                }
+            } else if (nested && sql.charAt(i) == '/' && i + 1 < sql.length()
+                    && sql.charAt(i + 1) == '*') {
+                out.append("/*");
+                i += 2;
+                depth++;
+            } else {
+                out.append(sql.charAt(i));
+                i++;
             }
-            out.append(sql.charAt(i));
-            i++;
         }
         throw new IllegalArgumentException(INVALID);
     }
@@ -341,7 +396,7 @@ final class EtlSqlScript {
     }
 
     /** Whether a statement can supply rows: it starts with SELECT or WITH after comments. */
-    private static boolean returnsRows(String statement) {
+    private static boolean returnsRows(String statement, DialectFamily family) {
         int i = 0;
         int length = statement.length();
         while (i < length) {
@@ -349,6 +404,10 @@ final class EtlSqlScript {
             if (Character.isWhitespace(c) || c == '(') {
                 i++;
             } else if (c == '-' && i + 1 < length && statement.charAt(i + 1) == '-') {
+                while (i < length && statement.charAt(i) != '\n') {
+                    i++;
+                }
+            } else if (c == '#' && hashComments(family)) {
                 while (i < length && statement.charAt(i) != '\n') {
                     i++;
                 }
@@ -365,5 +424,20 @@ final class EtlSqlScript {
         }
         String keyword = statement.substring(i, end).toUpperCase(Locale.ROOT);
         return "SELECT".equals(keyword) || "WITH".equals(keyword);
+    }
+
+    /** MySQL lets a backslash escape the closing quote; standard SQL does not. */
+    private static boolean backslashEscapes(DialectFamily family) {
+        return family == DialectFamily.MYSQL;
+    }
+
+    /** MySQL uses {@code #} for a line comment; SQL Server uses it in local temp names. */
+    private static boolean hashComments(DialectFamily family) {
+        return family == DialectFamily.MYSQL;
+    }
+
+    /** PostgreSQL and SQL Server let a block comment contain another one. */
+    private static boolean nestedBlockComments(DialectFamily family) {
+        return family == DialectFamily.POSTGRES || family == DialectFamily.SQLSERVER;
     }
 }

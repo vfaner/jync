@@ -63,7 +63,7 @@ final class EtlTaskValidation {
             }
             // Refuse a script that cannot run while the operator is still on the form, rather
             // than repeating the same failure on every scheduled run.
-            EtlSqlScript.validate(task.getSourceSql());
+            EtlSqlScript.validate(task.getSourceSql(), source.resolvedFamily());
         }
         if (task.getTargetTable() == null || task.getTargetTable().isBlank()) {
             throw new IllegalArgumentException("error.etl.targetTable.required");
@@ -115,8 +115,8 @@ final class EtlTaskValidation {
                 || !EtlSqlSupport.wrapsAsDerivedTable(source)) {
             return;
         }
-        String select = EtlSqlScript.lastStatement(task.getSourceSql());
-        if (select != null && EtlSqlScript.startsWithWith(select)) {
+        String select = EtlSqlScript.lastStatement(task.getSourceSql(), source.resolvedFamily());
+        if (select != null && EtlSqlScript.startsWithWith(select, source.resolvedFamily())) {
             throw new IllegalArgumentException("error.etl.resume.cte");
         }
     }

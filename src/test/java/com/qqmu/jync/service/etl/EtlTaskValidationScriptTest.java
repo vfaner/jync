@@ -129,6 +129,19 @@ class EtlTaskValidationScriptTest {
                 .doesNotThrowAnyException();
     }
 
+    /**
+     * 保存校验必须按源库自己的词法分句:PostgreSQL 的 'C:\' 在反斜杠后就已闭合,后面的分号
+     * 是真分句点;沿用 MySQL「反斜杠转义引号」的读法会把整段判成未闭合字符串并拒绝保存。
+     */
+    @Test
+    void aPostgresBackslashBeforeAQuoteDoesNotSwallowTheNextStatement() {
+        sourceType(DatabaseType.POSTGRESQL);
+
+        assertThatCode(() -> EtlTaskValidation.validateExtraction(
+                task("SELECT 'C:\\'; SELECT 2"), configs))
+                .doesNotThrowAnyException();
+    }
+
     private void sourceType(DatabaseType type) {
         when(configs.findById(1L)).thenReturn(Optional.of(config(1L, type)));
     }

@@ -6,6 +6,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * A task and a batch are separate execution slots even when their database ids coincide. The
@@ -48,6 +50,50 @@ class EtlExecutionGuardTest {
         guard.release("task:7");
 
         assertThat(guard.isRunning(7L)).isFalse();
+    }
+
+    // --- mutation leases: hold the key across a definition change, not at a point in time ---
+
+    @Test
+    void aMutationLeaseIsRefusedWhenTheKeyIsAlreadyRunning() {
+        guard.tryAcquire(5L);
+
+        EtlExecutionGuard.MutationLease lease = guard.lockForMutation(5L);
+
+        assertThat(lease.acquired()).isFalse();
+        guard.release(5L);
+        assertThat(guard.isLeased(5L)).isFalse();
+    }
+
+    @Test
+    void aMutationLeaseOutsideATransactionReleasesOnClose() {
+        try (EtlExecutionGuard.MutationLease lease = guard.lockForMutation(5L)) {
+            assertThat(lease.acquired()).isTrue();
+            assertThat(guard.isLeased(5L)).isTrue();
+        }
+
+        assertThat(guard.isLeased(5L)).isFalse();
+    }
+
+    @Test
+    void aMutationLeaseInsideATransactionOutlivesCloseUntilTheTransactionCompletes() {
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            try (EtlExecutionGuard.MutationLease lease = guard.lockForMutation(5L)) {
+                assertThat(lease.acquired()).isTrue();
+            }
+            // The mutation's own commit is still ahead: releasing here would reopen the
+            // window this lease exists to close.
+            assertThat(guard.isLeased(5L)).isTrue();
+
+            TransactionSynchronizationManager.getSynchronizations().forEach(
+                    synchronization -> synchronization.afterCompletion(
+                            TransactionSynchronization.STATUS_COMMITTED));
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+
+        assertThat(guard.isLeased(5L)).isFalse();
     }
 
     // --- shared lease across instances -----------------------------------------------------

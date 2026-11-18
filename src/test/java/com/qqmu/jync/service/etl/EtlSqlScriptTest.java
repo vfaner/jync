@@ -8,6 +8,8 @@ import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.model.DatabaseType.DialectFamily;
+
 /**
  * The extraction box may hold a script: several statements executed in order on one source
  * connection, the last one supplying the rows. Splitting is textual and conservative — a
@@ -176,5 +178,49 @@ class EtlSqlScriptTest {
                 "CREATE TEMP TABLE t (id INT); SELECT id FROM t"))
                 .isEqualTo("SELECT id FROM t");
         assertThat(EtlSqlScript.lastStatement("-- nothing")).isNull();
+    }
+
+    // —— 方言族敏感的文本扫描 ——
+    // 拆分必须按源库自己的词法规则理解文本:把 PostgreSQL 的 'C:\' 当成 MySQL 的转义会
+    // 判定字符串未闭合并把整段脚本拒掉;把 # 当成表名分隔符则会把 MySQL 注释里的分号
+    // 当成分句点,把半条语句发给服务器。
+
+    @Test
+    void aBackslashEscapesOnlyInsideTheMysqlFamily() {
+        // MySQL: \' 转义引号,字符串继续,第一个分号才分句(旧默认行为不变)
+        assertThat(EtlSqlScript.split("SELECT 'a\\';b' FROM t", DialectFamily.MYSQL))
+                .containsExactly("SELECT 'a\\';b' FROM t");
+
+        // PostgreSQL / Oracle: standard_conforming_strings,反斜杠是普通字符
+        assertThat(EtlSqlScript.split("SELECT 'C:\\'; SELECT 2", DialectFamily.POSTGRES))
+                .containsExactly("SELECT 'C:\\'", "SELECT 2");
+        assertThat(EtlSqlScript.split("SELECT 'C:\\'; SELECT 2", DialectFamily.ORACLE))
+                .containsExactly("SELECT 'C:\\'", "SELECT 2");
+    }
+
+    @Test
+    void aHashStartsALineCommentOnlyInsideTheMysqlFamily() {
+        assertThat(EtlSqlScript.split("SELECT 1 # x;y\n; SELECT 2", DialectFamily.MYSQL))
+                .containsExactly("SELECT 1 # x;y", "SELECT 2");
+
+        // SQL Server: #tmp 是本地临时表,不是注释
+        assertThat(EtlSqlScript.split("SELECT * FROM #tmp; SELECT 2", DialectFamily.SQLSERVER))
+                .containsExactly("SELECT * FROM #tmp", "SELECT 2");
+    }
+
+    @Test
+    void blockCommentsNestOnlyWhereTheDialectSaysSo() {
+        String sql = "SELECT 1 /* a /* b */; SELECT 2 */";
+        // PostgreSQL / SQL Server: 内层的 */ 不结束外层,分号整段在注释里
+        assertThat(EtlSqlScript.split(sql, DialectFamily.POSTGRES)).hasSize(1);
+        assertThat(EtlSqlScript.split(sql, DialectFamily.SQLSERVER)).hasSize(1);
+        // MySQL / Oracle: 不嵌套,第一个 */ 结束注释,后面的分号分句
+        assertThat(EtlSqlScript.split(sql, DialectFamily.MYSQL)).hasSize(2);
+    }
+
+    @Test
+    void keywordLookupSkipsAMysqlHashComment() {
+        assertThat(EtlSqlScript.startsWithWith("# setup\nWITH x AS (SELECT 1) SELECT * FROM x",
+                DialectFamily.MYSQL)).isTrue();
     }
 }

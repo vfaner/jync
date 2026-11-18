@@ -215,6 +215,36 @@ class MongoEtlSourceTest {
                 .hasMessage("error.etl.mongo.resume.missing");
     }
 
+    /**
+     * A field seen as two BSON types becomes a text column, and the checkpoint stores text.
+     * Decoding that text back for the {@code $gt} filter yields a String, while the stored
+     * values are numbers/ObjectIds — Mongo compares across BSON types by type order, so the
+     * resume would silently skip (or replay) everything. Refuse the key instead.
+     */
+    @Test
+    void aMixedTypeResumeKeyIsAProgramError() {
+        when(gateway.sample(eq(config), eq(COLLECTION), any(Document.class), eq(200), anyInt()))
+                .thenReturn(List.of(
+                        new Document("_id", ID).append("seq", 1),
+                        new Document("_id", new ObjectId()).append("seq", "x")));
+
+        assertThatThrownBy(() -> source().query(task(EtlWriteMode.APPEND, "seq"), null))
+                .isInstanceOf(EtlProgramException.class)
+                .hasMessage("error.etl.mongo.resume.mixed");
+        verify(gateway, never()).find(any(), any(), any(), any(), anyInt(), anyInt());
+    }
+
+    /** A key that was null in every sample has no value to resume from. */
+    @Test
+    void aNullOnlyResumeKeyIsAProgramError() {
+        when(gateway.sample(eq(config), eq(COLLECTION), any(Document.class), eq(200), anyInt()))
+                .thenReturn(List.of(new Document("_id", ID).append("seq", null)));
+
+        assertThatThrownBy(() -> source().query(task(EtlWriteMode.APPEND, "seq"), null))
+                .isInstanceOf(EtlProgramException.class)
+                .hasMessage("error.etl.mongo.resume.mixed");
+    }
+
     @Test
     void aBlockedFilterIsRefusedBeforeTheSample() {
         EtlTask task = task(EtlWriteMode.OVERWRITE, null);
@@ -349,6 +379,20 @@ class MongoEtlSourceTest {
         assertThat(probe.resumeKeyIndex()).isEqualTo(-1);
         assertThat(probe.issues()).extracting(EtlSourceIssue::code)
                 .contains("etl.precheck.mongo.resume.error");
+    }
+
+    @Test
+    void probeReportsAMixedTypeResumeKey() {
+        when(gateway.sample(eq(config), eq(COLLECTION), any(Document.class), eq(200), anyInt()))
+                .thenReturn(List.of(
+                        new Document("_id", ID).append("seq", 1),
+                        new Document("_id", new ObjectId()).append("seq", "x")));
+
+        EtlSourceProbe probe = source().probe(task(EtlWriteMode.APPEND, "seq"), 15);
+
+        assertThat(probe.issues()).extracting(EtlSourceIssue::code)
+                .contains("etl.precheck.mongo.resume.mixed")
+                .doesNotContain("etl.precheck.mongo.resume.ok");
     }
 
     @Test

@@ -167,18 +167,26 @@ public class EtlBatchService {
         if (!batchId.equals(member.getBatchId())) {
             throw new IllegalArgumentException("error.etl.not.found");
         }
-        if (guard.isLeased(batchKey(batchId))) {
-            // The batch run took its member list when it started; removing one now leaves the
-            // runner executing a deleted row and clearing a checkpoint that is still being written.
-            throw new IllegalStateException("error.etl.batch.running");
+        // Both keys are held until commit: a run starting between a plain isLeased() check
+        // and the delete would execute the deleted row and have its checkpoint cleared
+        // underneath it. A start during the removal now fails instead.
+        try (EtlExecutionGuard.MutationLease batchLease =
+                     guard.lockForMutation(batchKey(batchId))) {
+            if (!batchLease.acquired()) {
+                // The batch run took its member list when it started; removing one now leaves
+                // the runner executing a deleted row and clearing a checkpoint still written.
+                throw new IllegalStateException("error.etl.batch.running");
+            }
+            try (EtlExecutionGuard.MutationLease memberLease = guard.lockForMutation(taskId)) {
+                if (!memberLease.acquired()) {
+                    throw new IllegalStateException("error.etl.batch.memberRunning");
+                }
+                // The task row and its resume position go together; a checkpoint without
+                // its source is noise.
+                checkpointStore.clear(taskId);
+                taskRepository.delete(member);
+            }
         }
-        if (guard.isLeased(taskId)) {
-            throw new IllegalStateException("error.etl.batch.memberRunning");
-        }
-        // The task row and its resume position go together; a checkpoint without its source is noise.
-        checkpointStore.clear(taskId);
-        taskRepository.delete(member);
-        guard.discard(taskId);
         events.publishEvent(new EtlTaskChangedEvent(taskId, true));
 
         if (taskRepository.findByBatchIdOrderByIdAsc(batchId).isEmpty() && Boolean.TRUE.equals(batch.getEnabled())) {
@@ -349,24 +357,37 @@ public class EtlBatchService {
         EtlBatch batch = batchRepository.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.batch.not.found"));
         actor.requireEditable(batch.getOwnerUsername());
-        if (guard.isLeased(batchKey(id))) {
-            throw new IllegalStateException("error.etl.batch.running");
-        }
-        List<EtlTask> members = taskRepository.findByBatchIdOrderByIdAsc(id);
-        for (EtlTask member : members) {
-            if (guard.isLeased(member.getId())) {
-                throw new IllegalStateException("error.etl.batch.memberRunning");
+        // Every key is held until commit, so a run cannot start between the checks and the
+        // delete (its checkpoint would be cleared and its lease row dropped under it).
+        try (EtlExecutionGuard.MutationLease batchLease = guard.lockForMutation(batchKey(id))) {
+            if (!batchLease.acquired()) {
+                throw new IllegalStateException("error.etl.batch.running");
             }
-        }
-        for (EtlTask member : members) {
-            // The task rows go with the batch; a resume position without its source is noise.
-            checkpointStore.clear(member.getId());
-        }
-        taskRepository.deleteAll(members);
-        batchRepository.delete(batch);
-        guard.discard(batchKey(id));
-        for (EtlTask member : members) {
-            guard.discard(member.getId());
+            List<EtlTask> members = taskRepository.findByBatchIdOrderByIdAsc(id);
+            List<EtlExecutionGuard.MutationLease> memberLeases = new ArrayList<>();
+            try {
+                for (EtlTask member : members) {
+                    EtlExecutionGuard.MutationLease memberLease =
+                            guard.lockForMutation(member.getId());
+                    if (!memberLease.acquired()) {
+                        throw new IllegalStateException("error.etl.batch.memberRunning");
+                    }
+                    memberLeases.add(memberLease);
+                }
+                for (EtlTask member : members) {
+                    // The task rows go with the batch; a resume position without its source
+                    // is noise.
+                    checkpointStore.clear(member.getId());
+                }
+                taskRepository.deleteAll(members);
+                batchRepository.delete(batch);
+            } finally {
+                // A refusal above leaves the already-taken member leases to the transaction's
+                // afterCompletion (rollback); closing here also covers a hand-built caller.
+                for (EtlExecutionGuard.MutationLease memberLease : memberLeases) {
+                    memberLease.close();
+                }
+            }
         }
         events.publishEvent(new EtlBatchChangedEvent(id, true));
     }

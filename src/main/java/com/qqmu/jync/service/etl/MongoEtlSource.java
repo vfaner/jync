@@ -199,6 +199,7 @@ public final class MongoEtlSource implements EtlSource {
         String key = task.getResumeKeyColumn().trim();
         for (int i = 0; i < columns.size(); i++) {
             if (columns.get(i).name().equals(key)) {
+                refuseUnresumableKey(columns.get(i));
                 return i + 1;
             }
         }
@@ -223,6 +224,10 @@ public final class MongoEtlSource implements EtlSource {
             issues.add(error("etl.precheck.mongo.resume.error", trimmed));
             return -1;
         }
+        if (unresumable(columns.get(index))) {
+            issues.add(error("etl.precheck.mongo.resume.mixed", trimmed));
+            return index + 1;
+        }
         // A field may be missing from the first sampled document and present in the rest;
         // reading only sample one would warn about a null resume value that does not exist.
         Object value = null;
@@ -245,6 +250,24 @@ public final class MongoEtlSource implements EtlSource {
                     : "etl.precheck.mongo.resume.error", trimmed));
         }
         return index + 1;
+    }
+
+    /**
+     * A resume key whose column was declared from mixed (or only null) BSON values has no
+     * faithful {@code $gt} bound: the checkpoint stores text, and decoding it can only
+     * produce a string or one fixed BSON type while the stored values carry several. Mongo
+     * orders across BSON types by type, so the comparison would silently skip or replay
+     * everything. Refuse the key where the operator can still change it.
+     */
+    private static void refuseUnresumableKey(EtlSourceColumn column) {
+        if (unresumable(column)) {
+            throw new EtlProgramException("error.etl.mongo.resume.mixed");
+        }
+    }
+
+    private static boolean unresumable(EtlSourceColumn column) {
+        String typeName = column.typeName();
+        return "Mixed".equals(typeName) || "Null".equals(typeName);
     }
 
     private static EtlSourceException sourceFailure(RuntimeException e) {

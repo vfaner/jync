@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -11,6 +12,7 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -294,6 +296,47 @@ class EtlTaskServiceTest {
 
         verify(taskRepository).save(any());
         guard.release(5L);
+    }
+
+    /**
+     * A run that starts between the isLeased check and the commit would have its lease row
+     * dropped by the delete's discard()/clear path, leaving a run writing to a task that no
+     * longer exists. The mutation lease is taken BEFORE the check and held until commit, so
+     * the run start fails instead of slipping in.
+     */
+    @Test
+    void aRunCannotStartWhileTheDeleteIsInFlight() {
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing(5L, "SELECT id FROM src")));
+        AtomicBoolean startedInFlight = new AtomicBoolean();
+        doAnswer(invocation -> {
+            startedInFlight.set(guard.tryAcquire(5L));
+            return null;
+        }).when(taskRepository).deleteById(5L);
+
+        service.delete(5L, AccessGuard.system());
+
+        assertThat(startedInFlight).isFalse();       // 删除全程持有租约
+        verify(checkpointStore).clear(5L);
+        assertThat(guard.isLeased(5L)).isFalse();    // 事务外:close 即释放
+    }
+
+    /** Same window on the extraction edit: the run must not start mid-save. */
+    @Test
+    void aRunCannotStartWhileTheExtractionEditIsInFlight() {
+        stubConnections(1L, 2L);
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing(5L, "SELECT id FROM src")));
+        AtomicBoolean startedInFlight = new AtomicBoolean();
+        when(taskRepository.save(any())).thenAnswer(invocation -> {
+            startedInFlight.set(guard.tryAcquire(5L));
+            return invocation.getArgument(0);
+        });
+
+        EtlTask edit = form(1L, 2L);
+        edit.setId(5L);
+        edit.setSourceSql("SELECT id, name FROM src");
+        service.save(edit, AccessGuard.system());
+
+        assertThat(startedInFlight).isFalse();
     }
 
     @Test

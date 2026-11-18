@@ -87,6 +87,7 @@ public class EtlTaskService {
 
         EtlTask entity;
         boolean extractionChanged = true;
+        EtlExecutionGuard.MutationLease extractionLease = null;
         if (form.getId() == null) {
             entity = new EtlTask();
             entity.setEnabled(false);
@@ -96,11 +97,16 @@ public class EtlTaskService {
                     .orElseThrow(() -> new IllegalArgumentException("error.etl.not.found"));
             actor.requireEditable(entity.getOwnerUsername());
             extractionChanged = extractionChanged(entity, form);
-            if (extractionChanged && guard.isLeased(form.getId())) {
+            if (extractionChanged) {
                 // The runner read its SQL, target and resume key when it started. Clearing the
                 // checkpoint now would be undone by the old query's next checkpoint write, and
                 // the next run could resume from a watermark the new query never produced.
-                throw new IllegalStateException("error.etl.running.extraction");
+                // The lease is held until this transaction commits, so a run cannot start
+                // between the check and the moment the edit becomes visible.
+                extractionLease = guard.lockForMutation(form.getId());
+                if (!extractionLease.acquired()) {
+                    throw new IllegalStateException("error.etl.running.extraction");
+                }
             }
         }
 
@@ -179,10 +185,19 @@ public class EtlTaskService {
         }
         entity.setTimeoutSeconds(form.getTimeoutSeconds());
 
-        EtlTask saved = taskRepository.save(entity);
-        if (saved.getId() != null && extractionChanged) {
-            // A resume position only means something for the SQL/table it was produced by.
-            checkpointStore.clear(saved.getId());
+        EtlTask saved;
+        try {
+            saved = taskRepository.save(entity);
+            if (saved.getId() != null && extractionChanged) {
+                // A resume position only means something for the SQL/table it was produced by.
+                checkpointStore.clear(saved.getId());
+            }
+        } finally {
+            // No-op inside a transaction (it releases in afterCompletion, after commit);
+            // releases immediately for a hand-built caller without one.
+            if (extractionLease != null) {
+                extractionLease.close();
+            }
         }
         events.publishEvent(new EtlTaskChangedEvent(saved.getId(), false));
         return saved;
@@ -221,14 +236,16 @@ public class EtlTaskService {
         if (task.getBatchId() != null) {
             throw new IllegalStateException("error.etl.batch.managed");
         }
-        if (guard.isLeased(id)) {
-            throw new IllegalStateException("error.etl.running");
+        // The key is held until commit, not checked and dropped: a run starting after a plain
+        // isLeased() check would have its checkpoint cleared under it and its lease row
+        // discarded by the delete. A start during the delete now fails instead.
+        try (EtlExecutionGuard.MutationLease lease = guard.lockForMutation(id)) {
+            if (!lease.acquired()) {
+                throw new IllegalStateException("error.etl.running");
+            }
+            checkpointStore.clear(id);
+            taskRepository.deleteById(id);
         }
-        checkpointStore.clear(id);
-        taskRepository.deleteById(id);
-        // Belt and braces: a lease row that appeared after the check above, or that the check
-        // could not read, must not outlive the task it named.
-        guard.discard(id);
         events.publishEvent(new EtlTaskChangedEvent(id, true));
     }
 

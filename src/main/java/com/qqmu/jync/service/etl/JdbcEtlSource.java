@@ -45,7 +45,7 @@ final class JdbcEtlSource implements EtlSource {
 
     @Override
     public EtlSourceCursor query(EtlTask task, EtlCheckpointValue checkpoint) throws SQLException {
-        List<String> statements = EtlSqlScript.split(task.getSourceSql());
+        List<String> statements = EtlSqlScript.split(task.getSourceSql(), scriptFamily());
         if (statements.isEmpty()) {
             throw new IllegalArgumentException("error.etl.script.empty");
         }
@@ -93,7 +93,7 @@ final class JdbcEtlSource implements EtlSource {
 
     @Override
     public EtlSourceProbe probe(EtlTask task, int timeoutSeconds) throws SQLException {
-        List<String> statements = EtlSqlScript.split(task.getSourceSql());
+        List<String> statements = EtlSqlScript.split(task.getSourceSql(), scriptFamily());
         String select = statements.isEmpty()
                 ? EtlSqlSupport.stripTrailingSemicolon(task.getSourceSql())
                 : statements.get(statements.size() - 1);
@@ -290,6 +290,15 @@ final class JdbcEtlSource implements EtlSource {
 
     private DatabaseType.DialectFamily family() {
         return config == null ? null : config.resolvedFamily();
+    }
+
+    /**
+     * The family whose lexical rules split the script. A source constructed without a
+     * configuration keeps the historic MySQL reading rather than aiming at a family nobody
+     * declared; every producer passes a real configuration.
+     */
+    private DatabaseType.DialectFamily scriptFamily() {
+        return config == null ? DatabaseType.DialectFamily.MYSQL : config.resolvedFamily();
     }
 
     private static boolean resumable(EtlTask task) {

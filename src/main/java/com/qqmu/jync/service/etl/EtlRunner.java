@@ -486,12 +486,18 @@ public class EtlRunner {
             // Refuse a script that cannot run before any connection opens; the refusal is a
             // program error whose message is the i18n key.
             try {
-                EtlSqlScript.validate(task.getSourceSql());
+                EtlSqlScript.validate(task.getSourceSql(), scriptFamily(sourceConfig));
                 EtlTaskValidation.validateResumableWrapper(task, sourceConfig);
             } catch (IllegalArgumentException e) {
                 throw new EtlProgramException(e.getMessage());
             }
         }
+    }
+
+    /** The source's lexical family; a missing configuration keeps the historic MySQL reading. */
+    private static DatabaseType.DialectFamily scriptFamily(DatabaseConfig sourceConfig) {
+        return sourceConfig == null
+                ? DatabaseType.DialectFamily.MYSQL : sourceConfig.resolvedFamily();
     }
 
     private static void validateMongoSource(EtlTask task) {

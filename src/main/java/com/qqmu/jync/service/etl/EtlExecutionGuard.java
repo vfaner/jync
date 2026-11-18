@@ -11,6 +11,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -131,6 +133,72 @@ public class EtlExecutionGuard {
         } catch (RuntimeException e) {
             // The lease expires by itself; a failed release must not mask the run's outcome.
             log.warn("Could not release the ETL lease for {}: {}", key, e.getMessage());
+        }
+    }
+
+    /**
+     * Takes the key for the duration of a definition mutation (delete, extraction edit,
+     * batch membership change).
+     *
+     * <p>A plain {@link #isLeased} check followed by the mutation leaves a window: a run can
+     * start after the check and before the commit, and the mutation then either clears the
+     * checkpoint under the running query or drops a lease that is now live. Holding the key
+     * across the whole mutation turns that run start into a refusal instead.
+     *
+     * <p>Inside a transaction the lease is released only after the transaction completes
+     * (commit or rollback) — that is where the mutation becomes visible to other nodes.
+     * Outside one it is released by {@link MutationLease#close()}.
+     */
+    public MutationLease lockForMutation(Long taskId) {
+        return lockForMutation(taskKey(taskId));
+    }
+
+    public MutationLease lockForMutation(String key) {
+        if (!tryAcquire(key)) {
+            return new MutationLease(this, key, false, false);
+        }
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(
+                    new TransactionSynchronization() {
+                        @Override
+                        public void afterCompletion(int status) {
+                            release(key);
+                        }
+                    });
+            return new MutationLease(this, key, true, true);
+        }
+        return new MutationLease(this, key, true, false);
+    }
+
+    /**
+     * The handle of a {@link #lockForMutation} acquisition. {@link #close()} releases an
+     * immediate lease; a lease registered with the transaction releases in
+     * {@code afterCompletion} instead, so closing early cannot reopen the window.
+     */
+    public static final class MutationLease implements AutoCloseable {
+        private final EtlExecutionGuard guard;
+        private final String key;
+        private final boolean acquired;
+        private final boolean deferred;
+
+        private MutationLease(EtlExecutionGuard guard, String key, boolean acquired,
+                              boolean deferred) {
+            this.guard = guard;
+            this.key = key;
+            this.acquired = acquired;
+            this.deferred = deferred;
+        }
+
+        /** False when the key is running here or leased by a live owner elsewhere. */
+        public boolean acquired() {
+            return acquired;
+        }
+
+        @Override
+        public void close() {
+            if (acquired && !deferred) {
+                guard.release(key);
+            }
         }
     }
 
