@@ -8,6 +8,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -418,6 +422,190 @@ public class AiChatClient {
         }
     }
 
+    /**
+     * One streaming round of a tool conversation.
+     *
+     * <p>Text is handed to {@code sink} the moment each fragment arrives, exactly like
+     * {@link #stream}. Tool calls are accumulated across the round and returned; the caller
+     * executes them and calls again with the results appended as {@link Turn}s.
+     *
+     * <p>Distinct from {@link #stream} on purpose: the conversion assistant's contract must not
+     * change, and this method owns the extra wire shapes tools introduce — fragmented
+     * {@code tool_calls} arguments, Anthropic's content blocks, Ollama's object arguments.
+     *
+     * @return the round's text, any calls the model asked for, and whether the endpoint looked
+     *     like it rejected the very idea of tools (a 4xx naming tools), so the caller can retry
+     *     without them instead of surfacing a failure
+     */
+    public ToolChatResult converseStream(AiProvider provider, String apiKey, String system,
+                                         List<Turn> turns, List<ToolSpec> tools, int maxTokens,
+                                         java.util.function.Consumer<String> sink) {
+        AiProtocol protocol = provider.getProtocol() == null
+                ? AiProtocol.OPENAI : provider.getProtocol();
+        if (protocol == AiProtocol.ANTHROPIC) {
+            return converseAnthropic(provider, apiKey, system, turns, tools, maxTokens, sink);
+        }
+        if (protocol == AiProtocol.OLLAMA_NATIVE) {
+            return converseOllamaNative(provider, apiKey, system, turns, tools, maxTokens, sink);
+        }
+        return converseOpenAi(provider, protocol, apiKey, system, turns, tools, maxTokens, sink);
+    }
+
+    private ToolChatResult converseOpenAi(AiProvider provider, AiProtocol protocol,
+                                          String apiKey, String system, List<Turn> turns,
+                                          List<ToolSpec> tools, int maxTokens,
+                                          java.util.function.Consumer<String> sink) {
+        String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
+        String model = provider.getModel() == null ? "" : provider.getModel().trim();
+        long start = System.currentTimeMillis();
+        if (model.isEmpty()) {
+            return ToolChatResult.failure("error.ai.model.required", 0, false);
+        }
+        try {
+            AiEndpointValidator.validateBaseUrl(provider.getBaseUrl());
+        } catch (IllegalArgumentException e) {
+            return ToolChatResult.failure(e.getMessage(), 0, false);
+        }
+        Duration timeout = Duration.ofSeconds(provider.getTimeoutSeconds() == null
+                || provider.getTimeoutSeconds() <= 0 ? 30 : provider.getTimeoutSeconds());
+        AtomicReference<String> stalledFor = new AtomicReference<>();
+        try {
+            HttpRequest request = buildConverseRequest(protocol, endpoint, model, apiKey,
+                    timeout, system, turns, tools, maxTokens);
+            HttpResponse<java.io.InputStream> response = HTTP_CLIENT.send(request,
+                    HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() / 100 != 2) {
+                String detail = extractError(readAll(response.body()));
+                boolean toolsRejected = response.statusCode() / 100 == 4 && !tools.isEmpty()
+                        && detail.toLowerCase(java.util.Locale.ROOT)
+                                .matches(".*(tool|function|does not support).*");
+                log.warn("AI tool stream to '{}' failed: HTTP {} {}",
+                        provider.getName(), response.statusCode(), detail);
+                return ToolChatResult.failure("HTTP " + response.statusCode()
+                        + (detail.isEmpty() ? "" : " — " + detail),
+                        System.currentTimeMillis() - start, toolsRejected);
+            }
+
+            java.io.InputStream body = response.body();
+            AtomicLong lastActivity = new AtomicLong(System.currentTimeMillis());
+            AtomicBoolean firstLineSeen = new AtomicBoolean(false);
+            long tickMs = Math.max(200L, Math.min(1000L, timeout.toMillis() / 4));
+            ScheduledFuture<?> watchdog = STALL_WATCHDOG.scheduleAtFixedRate(() -> {
+                long budget = firstLineSeen.get() ? timeout.toMillis() : FIRST_LINE_CEILING_MS;
+                if (System.currentTimeMillis() - lastActivity.get() > budget
+                        && stalledFor.compareAndSet(null,
+                                "Stream stalled for over " + (budget / 1000) + "s")) {
+                    try {
+                        body.close();
+                    } catch (IOException ignored) {
+                        // Already closed.
+                    }
+                }
+            }, tickMs, tickMs, TimeUnit.MILLISECONDS);
+
+            StringBuilder text = new StringBuilder();
+            String[] served = {""};
+            // Keyed by the wire's index so interleaved or repeated fragments still join once.
+            Map<Integer, PartialCall> partials = new TreeMap<>();
+            StringBuilder rawBody = null;
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(body, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    firstLineSeen.set(true);
+                    lastActivity.set(System.currentTimeMillis());
+                    if (rawBody != null) {
+                        rawBody.append(line).append('\n');
+                        continue;
+                    }
+                    if (line.isEmpty() || line.startsWith(":") || line.startsWith("event:")) {
+                        continue;
+                    }
+                    if (!line.startsWith("data:")) {
+                        // Same buffered-reply detection as stream(): a lone JSON document is
+                        // what a gateway that ignored stream=true sends.
+                        String head = line.stripLeading();
+                        if (text.length() == 0 && partials.isEmpty()
+                                && (head.startsWith("{") || head.startsWith("["))) {
+                            rawBody = new StringBuilder(line).append('\n');
+                        }
+                        continue;
+                    }
+                    String data = line.substring(5).trim();
+                    if (data.isEmpty()) {
+                        continue;
+                    }
+                    if ("[DONE]".equals(data)) {
+                        break;
+                    }
+                    JsonNode root = parseOrNull(data);
+                    if (root == null) {
+                        continue;
+                    }
+                    if (served[0].isEmpty()) {
+                        served[0] = servedModel(root);
+                    }
+                    JsonNode choice = root.path("choices").path(0);
+                    String piece = choice.path("delta").path("content").asString("");
+                    if (!piece.isEmpty()) {
+                        text.append(piece);
+                        sink.accept(piece);
+                    }
+                    for (JsonNode chunk : choice.path("delta").path("tool_calls")) {
+                        int index = chunk.path("index").asInt(0);
+                        PartialCall call = partials.computeIfAbsent(index, i -> new PartialCall());
+                        String id = chunk.path("id").asString("");
+                        if (!id.isEmpty()) {
+                            call.id = id;
+                        }
+                        String name = chunk.path("function").path("name").asString("");
+                        if (!name.isEmpty()) {
+                            call.name = name;
+                        }
+                        String args = chunk.path("function").path("arguments").asString("");
+                        if (!args.isEmpty()) {
+                            call.args.append(args);
+                        }
+                    }
+                }
+            } finally {
+                watchdog.cancel(false);
+            }
+            if (rawBody != null) {
+                JsonNode root = parseOrNull(rawBody.toString());
+                String whole = extractText(protocol, root);
+                if (!whole.isEmpty()) {
+                    sink.accept(whole);
+                }
+                return ToolChatResult.success(whole, List.of(), servedModel(root),
+                        System.currentTimeMillis() - start);
+            }
+            List<ToolCall> calls = new ArrayList<>();
+            partials.forEach((index, call) -> calls.add(new ToolCall(
+                    call.id.isEmpty() ? "call_" + index : call.id,
+                    call.name, call.args.toString())));
+            return ToolChatResult.success(text.toString(), calls, served[0],
+                    System.currentTimeMillis() - start);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return ToolChatResult.failure("Interrupted", System.currentTimeMillis() - start, false);
+        } catch (IOException | RuntimeException e) {
+            String stall = stalledFor.get();
+            log.warn("AI tool stream to '{}' failed: {}", provider.getName(),
+                    stall == null ? e.toString() : stall);
+            return ToolChatResult.failure(stall == null
+                    ? (e.getMessage() == null ? e.toString() : e.getMessage()) : stall,
+                    System.currentTimeMillis() - start, false);
+        }
+    }
+
+    /** Accumulator for one streamed tool call; arguments arrive as fragments. */
+    private static final class PartialCall {
+        String id = "";
+        String name = "";
+        final StringBuilder args = new StringBuilder();
+    }
+
     /** Drains an error body; only reached on a non-2xx stream response. */
     private String readAll(java.io.InputStream in) throws IOException {
         try (in) {
@@ -483,6 +671,108 @@ public class AiChatClient {
 
         return builder.POST(HttpRequest.BodyPublishers.ofString(
                 body.toString(), StandardCharsets.UTF_8)).build();
+    }
+
+    /**
+     * Builds a tool-conversation request. Always streams: the assistant's whole point is showing
+     * sentences as they are written.
+     */
+    private HttpRequest buildConverseRequest(AiProtocol protocol, String endpoint, String model,
+                                             String apiKey, Duration timeout, String system,
+                                             List<Turn> turns, List<ToolSpec> tools,
+                                             int maxTokens) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("model", model);
+        boolean nativeOllama = protocol == AiProtocol.OLLAMA_NATIVE;
+        if (nativeOllama) {
+            body.put("stream", true);
+            body.putObject("options").put("num_predict", maxTokens);
+        } else {
+            body.put("max_tokens", maxTokens);
+            body.put("stream", true);
+        }
+        // No reasoning knob here on purpose: the assistant's answers are short and the extra
+        // latency of a thinking model works against a chat panel.
+        applyReasoning(protocol, body, AiReasoningEffort.DEFAULT, maxTokens);
+
+        boolean anthropic = protocol == AiProtocol.ANTHROPIC;
+        boolean hasSystem = system != null && !system.isBlank();
+        if (hasSystem && anthropic) {
+            body.put("system", system);
+        }
+        ArrayNode messages = body.putArray("messages");
+        if (hasSystem && !anthropic) {
+            ObjectNode sys = messages.addObject();
+            sys.put("role", "system");
+            sys.put("content", system);
+        }
+        for (Turn turn : turns) {
+            appendOpenAiMessage(messages, turn);
+        }
+        if (tools != null && !tools.isEmpty()) {
+            ArrayNode defs = body.putArray("tools");
+            for (ToolSpec tool : tools) {
+                ObjectNode def = defs.addObject();
+                def.put("type", "function");
+                ObjectNode fn = def.putObject("function");
+                fn.put("name", tool.name());
+                fn.put("description", tool.description());
+                fn.set("parameters", mapper.valueToTree(tool.parameters()));
+            }
+        }
+
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(endpoint))
+                .timeout(timeout)
+                .header("Content-Type", "application/json")
+                .header("Accept", nativeOllama ? "application/json" : "text/event-stream");
+        if (anthropic) {
+            builder.header("x-api-key", apiKey == null ? "" : apiKey)
+                    .header("anthropic-version", ANTHROPIC_VERSION);
+        } else {
+            builder.header("Authorization", "Bearer " + (apiKey == null ? "" : apiKey));
+        }
+        return builder.POST(HttpRequest.BodyPublishers.ofString(
+                body.toString(), StandardCharsets.UTF_8)).build();
+    }
+
+    private void appendOpenAiMessage(ArrayNode messages, Turn turn) {
+        ObjectNode message = messages.addObject();
+        if ("tool".equals(turn.role())) {
+            message.put("role", "tool");
+            message.put("tool_call_id", turn.toolCallId() == null ? "" : turn.toolCallId());
+            message.put("content", turn.content() == null ? "" : turn.content());
+            return;
+        }
+        message.put("role", turn.role());
+        message.put("content", turn.content() == null ? "" : turn.content());
+        if ("assistant".equals(turn.role()) && !turn.toolCalls().isEmpty()) {
+            ArrayNode calls = message.putArray("tool_calls");
+            for (ToolCall call : turn.toolCalls()) {
+                ObjectNode c = calls.addObject();
+                c.put("id", call.id());
+                c.put("type", "function");
+                ObjectNode fn = c.putObject("function");
+                fn.put("name", call.name());
+                fn.put("arguments", call.argumentsJson());
+            }
+        }
+    }
+
+    /** Replaced by the real implementation in the Anthropic task. */
+    private ToolChatResult converseAnthropic(AiProvider provider, String apiKey, String system,
+                                             List<Turn> turns, List<ToolSpec> tools,
+                                             int maxTokens,
+                                             java.util.function.Consumer<String> sink) {
+        return ToolChatResult.failure("error.ai.notAvailable", 0, false);
+    }
+
+    /** Replaced by the real implementation in the Ollama-native task. */
+    private ToolChatResult converseOllamaNative(AiProvider provider, String apiKey, String system,
+                                                List<Turn> turns, List<ToolSpec> tools,
+                                                int maxTokens,
+                                                java.util.function.Consumer<String> sink) {
+        return ToolChatResult.failure("error.ai.notAvailable", 0, false);
     }
 
     /**
@@ -602,6 +892,49 @@ public class AiChatClient {
         String flat = s.replaceAll("\\s+", " ").trim();
         return flat.length() > MAX_ERROR_CHARS
                 ? flat.substring(0, MAX_ERROR_CHARS) + "..." : flat;
+    }
+
+    /** One tool invocation the model asked for; arguments is the joined JSON fragment. */
+    public record ToolCall(String id, String name, String argumentsJson) {
+    }
+
+    /** A tool offered to the model; parameters is a JSON Schema object. */
+    public record ToolSpec(String name, String description, Map<String, Object> parameters) {
+    }
+
+    /**
+     * One turn of a tool conversation, protocol-neutral.
+     *
+     * <p>role is one of user / assistant / tool. toolCallId is set only for role=tool.
+     */
+    public record Turn(String role, String content, List<ToolCall> toolCalls, String toolCallId) {
+
+        public static Turn user(String text) {
+            return new Turn("user", text, List.of(), null);
+        }
+
+        public static Turn assistant(String text, List<ToolCall> calls) {
+            return new Turn("assistant", text, calls == null ? List.of() : calls, null);
+        }
+
+        public static Turn toolResult(String toolCallId, String content) {
+            return new Turn("tool", content, List.of(), toolCallId);
+        }
+    }
+
+    /** Outcome of one streaming tool round: text seen so far plus the calls it asked for. */
+    public record ToolChatResult(boolean success, String message, String text,
+                                 List<ToolCall> toolCalls, String servedModel,
+                                 long elapsedMs, boolean toolUnsupported) {
+
+        static ToolChatResult success(String text, List<ToolCall> calls, String servedModel,
+                                      long ms) {
+            return new ToolChatResult(true, "OK", text, calls, servedModel, ms, false);
+        }
+
+        static ToolChatResult failure(String message, long ms, boolean toolUnsupported) {
+            return new ToolChatResult(false, message, "", List.of(), "", ms, toolUnsupported);
+        }
     }
 
     /** Outcome of one chat call. */
