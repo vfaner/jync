@@ -191,6 +191,23 @@ class EtlPrecheckServiceTest {
         assertThat(check(result, "etl.precheck.upsert.ok").detail()).isEqualTo("id");
     }
 
+    /**
+     * The upsert key must exist in the target too: the runner prunes result columns the
+     * target lacks, and pruning a key would make every run insert another copy.
+     */
+    @Test
+    void anUpsertKeyTheTargetLacksIsAnError() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))");
+        execute(TARGET_URL, "CREATE TABLE dst (name VARCHAR(20))");
+        EtlTask form = form("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        form.setUpsertKeyColumns("id");
+
+        EtlPrecheckResult result = service.check(form, source, target, connections);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(check(result, "etl.precheck.upsert.target.missing").detail()).isEqualTo("id");
+    }
+
     @Test
     void aMissingTargetTableIsReportedAsCreatedOnFirstRun() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");
@@ -203,17 +220,37 @@ class EtlPrecheckServiceTest {
         assertThat(codes(result)).doesNotContain("etl.precheck.target.columns.error");
     }
 
+    /**
+     * The runner writes the intersection of the result and the existing target, so a column
+     * the target lacks is not a failure — but the operator must see which ones will be lost.
+     */
     @Test
-    void aTargetMissingAResultColumnIsAnError() throws SQLException {
+    void aTargetMissingAResultColumnWarnsThatItWillBeSkipped() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))");
         execute(TARGET_URL, "CREATE TABLE dst (id INT)");
 
         EtlPrecheckResult result = service.check(form("SELECT id, name FROM src", "dst",
                 EtlWriteMode.APPEND), source, target, connections);
 
+        assertThat(result.passed()).isTrue();
+        EtlPrecheckResult.Check warning = check(result, "etl.precheck.target.columns.skipped");
+        assertThat(warning.level()).isEqualTo(EtlPrecheckResult.Level.WARN);
+        assertThat(warning.detail()).containsIgnoringCase("NAME");
+    }
+
+    /** Writing nothing is not a usable run; no shared column fails the precheck. */
+    @Test
+    void aTargetSharingNoResultColumnIsAnError() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))");
+        execute(TARGET_URL, "CREATE TABLE dst (other INT)");
+
+        EtlPrecheckResult result = service.check(form("SELECT id, name FROM src", "dst",
+                EtlWriteMode.APPEND), source, target, connections);
+
         assertThat(result.passed()).isFalse();
-        assertThat(check(result, "etl.precheck.target.columns.error").detail())
-                .containsIgnoringCase("NAME");
+        EtlPrecheckResult.Check none = check(result, "etl.precheck.target.columns.none");
+        assertThat(none.level()).isEqualTo(EtlPrecheckResult.Level.ERROR);
+        assertThat(none.detail()).containsIgnoringCase("ID").containsIgnoringCase("NAME");
     }
 
     @Test

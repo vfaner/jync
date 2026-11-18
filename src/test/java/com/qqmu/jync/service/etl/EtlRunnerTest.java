@@ -101,6 +101,72 @@ class EtlRunnerTest {
         assertThat(rows("SELECT id FROM dst ORDER BY id")).containsExactly("1", "2", "99");
     }
 
+    /**
+     * The extraction often selects more than the existing target carries. Writing only the
+     * intersection keeps the run usable; the skipped labels are reported so an accidental typo
+     * stays visible instead of turning into a silent subset.
+     */
+    @Test
+    void aResultColumnTheExistingTargetLacksIsSkippedAndReported() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+
+        EtlRunResult result = runner.run(task("SELECT id, name FROM src", "dst",
+                EtlWriteMode.APPEND), source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(result.rowsWritten()).isEqualTo(1);
+        assertThat(rows("SELECT id FROM dst")).containsExactly("1");
+        assertThat(result.skippedColumns()).hasSize(1);
+        assertThat(result.skippedColumns().get(0)).isEqualToIgnoringCase("name");
+    }
+
+    /**
+     * Skipping unmatched columns must not degrade into writing nothing. An OVERWRITE whose
+     * result shares no column with the target is a configuration error, and it is detected
+     * before the pre-sql or the write-mode DELETE runs: otherwise the operator would lose the
+     * old contents and gain no new ones.
+     */
+    @Test
+    void aTargetSharingNoResultColumnFailsBeforeThePreSqlAndTheDelete() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a')");
+        execute(TARGET_URL, "CREATE TABLE dst (other INT)", "INSERT INTO dst VALUES (99)");
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPreSql("DELETE FROM dst");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage()).isEqualTo("error.etl.target.noColumns");
+        assertThat(rows("SELECT other FROM dst")).as("neither pre-sql nor DELETE ran")
+                .containsExactly("99");
+    }
+
+    /**
+     * An upsert matches a row by its key, so a key column the target does not carry would
+     * insert every row again on every run. That is a program error, raised before writing.
+     */
+    @Test
+    void anUpsertKeyTheTargetLacksFailsBeforeAnyRowIsWritten() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a')");
+        execute(TARGET_URL, "CREATE TABLE dst (name VARCHAR(20))");
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage())
+                .contains("error.etl.upsertKey.targetMissing")
+                .containsIgnoringCase("id");
+        assertThat(rows("SELECT name FROM dst")).isEmpty();
+    }
+
     @Test
     void createsTheTargetTableWhenItDoesNotExist() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
@@ -334,6 +400,26 @@ class EtlRunnerTest {
                 .containsExactly("1|10|a", "1|11|keep", "2|10|b");
     }
 
+    /**
+     * Pruning applies to every write mode, including the emulated upsert: the update and
+     * insert statements must agree on the same column list, or the key positions bind the
+     * wrong values.
+     */
+    @Test
+    void anUpsertSkipsANonKeyColumnTheExistingTargetLacks() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (1, 'a'), (2, 'b')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT PRIMARY KEY)", "INSERT INTO dst VALUES (1)");
+        EtlTask task = task("SELECT id, name FROM src", "dst", EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("id");
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id FROM dst ORDER BY id")).containsExactly("1", "2");
+        assertThat(result.skippedColumns()).hasSize(1);
+    }
+
     @Test
     void upsertCreatesTheTargetTableWithTheConfiguredPrimaryKey() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
@@ -525,7 +611,9 @@ class EtlRunnerTest {
     void aTargetThatCannotTakeTheRowIsAttributedToTheTarget() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT, name VARCHAR(20))",
                 "INSERT INTO src VALUES (1, 'a')");
-        execute(TARGET_URL, "CREATE TABLE dst (id INT)");
+        // The NOT NULL column exists only on the target, so the skipped-column rule does not
+        // apply to it and the INSERT itself must fail.
+        execute(TARGET_URL, "CREATE TABLE dst (id INT, tenant INT NOT NULL)");
 
         EtlRunResult result = runner.run(task("SELECT id, name FROM src", "dst",
                 EtlWriteMode.OVERWRITE), source, target, connections);

@@ -8,6 +8,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -315,6 +316,27 @@ class EtlTaskServiceTest {
         assertThat(task.getLastRunSuccess()).isTrue();
         assertThat(task.getLastRunResult()).contains("SUCCESS").contains("written=3");
         assertThat(task.getLastRunTime()).isNotNull();
+    }
+
+    /**
+     * A run that skipped result columns against an existing target stays a success, but the
+     * page must not hide the subset it wrote: the labels go into the same last-run summary the
+     * list and detail pages show.
+     */
+    @Test
+    void executeSurfacesTheSkippedColumnsInTheRunSummary() {
+        EtlTask task = existing(7L, "SELECT id, name FROM src");
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
+        stubConnections(1L, 2L);
+        when(runner.run(eq(task), any(), any(), any()))
+                .thenReturn(EtlRunResult.success(1, 1, List.of("name", "updated_at")));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.execute(7L);
+
+        assertThat(task.getLastRunResult())
+                .contains("SUCCESS")
+                .contains("skipped=name,updated_at");
     }
 
     /**

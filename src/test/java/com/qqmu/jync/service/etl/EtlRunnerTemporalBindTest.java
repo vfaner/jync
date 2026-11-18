@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.converter.OracleDialect;
 import com.qqmu.jync.service.converter.PostgresDialect;
+import com.qqmu.jync.service.lob.LobBinder;
 
 /**
  * The copy loop binds each extracted value with the target driver's zone semantics. Oracle's
@@ -36,8 +37,8 @@ class EtlRunnerTemporalBindTest {
     void aWallClockIsBoundToAnOracleTargetThroughTheFixedOffsetCalendar() throws SQLException {
         LocalDateTime wall = LocalDateTime.of(1948, 5, 1, 0, 0);
 
-        EtlRunner.bindRow(insert, columns(Types.TIMESTAMP, "DATE"), new Object[] {wall},
-                new OracleDialect());
+        EtlRunner.bindRow(insert, List.of(Types.TIMESTAMP), new Object[] {wall},
+                new OracleDialect(), LobBinder.NOOP);
 
         verify(insert).setTimestamp(eq(1),
                 eq(Timestamp.from(wall.toInstant(ZoneOffset.UTC))),
@@ -49,8 +50,8 @@ class EtlRunnerTemporalBindTest {
     void aWallClockIsBoundToAPostgresTargetThroughTheFixedOffsetCalendar() throws SQLException {
         LocalDateTime wall = LocalDateTime.of(1948, 5, 1, 0, 0);
 
-        EtlRunner.bindRow(insert, columns(Types.TIMESTAMP, "TIMESTAMP"), new Object[] {wall},
-                new PostgresDialect());
+        EtlRunner.bindRow(insert, List.of(Types.TIMESTAMP), new Object[] {wall},
+                new PostgresDialect(), LobBinder.NOOP);
 
         verify(insert).setTimestamp(eq(1),
                 eq(Timestamp.from(wall.toInstant(ZoneOffset.UTC))),
@@ -62,8 +63,8 @@ class EtlRunnerTemporalBindTest {
     void aWallClockToAMySqlTargetKeepsThePlainObjectBind() throws SQLException {
         LocalDateTime wall = LocalDateTime.of(1948, 5, 1, 0, 0);
 
-        EtlRunner.bindRow(insert, columns(Types.TIMESTAMP, "DATETIME"), new Object[] {wall},
-                new MySqlDialect());
+        EtlRunner.bindRow(insert, List.of(Types.TIMESTAMP), new Object[] {wall},
+                new MySqlDialect(), LobBinder.NOOP);
 
         verify(insert).setObject(1, wall);
         verify(insert, never()).setTimestamp(anyInt(), any(), any());
@@ -71,23 +72,18 @@ class EtlRunnerTemporalBindTest {
 
     @Test
     void aNonTemporalValueIsBoundWithThePlainObjectBind() throws SQLException {
-        EtlRunner.bindRow(insert, List.of(
-                new EtlSourceColumn("id", Types.INTEGER, "INTEGER", null, null, true)),
-                new Object[] {42L}, new OracleDialect());
+        EtlRunner.bindRow(insert, List.of(Types.INTEGER), new Object[] {42L},
+                new OracleDialect(), LobBinder.NOOP);
 
         verify(insert).setObject(1, 42L);
     }
 
     @Test
     void aNullUsesSetNullWithTheColumnType() throws SQLException {
-        EtlRunner.bindRow(insert, columns(Types.TIMESTAMP, "DATE"), new Object[] {null},
-                new OracleDialect());
+        EtlRunner.bindRow(insert, List.of(Types.TIMESTAMP), new Object[] {null},
+                new OracleDialect(), LobBinder.NOOP);
 
         verify(insert).setNull(1, Types.TIMESTAMP);
         verify(insert, never()).setObject(anyInt(), any());
-    }
-
-    private static List<EtlSourceColumn> columns(int jdbcType, String typeName) {
-        return List.of(new EtlSourceColumn("d", jdbcType, typeName, null, null, true));
     }
 }

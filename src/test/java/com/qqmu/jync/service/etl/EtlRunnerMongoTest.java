@@ -128,7 +128,9 @@ class EtlRunnerMongoTest {
     @Test
     void aTargetThatCannotTakeTheRowIsAttributedToTheTarget() throws SQLException {
         source.rows(row(1, "a"));
-        execute("CREATE TABLE dst (id INT PRIMARY KEY)");
+        // The NOT NULL column exists only on the target; the unmatched result column is
+        // skipped, so the failure comes from the INSERT itself.
+        execute("CREATE TABLE dst (id INT PRIMARY KEY, tenant INT NOT NULL)");
 
         EtlRunResult result = run(mongoTask(EtlWriteMode.OVERWRITE));
 

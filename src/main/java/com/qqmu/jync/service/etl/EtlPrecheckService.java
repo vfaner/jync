@@ -152,7 +152,30 @@ public class EtlPrecheckService {
             return;
         }
         compareColumns(resultColumns, targetColumns, checks);
+        checkUpsertKeysAgainstTarget(task, targetColumns, checks);
         checkRangeCondition(target, name, task, timeout, checks);
+    }
+
+    /**
+     * The runner writes the intersection of the result and the target, so an upsert key the
+     * target lacks is pruned, and a pruned key makes every run insert another copy. That is a
+     * failure, not a warning.
+     */
+    private static void checkUpsertKeysAgainstTarget(EtlTask task,
+                                                     Map<String, TargetColumn> targetColumns,
+                                                     List<EtlPrecheckResult.Check> checks) {
+        if (task.getWriteMode() != EtlWriteMode.UPSERT) {
+            return;
+        }
+        List<String> missing = new ArrayList<>();
+        for (String key : EtlUpsertSql.parse(task.getUpsertKeyColumns())) {
+            if (!targetColumns.containsKey(key.toLowerCase(Locale.ROOT))) {
+                missing.add(key);
+            }
+        }
+        if (!missing.isEmpty()) {
+            checks.add(error("etl.precheck.upsert.target.missing", String.join(", ", missing)));
+        }
     }
 
     private Map<String, TargetColumn> targetColumns(Connection target, String name, int timeout,
@@ -185,8 +208,15 @@ public class EtlPrecheckService {
                 missing.add(entry.getValue());
             }
         }
-        if (!missing.isEmpty()) {
-            checks.add(error("etl.precheck.target.columns.error", String.join(", ", missing)));
+        if (resultColumns.isEmpty()) {
+            // An empty probe result says nothing about the target; the source check already
+            // reported why there are no columns.
+        } else if (missing.size() == resultColumns.size()) {
+            // The runner would have nothing to write and refuses before touching the target.
+            checks.add(error("etl.precheck.target.columns.none", String.join(", ", missing)));
+        } else if (!missing.isEmpty()) {
+            // The run writes the intersection and reports the rest; not a failure.
+            checks.add(warn("etl.precheck.target.columns.skipped", String.join(", ", missing)));
         }
 
         // Not an error: the customer may fill these with defaults or in a later step, but the

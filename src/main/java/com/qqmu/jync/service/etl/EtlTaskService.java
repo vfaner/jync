@@ -307,9 +307,14 @@ public class EtlTaskService {
         Instant finishedAt = Instant.now();
         task.setLastRunTime(finishedAt);
         task.setLastRunSuccess(result.success());
+        // Columns the existing target lacks are skipped, not failed; the summary names them so
+        // the page shows why fewer columns were written than the extraction selects.
+        String skipped = result.skippedColumns().isEmpty()
+                ? "" : " skipped=" + String.join(",", result.skippedColumns());
         task.setLastRunResult(result.success()
-                ? "SUCCESS read=" + result.rowsRead() + " written=" + result.rowsWritten()
-                : "FAILED side=" + result.failureSide() + " error=" + result.errorMessage());
+                ? "SUCCESS read=" + result.rowsRead() + " written=" + result.rowsWritten() + skipped
+                : "FAILED side=" + result.failureSide() + skipped
+                + " error=" + result.errorMessage());
         taskRepository.save(task);
 
         // The task row only keeps the latest outcome; the dashboard's ETL line needs the

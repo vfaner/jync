@@ -129,17 +129,21 @@ class EtlPrecheckServiceMongoTest {
         assertThat(codes(result)).contains("etl.precheck.mongo.resume.error");
     }
 
+    /**
+     * The runner writes the intersection with an existing target, so an inferred field the
+     * target lacks is skipped with a warning rather than failing the precheck.
+     */
     @Test
-    void theTargetMustCoverEveryProbedColumn() throws SQLException {
+    void aProbedColumnTheTargetLacksIsReportedAsSkipped() throws SQLException {
         execute("CREATE TABLE dst (id INT)");
         source.probe = new EtlSourceProbe(COLUMNS, -1, List.of(
                 ok("etl.precheck.mongo.sample.ok", "1")));
 
         EtlPrecheckResult result = check(task());
 
-        assertThat(result.passed()).isFalse();
+        assertThat(result.passed()).isTrue();
         assertThat(result.checks())
-                .filteredOn(check -> "etl.precheck.target.columns.error".equals(check.code()))
+                .filteredOn(check -> "etl.precheck.target.columns.skipped".equals(check.code()))
                 .extracting(EtlPrecheckResult.Check::detail)
                 .containsExactly("name");
     }

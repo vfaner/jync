@@ -3,11 +3,16 @@ package com.qqmu.jync.service.etl;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,7 +27,9 @@ import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
+import com.qqmu.jync.service.converter.VendorTypeMap;
 import com.qqmu.jync.service.etl.EtlRunResult.Side;
+import com.qqmu.jync.service.lob.LobBinder;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.sync.UniqueViolations;
 import com.qqmu.jync.service.etl.mongo.MongoFilterParser;
@@ -34,6 +41,13 @@ import com.qqmu.jync.service.etl.mongo.MongoFilterParser;
  * structure comparison. The customer owns the extraction SQL and the target table; Jync only
  * streams the result, creates the target table once from the result metadata when it is
  * missing, and reports which side failed. See {@link EtlWriteMode} for what is deleted.
+ *
+ * <p>An existing target is matched column by column, case-insensitively: the run writes the
+ * intersection and reports the rest through {@link EtlRunResult#skippedColumns()} instead of
+ * failing on a column the target does not have. A result sharing no column with the target is
+ * refused before anything is written, and so is an upsert whose key would be pruned — every
+ * such run would insert a duplicate. When the target's columns cannot be read (no metadata
+ * privilege), the runner logs a warning and writes every result column, as it always did.
  */
 @Service
 public class EtlRunner {
@@ -67,6 +81,9 @@ public class EtlRunner {
                             DatabaseConfig targetConfig, EtlConnectionProvider connections) {
         long rowsRead = 0;
         long rowsWritten = 0;
+        // Labels of the result columns an existing target does not have. Empty when the table
+        // is created by this run, when nothing is missing, or when its columns cannot be read.
+        List<String> skippedColumns = List.of();
         EtlSource source = null;
         Connection target = null;
         Side stage = Side.PROGRAM;
@@ -99,6 +116,12 @@ public class EtlRunner {
             stage = Side.SOURCE;
             try (EtlSourceCursor cursor = source.query(task, checkpoint)) {
                 List<EtlSourceColumn> columns = cursor.columns();
+                // The bind type is the target's, not the source's: Oracle creates a CLOB for
+                // a wide/LONGVARCHAR source column, and the copy loop must bind and NULL-type
+                // that column as one — otherwise LobBinder never sees the values it must
+                // divert and the placeholder stays on the LONG path (ORA-01461 past 4000
+                // bytes, or 2000 for binary).
+                List<Integer> targetTypes = targetBindTypes(columns, sourceType, targetDialect);
                 // Resolve the key before anything on the target is deleted: a typo must
                 // not cost the operator the previous contents.
                 int keyIndex = cursor.resumeKeyIndex();
@@ -111,8 +134,42 @@ public class EtlRunner {
                         ? EtlUpsertSql.resolve(columnNames,
                                 EtlUpsertSql.parse(task.getUpsertKeyColumns()))
                         : List.of();
+                boolean targetExists = EtlSqlSupport.exists(target, targetName);
+                // An existing table defines what can be written. Extractions routinely select
+                // more than the target carries (or an older table precedes a new column), so
+                // the run writes the intersection and reports the rest. All of this is decided
+                // before the pre-sql or the write-mode DELETE, so a configuration mistake
+                // cannot empty the target it then fails to refill.
+                int[] keptIndexes = keptColumnIndexes(target, task, targetName, columnNames,
+                        targetExists);
+                List<String> writeColumns = keptIndexes == null
+                        ? columnNames : pick(columnNames, keptIndexes);
+                List<Integer> writeTypes = keptIndexes == null
+                        ? targetTypes : pick(targetTypes, keptIndexes);
+                if (keptIndexes != null) {
+                    skippedColumns = skipped(columnNames, keptIndexes);
+                }
+                if (writeColumns.isEmpty()) {
+                    throw new EtlProgramException("error.etl.target.noColumns");
+                }
+                if (!skippedColumns.isEmpty()) {
+                    log.warn("ETL task {}: target table {} has no column for result column(s) "
+                            + "{}; writing {} of {} result columns",
+                            task.getId(), targetName, String.join(", ", skippedColumns),
+                            writeColumns.size(), columnNames.size());
+                }
+                if (task.getWriteMode() == EtlWriteMode.UPSERT) {
+                    // Pruning a key column would make the upsert insert another copy on every
+                    // run instead of matching the existing row; refuse instead of guessing.
+                    List<String> missingKeys = EtlUpsertSql.unresolved(writeColumns, upsertKeys);
+                    if (!missingKeys.isEmpty()) {
+                        throw new EtlProgramException("error.etl.upsertKey.targetMissing:"
+                                + String.join(", ", missingKeys));
+                    }
+                }
                 boolean targetCreated = ensureTargetTable(target, targetDialect, sourceType,
-                        targetConfig, task.getTargetTable(), targetName, columns, upsertKeys);
+                        targetConfig, task.getTargetTable(), targetName, columns, upsertKeys,
+                        targetExists);
                 // Pre-sql (cleanup, deletions, pre-transformations) runs after the target
                 // table exists: its documented example is a DELETE on that table, which a
                 // first run would otherwise fail before the table was created. It still runs
@@ -134,10 +191,10 @@ public class EtlRunner {
                 }
                 deleteForWriteMode(target, task, targetName, checkpoint);
 
-                String insertSql = insertSql(targetName, columnNames);
+                String insertSql = insertSql(targetName, writeColumns);
                 String nativeUpsertSql = task.getWriteMode() == EtlWriteMode.UPSERT
                         ? EtlUpsertSql.nativeUpsert(targetConfig.effectiveType(), targetName,
-                                columnNames, upsertKeys)
+                                writeColumns, upsertKeys)
                         : null;
                 if (nativeUpsertSql != null && !targetCreated
                         && !EtlUpsertIndexes.coversKeys(target, targetName, upsertKeys)) {
@@ -152,26 +209,29 @@ public class EtlRunner {
                         && nativeUpsertSql == null;
                 String writeSql = nativeUpsertSql != null ? nativeUpsertSql : insertSql;
                 String updateSql = emulatedUpsert
-                        ? EtlUpsertSql.update(targetName, columnNames, upsertKeys) : null;
+                        ? EtlUpsertSql.update(targetName, writeColumns, upsertKeys) : null;
 
                 // The emulation binds the SET values first, then the key, in the configured
-                // key order; both lists are constant for the whole run.
+                // key order; both lists are constant for the whole run. The positions index
+                // the written row (already pruned), not the full extraction result.
                 List<Integer> updateIndexes = emulatedUpsert
-                        ? upsertBindingIndexes(columnNames, upsertKeys) : List.of();
-                List<EtlSourceColumn> updateColumns = updateIndexes.stream()
-                        .map(columns::get).toList();
+                        ? upsertBindingIndexes(writeColumns, upsertKeys) : List.of();
                 // Both upsert forms match a row by its key, so both need the key positions:
                 // the emulation binds them, the NULL check rejects a row without them.
                 List<Integer> keyIndexes = upsertKeys.stream()
-                        .map(columnNames::indexOf).toList();
-                List<EtlSourceColumn> keyColumns = keyIndexes.stream()
-                        .map(columns::get).toList();
+                        .map(writeColumns::indexOf).toList();
+                List<Integer> updateTypes = updateIndexes.stream()
+                        .map(writeTypes::get).toList();
+                List<Integer> keyTypes = keyIndexes.stream().map(writeTypes::get).toList();
                 // Rows of the transaction being written. Only the emulation needs them: its
                 // UPDATEs are queued, and their counts alone cannot tell a missing key from an
                 // unchanged row, so the values are kept until the batch has been sent.
                 List<Object[]> pendingUpsertRows = new ArrayList<>();
 
                 stage = Side.TARGET;
+                // Temporary LOBs bound into a batch stay alive until it executes, then are
+                // freed; the finally below also covers the error paths.
+                LobBinder.Tracker lobTracker = LobBinder.newTracker();
                 try (PreparedStatement insert = target.prepareStatement(writeSql);
                      PreparedStatement update = updateSql == null ? null
                              : target.prepareStatement(updateSql);
@@ -203,16 +263,22 @@ public class EtlRunner {
                             break;
                         }
                         rowsRead++;
+                        // The full result row is still read: the resume key may be a
+                        // source-only column the target does not have.
                         Object[] values = new Object[columns.size()];
                         for (int i = 1; i <= columns.size(); i++) {
                             values[i - 1] = cursor.getObject(i);
                         }
+                        Object[] row = keptIndexes == null ? values : pick(values, keptIndexes);
                         for (int index : keyIndexes) {
-                            if (values[index] == null) {
+                            if (row[index] == null) {
                                 // An upsert matches a row by its key; a NULL key matches
                                 // nothing, so the row would be inserted again on every run.
+                                // The index is a position in the written row, which is pruned;
+                                // naming the full result's column there would blame an
+                                // unrelated source-only column.
                                 throw new EtlProgramException(
-                                        "error.etl.upsertKey.null:" + columnNames.get(index));
+                                        "error.etl.upsertKey.null:" + writeColumns.get(index));
                             }
                         }
                         if (keyIndex > 0) {
@@ -250,10 +316,10 @@ public class EtlRunner {
                         }
                         stage = Side.TARGET;
                         if (emulatedUpsert) {
-                            queueUpsertRow(update, updateColumns, updateIndexes,
-                                    values, targetDialect, pendingUpsertRows);
+                            queueUpsertRow(update, updateTypes, updateIndexes,
+                                    row, targetDialect, lobTracker, pendingUpsertRows);
                         } else {
-                            bindRow(insert, columns, values, targetDialect);
+                            bindRow(insert, writeTypes, row, targetDialect, lobTracker);
                             insert.addBatch();
                         }
                         pending++;
@@ -263,12 +329,13 @@ public class EtlRunner {
                             if (emulatedUpsert) {
                                 // One round trip for the transaction's UPDATEs, then the
                                 // insert path only for the keys the batch could not update.
-                                flushUpsertRows(update, insert, probe, columns, keyColumns,
-                                        keyIndexes, pendingUpsertRows, targetDialect);
+                                flushUpsertRows(update, insert, probe, writeTypes, keyTypes,
+                                        keyIndexes, pendingUpsertRows, targetDialect, lobTracker);
                             } else {
                                 insert.executeBatch();
                             }
                             target.commit();
+                            lobTracker.releaseAll();
                             rowsWritten += pending;
                             pending = 0;
                             stage = Side.PROGRAM;
@@ -282,16 +349,19 @@ public class EtlRunner {
                     if (pending > 0) {
                         stage = Side.TARGET;
                         if (emulatedUpsert) {
-                            flushUpsertRows(update, insert, probe, columns, keyColumns,
-                                    keyIndexes, pendingUpsertRows, targetDialect);
+                            flushUpsertRows(update, insert, probe, writeTypes, keyTypes,
+                                    keyIndexes, pendingUpsertRows, targetDialect, lobTracker);
                         } else {
                             insert.executeBatch();
                         }
                         target.commit();
+                        lobTracker.releaseAll();
                         rowsWritten += pending;
                         stage = Side.PROGRAM;
                         saveCheckpoint(task, resumable, keyType, keyValue);
                     }
+                } finally {
+                    lobTracker.releaseAll();
                 }
             }
 
@@ -316,21 +386,25 @@ public class EtlRunner {
                 checkpointStore.clear(task.getId());
             }
 
-            return EtlRunResult.success(rowsRead, rowsWritten);
+            return EtlRunResult.success(rowsRead, rowsWritten, skippedColumns);
         } catch (EtlProgramException e) {
-            return EtlRunResult.failure(rowsRead, rowsWritten, Side.PROGRAM, e.getMessage());
+            return EtlRunResult.failure(rowsRead, rowsWritten, Side.PROGRAM, e.getMessage(),
+                    skippedColumns);
         } catch (EtlSourceException e) {
             log.warn("ETL task {} failed on the source side: {}", task.getId(), e.getMessage());
             safeRollback(target);
-            return EtlRunResult.failure(rowsRead, rowsWritten, Side.SOURCE, e.getMessage());
+            return EtlRunResult.failure(rowsRead, rowsWritten, Side.SOURCE, e.getMessage(),
+                    skippedColumns);
         } catch (SQLException e) {
             log.warn("ETL task {} failed on the {} side: {}", task.getId(), stage, e.getMessage());
             safeRollback(target);
-            return EtlRunResult.failure(rowsRead, rowsWritten, stage, e.getMessage());
+            return EtlRunResult.failure(rowsRead, rowsWritten, stage, e.getMessage(),
+                    skippedColumns);
         } catch (RuntimeException e) {
             log.warn("ETL task {} failed in the program: {}", task.getId(), e.getMessage());
             safeRollback(target);
-            return EtlRunResult.failure(rowsRead, rowsWritten, Side.PROGRAM, String.valueOf(e.getMessage()));
+            return EtlRunResult.failure(rowsRead, rowsWritten, Side.PROGRAM,
+                    String.valueOf(e.getMessage()), skippedColumns);
         } finally {
             // A driver that fails while closing must not replace the result the caller is
             // about to record; the run already happened.
@@ -417,18 +491,148 @@ public class EtlRunner {
     }
 
     /**
-     * Binds one extracted row to the insert. A zone-less wall clock goes through
-     * {@link JdbcRowMapper#bindParameter}: Oracle's driver renders a {@code LocalDateTime}
-     * through the JVM default zone, so a pre-1949 DST-gap value would land an hour late.
+     * Positions of the result columns the existing target also has, or {@code null} when the
+     * run writes every result column (the table is created by this run, or its own column list
+     * cannot be read).
+     *
+     * <p>Matching is case-insensitive: the runner writes unquoted identifiers, so the target's
+     * folding rules decide how the two names meet, and a driver that reports labels upper-cased
+     * must still match a lower-case alias.
      */
-    static void bindRow(PreparedStatement insert, List<EtlSourceColumn> columns,
-                        Object[] values, SqlDialect dialect) throws SQLException {
-        for (int i = 1; i <= columns.size(); i++) {
+    private int[] keptColumnIndexes(Connection target, EtlTask task, String targetName,
+                                    List<String> columnNames, boolean targetExists) {
+        if (!targetExists) {
+            // The table is built from the full result metadata, so nothing can be missing.
+            return null;
+        }
+        Set<String> targetColumns = targetColumnNames(target, targetName);
+        if (targetColumns == null) {
+            // An INSERT-only account may not be able to describe the table. Keep the previous
+            // behaviour instead of refusing a run that may work: write every result column.
+            log.warn("ETL task {}: could not read the columns of target table {}; "
+                    + "writing every result column", task.getId(), targetName);
+            return null;
+        }
+        int[] kept = new int[columnNames.size()];
+        int count = 0;
+        for (int i = 0; i < columnNames.size(); i++) {
+            if (targetColumns.contains(columnNames.get(i).toLowerCase(Locale.ROOT))) {
+                kept[count++] = i;
+            }
+        }
+        return Arrays.copyOf(kept, count);
+    }
+
+    /** The target's column labels, lower-cased; {@code null} when they cannot be read. */
+    private static Set<String> targetColumnNames(Connection target, String targetName) {
+        String sql = "SELECT * FROM " + targetName + " WHERE 1 = 0";
+        try (Statement statement = target.createStatement();
+             ResultSet rows = statement.executeQuery(sql)) {
+            ResultSetMetaData meta = rows.getMetaData();
+            if (meta == null) {
+                return null;
+            }
+            Set<String> names = new HashSet<>();
+            for (int i = 1; i <= meta.getColumnCount(); i++) {
+                String label = meta.getColumnLabel(i);
+                if (label != null) {
+                    names.add(label.toLowerCase(Locale.ROOT));
+                }
+            }
+            return names;
+        } catch (SQLException e) {
+            // PostgreSQL-family drivers abort their transaction on any failed statement; the
+            // run continues with the old write-everything behaviour, so clear that state.
+            safeRollback(target);
+            log.warn("Could not read the columns of target table {}: {}", targetName,
+                    e.getMessage());
+            return null;
+        }
+    }
+
+    private static List<String> skipped(List<String> columnNames, int[] keptIndexes) {
+        boolean[] kept = new boolean[columnNames.size()];
+        for (int index : keptIndexes) {
+            kept[index] = true;
+        }
+        List<String> skipped = new ArrayList<>();
+        for (int i = 0; i < columnNames.size(); i++) {
+            if (!kept[i]) {
+                skipped.add(columnNames.get(i));
+            }
+        }
+        return skipped;
+    }
+
+    private static <T> List<T> pick(List<T> values, int[] indexes) {
+        List<T> picked = new ArrayList<>(indexes.length);
+        for (int index : indexes) {
+            picked.add(values.get(index));
+        }
+        return picked;
+    }
+
+    private static Object[] pick(Object[] values, int[] indexes) {
+        Object[] picked = new Object[indexes.length];
+        for (int i = 0; i < indexes.length; i++) {
+            picked[i] = values[indexes[i]];
+        }
+        return picked;
+    }
+
+    /** The source column as the metadata shape the dialects map from. */
+    private static ColumnMeta columnMeta(EtlSourceColumn source, int ordinalPosition) {
+        ColumnMeta column = new ColumnMeta();
+        column.setName(source.name());
+        column.setJdbcType(source.jdbcType());
+        column.setTypeName(source.typeName());
+        column.setSize(source.size());
+        column.setDecimalDigits(source.decimalDigits());
+        column.setNullable(source.nullable());
+        column.setOrdinalPosition(ordinalPosition);
+        return column;
+    }
+
+    /**
+     * The JDBC type each result column's values are bound with on the target — the mapped
+     * target type, not the source's. Oracle creates a CLOB for a wide VARCHAR or any
+     * LONGVARCHAR/CLOB source column (and a BLOB for wide binary), and the placeholder must
+     * carry that type or {@link LobBinder} never diverts a value that outgrows the driver's
+     * inline ceiling.
+     */
+    static List<Integer> targetBindTypes(List<EtlSourceColumn> columns,
+                                         DatabaseType sourceType, SqlDialect dialect) {
+        List<Integer> types = new ArrayList<>(columns.size());
+        for (EtlSourceColumn source : columns) {
+            // Canonicalize vendor codes first: a SQL Server -157 or an Oracle code outside
+            // getInternalType's table would make setNull throw.
+            int canonical = VendorTypeMap.bindType(sourceType, source.jdbcType(),
+                    source.typeName());
+            types.add(dialect.bindJdbcType(columnMeta(source, 0), sourceType, canonical));
+        }
+        return types;
+    }
+
+    /**
+     * Binds one extracted row to the statement through the sync writer's own value binder:
+     * a value the target cannot take inline goes through {@link LobBinder} (Oracle's driver
+     * binds a placeholder as a LONG once it outgrows VARCHAR2's 4000 bytes — 2000 for RAW —
+     * and a CLOB column rejects that with ORA-01461; an empty string would become NULL), and
+     * the vendor-specific values keep the conversions the copy path would otherwise miss:
+     * a MySQL {@code BIT(n>1)} byte array decodes onto the integer column it was mapped to,
+     * a Boolean becomes 1/0 for an integer target, and {@code java.time} values are
+     * normalized for the target driver. A bare {@code setObject} here was the same drift the
+     * read side had.
+     */
+    static void bindRow(PreparedStatement insert, List<Integer> targetTypes, Object[] values,
+                        SqlDialect dialect, LobBinder.Tracker tracker) throws SQLException {
+        for (int i = 1; i <= targetTypes.size(); i++) {
             Object value = values[i - 1];
+            int type = targetTypes.get(i - 1);
             if (value == null) {
-                insert.setNull(i, columns.get(i - 1).jdbcType());
+                insert.setNull(i, type);
             } else {
-                JdbcRowMapper.bindParameter(insert, i, value, dialect);
+                JdbcRowMapper.bindTargetValue(insert, i, value, type, dialect, tracker);
             }
         }
     }
@@ -442,16 +646,16 @@ public class EtlRunner {
      * <p>A key-only table has no non-key column to update; every row goes straight to the
      * probe-and-insert path.
      */
-    private static void queueUpsertRow(PreparedStatement update,
-                                       List<EtlSourceColumn> updateColumns,
+    private static void queueUpsertRow(PreparedStatement update, List<Integer> updateTypes,
                                        List<Integer> updateIndexes, Object[] values,
-                                       SqlDialect dialect, List<Object[]> rows) throws SQLException {
+                                       SqlDialect dialect, LobBinder.Tracker tracker,
+                                       List<Object[]> rows) throws SQLException {
         if (update != null) {
             Object[] updateValues = new Object[updateIndexes.size()];
             for (int i = 0; i < updateValues.length; i++) {
                 updateValues[i] = values[updateIndexes.get(i)];
             }
-            bindRow(update, updateColumns, updateValues, dialect);
+            bindRow(update, updateTypes, updateValues, dialect, tracker);
             update.addBatch();
         }
         rows.add(values);
@@ -473,10 +677,10 @@ public class EtlRunner {
      * (case-insensitive collations, padded CHARs, DECIMAL scales).
      */
     private static void flushUpsertRows(PreparedStatement update, PreparedStatement insert,
-                                        PreparedStatement probe, List<EtlSourceColumn> columns,
-                                        List<EtlSourceColumn> keyColumns,
-                                        List<Integer> keyIndexes, List<Object[]> rows,
-                                        SqlDialect dialect) throws SQLException {
+                                        PreparedStatement probe, List<Integer> insertTypes,
+                                        List<Integer> keyTypes, List<Integer> keyIndexes,
+                                        List<Object[]> rows, SqlDialect dialect,
+                                        LobBinder.Tracker tracker) throws SQLException {
         int[] counts = null;
         if (update != null && !rows.isEmpty()) {
             counts = update.executeBatch();
@@ -493,10 +697,10 @@ public class EtlRunner {
                 continue;
             }
             Object[] values = rows.get(i);
-            if (exists(probe, keyColumns, values, keyIndexes, dialect)) {
+            if (exists(probe, keyTypes, values, keyIndexes, dialect, tracker)) {
                 continue;
             }
-            bindRow(insert, columns, values, dialect);
+            bindRow(insert, insertTypes, values, dialect, tracker);
             try {
                 insert.executeUpdate();
             } catch (SQLException e) {
@@ -504,7 +708,7 @@ public class EtlRunner {
                 // the INSERT. Only a collision on a key the target now holds is absorbed;
                 // any other integrity violation must surface instead of dropping the row.
                 if (!UniqueViolations.isUniqueViolation(e)
-                        || !exists(probe, keyColumns, values, keyIndexes, dialect)) {
+                        || !exists(probe, keyTypes, values, keyIndexes, dialect, tracker)) {
                     throw e;
                 }
             }
@@ -512,14 +716,14 @@ public class EtlRunner {
         rows.clear();
     }
 
-    private static boolean exists(PreparedStatement probe, List<EtlSourceColumn> keyColumns,
-                                  Object[] values, List<Integer> keyIndexes, SqlDialect dialect)
-            throws SQLException {
+    private static boolean exists(PreparedStatement probe, List<Integer> keyTypes,
+                                  Object[] values, List<Integer> keyIndexes, SqlDialect dialect,
+                                  LobBinder.Tracker tracker) throws SQLException {
         Object[] keyValues = new Object[keyIndexes.size()];
         for (int i = 0; i < keyValues.length; i++) {
             keyValues[i] = values[keyIndexes.get(i)];
         }
-        bindRow(probe, keyColumns, keyValues, dialect);
+        bindRow(probe, keyTypes, keyValues, dialect, tracker);
         try (ResultSet rs = probe.executeQuery()) {
             return rs.next();
         }
@@ -550,24 +754,15 @@ public class EtlRunner {
                                       DatabaseType sourceType,
                                       DatabaseConfig targetConfig, String configuredTable,
                                       String targetName, List<EtlSourceColumn> columns,
-                                      List<String> primaryKeyColumns)
+                                      List<String> primaryKeyColumns, boolean exists)
             throws SQLException {
-        if (EtlSqlSupport.exists(target, targetName)) {
+        if (exists) {
             return false;
         }
         TableMeta table = new TableMeta();
         table.setName(configuredTable);
         for (int i = 1; i <= columns.size(); i++) {
-            EtlSourceColumn source = columns.get(i - 1);
-            ColumnMeta column = new ColumnMeta();
-            column.setName(source.name());
-            column.setJdbcType(source.jdbcType());
-            column.setTypeName(source.typeName());
-            column.setSize(source.size());
-            column.setDecimalDigits(source.decimalDigits());
-            column.setNullable(source.nullable());
-            column.setOrdinalPosition(i);
-            table.getColumns().add(column);
+            table.getColumns().add(columnMeta(columns.get(i - 1), i));
         }
 
         // Deliberately assembled here instead of via getCreateTableSql: the target table name
