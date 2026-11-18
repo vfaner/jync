@@ -156,13 +156,16 @@ class DashboardLiveViewTest {
                 .doesNotContain("/dashboard/memory-series");
     }
 
-    /** 面向本机所有账号的 JVM 数字，只读账号不该在页面上看到，也就不该去轮询它。 */
+    /** 进程资源描述的是这台机器，与业务数据无关，三种角色都可以看。 */
     @Test
-    void aViewerGetsNoProcessCard() throws Exception {
-        String html = dashboard(Locale.SIMPLIFIED_CHINESE, UserRole.VIEWER);
+    void everyRoleGetsTheProcessCard() throws Exception {
+        for (UserRole role : UserRole.values()) {
+            String html = dashboard(Locale.SIMPLIFIED_CHINESE, role);
 
-        assertThat(html).doesNotContain("id=\"process-block\"")
-                .doesNotContain("/dashboard/process-metrics");
+            assertThat(html).as(role.name())
+                    .contains("id=\"process-block\"")
+                    .contains("/dashboard/process-metrics");
+        }
     }
 
     @Test

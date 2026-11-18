@@ -11,7 +11,7 @@
             <p class="sub" th:text="#{redis.targets.listHint}">Cache endpoints for real-time projection. Never used as a source.</p>
         </div>
         <div class="page-actions">
-            <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/redis/targets/new}">
+            <a class="btn btn-primary btn-sm" th:if="${canWrite}" th:href="@{/redis/targets/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg>
                 <span th:text="#{redis.targets.new}">New Redis target</span>
             </a>
@@ -32,7 +32,7 @@
             <div th:if="${#lists.isEmpty(targets)}" class="empty">
                 <div class="empty-ico"><svg class="ico"><use href="#database"/></svg></div>
                 <h3 th:text="#{redis.targets.empty}">No Redis targets yet.</h3>
-                <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+                <a class="btn btn-primary btn-sm" th:if="${canWrite}"
                    th:href="@{/redis/targets/new}">
                     <svg class="ico"><use href="#plus-lg"/></svg>
                     <span th:text="#{redis.targets.new}">New Redis target</span>
@@ -47,7 +47,7 @@
                         <th th:text="#{redis.targets.host}">Host</th>
                         <th th:text="#{redis.targets.mode}">Mode</th>
                         <th th:text="#{redis.targets.tls}">TLS</th>
-                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
+                        <th class="num" th:if="${canWrite}" th:text="#{common.actions}">Actions</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -63,8 +63,9 @@
                         </td>
                         <td class="small"
                             th:text="${target.tlsEnabled} ? #{redis.targets.tls.on} : #{redis.targets.tls.off}">Off</td>
-                        <td th:if="${isAdmin}">
-                            <div class="btn-row" style="justify-content:flex-end">
+                        <td th:if="${canWrite}">
+                            <div class="btn-row" style="justify-content:flex-end"
+                                 th:if="${access.canEdit(target.ownerUsername)}">
                                 <a class="btn-icon"
                                    th:href="@{/redis/targets/{id}/edit(id=${target.id})}"
                                    th:title="#{common.edit}">

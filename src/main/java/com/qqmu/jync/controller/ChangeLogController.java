@@ -22,6 +22,7 @@ import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.service.ChangeLogService;
 import com.qqmu.jync.service.ProjectService;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.cdc.CdcDdlTaskService;
 
 /** Paged, filterable view of the change log. */
@@ -101,9 +102,10 @@ public class ChangeLogController {
     }
 
     /**
-     * Executes an administrator-edited DDL for a skipped CDC change on the target database.
-     * POST endpoints are ADMIN-only in the security filter chain; the service resolves the
-     * target connection from the log's own project, never from request parameters.
+     * Executes an operator-reviewed DDL for a skipped CDC change on the target database.
+     * The filter chain admits a writer here; the service then checks the log's project
+     * owner. The target connection is resolved from the log's own project, never from
+     * request parameters.
      */
     @PostMapping("/change-logs/{id}/execute")
     @ResponseBody
@@ -113,7 +115,7 @@ public class ChangeLogController {
             if (ddlTaskService == null) {
                 throw new IllegalStateException("error.ddl.notFound");
             }
-            CdcDdlTaskService.DdlTaskOutcome outcome = ddlTaskService.executeDdl(id, sql);
+            CdcDdlTaskService.DdlTaskOutcome outcome = ddlTaskService.executeDdl(id, sql, AccessGuard.current());
             if (outcome == null) {
                 throw new IllegalStateException("error.ddl.notFound");
             }
@@ -138,7 +140,7 @@ public class ChangeLogController {
             if (ddlTaskService == null) {
                 throw new IllegalStateException("error.ddl.notFound");
             }
-            ddlTaskService.replayDdl(id);
+            ddlTaskService.replayDdl(id, AccessGuard.current());
             return Map.of("success", true, "message", text("msg.ddl.replayed"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return Map.of("success", false, "message", text(e.getMessage()));
@@ -157,7 +159,7 @@ public class ChangeLogController {
             if (ddlTaskService == null) {
                 throw new IllegalStateException("error.ddl.notFound");
             }
-            ddlTaskService.dismissDdl(id);
+            ddlTaskService.dismissDdl(id, AccessGuard.current());
             return Map.of("success", true, "message", text("msg.ddl.dismissed"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return Map.of("success", false, "message", text(e.getMessage()));

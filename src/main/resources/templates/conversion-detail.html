@@ -76,8 +76,10 @@
         </div>
         <div class="card-body">
 
-            <!--/* 起草和语法检查都是 POST，而且语法检查会真的动目标库，访客一律看不到 */-->
-            <div class="btn-row" style="margin-bottom:12px" th:if="${isAdmin}">
+            <!--/* 起草和语法检查都是 POST，而且语法检查会真的动目标库；
+                   只有项目的归属账号和管理员能看到 */-->
+            <div class="btn-row" style="margin-bottom:12px"
+                 th:if="${access.canEdit(projectOwner)}">
                 <!--/* AI 起草：只读源库、只产出候选，不写任何库 */-->
                 <button type="button" class="btn btn-primary btn-sm"
                         th:if="${detail.assistAvailable}"
@@ -119,14 +121,14 @@
                     <label for="override-sql" th:text="#{conversion.editorLabel}">Statement</label>
                     <textarea id="override-sql" name="sql" class="input mono sql-edit" rows="18"
                               wrap="off" spellcheck="false"
-                              th:attr="readonly=${isAdmin} ? null : 'readonly'"
+                              th:attr="readonly=${access.canEdit(projectOwner)} ? null : 'readonly'"
                               th:text="${detail.editorSeed()}"></textarea>
                     <p class="help" th:text="#{conversion.editorHelp}">
                         Saved as-is and executed as a single statement.
                     </p>
                 </div>
-                <div class="btn-row" th:if="${isAdmin}">
-                    <button type="submit" class="btn btn-primary btn-sm">
+                <div class="btn-row" th:if="${access.canEdit(projectOwner)}">
+                    <button type="submit" class="btn btn-primary btn-sm" data-role="save-override">
                         <svg class="ico"><use href="#check-lg"/></svg>
                         <span th:text="#{conversion.saveOverride}">Save override</span>
                     </button>
@@ -134,7 +136,7 @@
             </form>
 
             <form method="post" style="margin-top:10px"
-                  th:if="${isAdmin and !#strings.isEmpty(detail.override)}"
+                  th:if="${access.canEdit(projectOwner) and !#strings.isEmpty(detail.override)}"
                   th:action="@{/projects/{id}/conversions/{kind}/{name}/delete-override(id=${projectId}, kind=${detail.kind}, name=${detail.name})}"
                   th:attr="data-confirm=#{common.confirm.deleteOverride(${detail.name})}">
                 <button type="submit" class="btn btn-outline-danger btn-sm">

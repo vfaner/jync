@@ -17,7 +17,7 @@
         </div>
         <!--/* 没有刷新按钮：统计卡、概览表、趋势图、活动流各自按自己的节奏轮询，整页
                重画一遍只是把它们刚拿到的数字再画一次。 */-->
-        <div class="page-actions" th:if="${isAdmin}">
+        <div class="page-actions" th:if="${canWrite}">
             <a class="btn btn-primary btn-sm" th:href="@{/projects/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
             </a>
@@ -132,8 +132,8 @@
     <!--/* 进程资源：CPU / 堆 / 线程 / GC 属于整个 JVM，本服务器上所有任务共用，所以它
            不套卡片、紧跟在整机资源环之后——上面两排说的都是「这台机器」，下面才是任务。
            数据来自落库的采样历史（metrics.js 每 10 秒取一次 /dashboard/process-metrics）。
-           仅管理员可见：这些数字描述的是所有账号共用的这台机器。 */-->
-    <section class="process-row" id="process-block" th:if="${isAdmin}"
+           三种角色都可以看：这些数字描述的是所有账号共用的这台机器，不含任何业务数据。 */-->
+    <section class="process-row" id="process-block"
              th:attr="data-metrics-url=@{/dashboard/process-metrics}" data-range="24h">
         <div class="process-head">
             <h2 th:text="#{metrics.process.title}">Process resources</h2>
@@ -257,7 +257,7 @@
                         <div class="empty-ico"><svg class="ico"><use href="#inbox"/></svg></div>
                         <h3 th:text="#{dashboard.noProjects}">No projects yet.</h3>
                         <p th:text="#{project.createHint}">Create one to begin.</p>
-                        <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/projects/new}">
+                        <a class="btn btn-primary btn-sm" th:if="${canWrite}" th:href="@{/projects/new}">
                             <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{project.new}">New project</span>
                         </a>
                     </div>

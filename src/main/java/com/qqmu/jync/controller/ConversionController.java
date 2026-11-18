@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 import org.springframework.web.util.UriUtils;
 
+import com.qqmu.jync.model.Project;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.ai.ConversionAssistService;
 
@@ -30,9 +32,23 @@ import lombok.extern.slf4j.Slf4j;
 public class ConversionController {
 
     private final ConversionAssistService assistService;
+    private final ProjectService projectService;
 
-    public ConversionController(ConversionAssistService assistService) {
+    public ConversionController(ConversionAssistService assistService,
+                                ProjectService projectService) {
         this.assistService = assistService;
+        this.projectService = projectService;
+    }
+
+    /**
+     * The project's owner, so the templates can ask {@code access.canEdit(projectOwner)}.
+     * The service has already resolved the project (an unknown id fails the read); a null
+     * owner means a system/legacy project, which only an administrator may edit.
+     */
+    private void exposeOwner(Long projectId, Model model) {
+        model.addAttribute("projectOwner", projectService.findById(projectId)
+                .map(Project::getOwnerUsername)
+                .orElse(null));
     }
 
     /**
@@ -44,6 +60,7 @@ public class ConversionController {
         try {
             model.addAttribute("overview", assistService.overview(projectId));
             model.addAttribute("projectId", projectId);
+            exposeOwner(projectId, model);
             return "conversion-list";
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -64,6 +81,7 @@ public class ConversionController {
         try {
             model.addAttribute("detail", assistService.load(projectId, kind, name));
             model.addAttribute("projectId", projectId);
+            exposeOwner(projectId, model);
             return "conversion-detail";
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());

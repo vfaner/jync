@@ -78,7 +78,7 @@
             </th:block>
         </dl>
 
-        <div class="btn-row" th:if="${isAdmin}">
+        <div class="btn-row" th:if="${access.canEdit(project.ownerUsername)}">
             <!--/* B9:表单变脏(改了没保存)时由 app.js 摘掉 is-hidden 亮出徽标;
                    点启动/立即同步/重建基线会先弹「保存并执行/按已保存配置执行/取消」三选一。 */-->
             <span class="badge badge-warn is-hidden" data-role="dirty-badge"
@@ -176,23 +176,23 @@
         </div>
         <!--/* 禁用态的按钮不会弹 tooltip，这里把原因直接写在页面上。 */-->
         <p class="small muted" style="margin:11px 0 0"
-           th:if="${isAdmin and noSyncWorkMessage != null}"
+           th:if="${access.canEdit(project.ownerUsername) and noSyncWorkMessage != null}"
            th:text="${noSyncWorkMessage}">No sync objects selected</p>
         <!--/* 停用项目上的重建基线只清进度和错误状态,不启动消费者(服务端强制):
                全量加载是消费者线程的一部分,巡检又只保留启用项目的消费者,先起后停
                必然打断基线,页面还会同时出现「已停止」与「CDC 运行中」。把「启用后
                才全量」明说,别让用户猜。 */-->
         <p class="small muted" id="cdc-rebaseline-disabled-hint" style="margin:11px 0 0"
-           th:if="${isAdmin and cdcActive and !isRedisTarget and !project.enabled}"
+           th:if="${access.canEdit(project.ownerUsername) and cdcActive and !isRedisTarget and !project.enabled}"
            data-cdc-visibility="cdc"
            th:text="#{cdc.rebaseline.disabled.hint}">Disabled-project rebaseline hint</p>
-        <p class="small muted" style="margin:11px 0 0" th:if="${isAdmin and !cdcActive}"
+        <p class="small muted" style="margin:11px 0 0" th:if="${access.canEdit(project.ownerUsername) and !cdcActive}"
            data-cdc-visibility="non-cdc"
            th:text="#{project.syncNowHelp}">Sync now help</p>
         <p class="small muted" style="margin:3px 0 0"
-           th:if="${isAdmin and !cdcActive}" data-cdc-visibility="non-cdc"
+           th:if="${access.canEdit(project.ownerUsername) and !cdcActive}" data-cdc-visibility="non-cdc"
            th:text="#{project.resetHelp}">Reset help</p>
-        <p class="small muted" style="margin:0" th:unless="${isAdmin}"
+        <p class="small muted" style="margin:0" th:unless="${access.canEdit(project.ownerUsername)}"
            th:text="#{common.readOnly}">Read-only account.</p>
     </div>
 </div>

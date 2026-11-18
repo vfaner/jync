@@ -29,6 +29,7 @@ import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.service.sync.DataSyncService;
@@ -546,9 +547,10 @@ public class CdcDdlTaskService {
      * supplies a database id, URL or credential — so even an arbitrary edited statement is
      * confined to that project's target database, never the metadata store.
      */
-    public DdlTaskOutcome executeDdl(Long logId, String sql) {
+    public DdlTaskOutcome executeDdl(Long logId, String sql, AccessGuard actor) {
         ChangeLog entry = repository.findById(logId)
                 .orElseThrow(() -> new IllegalStateException("error.ddl.notFound"));
+        requireProjectOwner(entry.getProjectId(), actor);
         if (entry.getDetails() == null
                 || !entry.getDetails().startsWith(SyncStateWriter.SKIPPED_DDL_PREFIX)) {
             throw new IllegalStateException("error.ddl.notPending");
@@ -836,9 +838,10 @@ public class CdcDdlTaskService {
      * delivered before the gap. The project's own table mapping, column rules and type
      * conversion apply, so the replayed rows land exactly like the streamed ones would.
      */
-    public void replayDdl(Long logId) {
+    public void replayDdl(Long logId, AccessGuard actor) {
         ChangeLog entry = repository.findById(logId)
                 .orElseThrow(() -> new IllegalStateException("error.ddl.notFound"));
+        requireProjectOwner(entry.getProjectId(), actor);
         if (entry.getDetails() == null
                 || !entry.getDetails().startsWith(SyncStateWriter.SKIPPED_DDL_PREFIX)) {
             throw new IllegalStateException("error.ddl.notPending");
@@ -928,6 +931,16 @@ public class CdcDdlTaskService {
     }
 
     /**
+     * A skipped-DDL task is an edit of its project's target, so it follows the project's
+     * owner: an operator may resolve its own projects' tasks only, an administrator any.
+     * The change-log row itself carries no owner — the project is the resource.
+     */
+    private void requireProjectOwner(Long projectId, AccessGuard actor) {
+        projectRepository.findById(projectId)
+                .ifPresent(project -> actor.requireEditable(project.getOwnerUsername()));
+    }
+
+    /**
      * Closes a skipped-DDL task without touching the target.
      *
      * <p>Not every task needs the two-step flow: the administrator may have aligned the
@@ -937,9 +950,10 @@ public class CdcDdlTaskService {
      *
      * <p>Idempotent: a double click (or a second administrator) finds it already processed.
      */
-    public void dismissDdl(Long logId) {
+    public void dismissDdl(Long logId, AccessGuard actor) {
         ChangeLog entry = repository.findById(logId)
                 .orElseThrow(() -> new IllegalStateException("error.ddl.notFound"));
+        requireProjectOwner(entry.getProjectId(), actor);
         if (entry.getDetails() == null
                 || !entry.getDetails().startsWith(SyncStateWriter.SKIPPED_DDL_PREFIX)) {
             throw new IllegalStateException("error.ddl.notPending");

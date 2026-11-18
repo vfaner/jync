@@ -15,7 +15,7 @@
                 <svg class="ico"><use href="#arrow-left"/></svg>
                 <span th:text="#{common.back}">Back</span>
             </a>
-            <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+            <a class="btn btn-primary btn-sm" th:if="${canWrite}"
                th:href="@{/migrations/connections/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg>
                 <span th:text="#{migration.connections.new}">New connection</span>
@@ -23,7 +23,7 @@
         </div>
     </div>
 
-    <div th:if="${isAdmin}" id="test-result" class="alert" hidden></div>
+    <div th:if="${canWrite}" id="test-result" class="alert" hidden></div>
 
     <div class="card">
         <div class="card-head">
@@ -37,7 +37,7 @@
             <div th:if="${connections.empty}" class="empty">
                 <div class="empty-ico"><svg class="ico"><use href="#database"/></svg></div>
                 <h3 th:text="#{migration.connections.empty}">No connections yet.</h3>
-                <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+                <a class="btn btn-primary btn-sm" th:if="${canWrite}"
                    th:href="@{/migrations/connections/new}">
                     <svg class="ico"><use href="#plus-lg"/></svg>
                     <span th:text="#{migration.connections.new}">New connection</span>
@@ -52,7 +52,7 @@
                         <th th:text="#{migration.connections.kind}">Product</th>
                         <th th:text="#{migration.connections.baseUrl}">Base URL</th>
                         <th th:text="#{migration.connections.authType}">Authentication</th>
-                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
+                        <th class="num" th:if="${canWrite}" th:text="#{common.actions}">Actions</th>
                     </tr>
                     </thead>
                     <tbody>
@@ -65,8 +65,9 @@
                         <td class="mono small" th:text="${connection.baseUrl}">http://127.0.0.1:9200</td>
                         <td class="small"
                             th:text="#{${'migration.auth.' + connection.authType.name()}}">Basic</td>
-                        <td th:if="${isAdmin}">
-                            <div class="btn-row" style="justify-content:flex-end">
+                        <td th:if="${canWrite}">
+                            <div class="btn-row" style="justify-content:flex-end"
+                                 th:if="${access.canEdit(connection.ownerUsername)}">
                                 <form method="post" style="display:inline"
                                       th:id="'migration-test-' + ${connection.id}">
                                 </form>

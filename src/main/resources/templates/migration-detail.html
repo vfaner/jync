@@ -18,7 +18,7 @@
                 <svg class="ico"><use href="#arrow-left"/></svg>
                 <span th:text="#{migration.title}">Dedicated migration</span>
             </a>
-            <th:block th:if="${isAdmin}">
+            <th:block th:if="${access.canEdit(task.ownerUsername)}">
                 <form method="post" style="display:inline"
                       th:action="@{/migrations/{type}/{id}/run(type=${type.key()}, id=${task.id})}"
                       th:unless="${running}">

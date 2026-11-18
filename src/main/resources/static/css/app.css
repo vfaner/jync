@@ -1686,6 +1686,7 @@ table.tbl a.truncate { display: block; }
   padding: 1px 6px; border-radius: 999px;
 }
 .user-chip .role-admin { background: var(--fb-brand-15); background: color-mix(in srgb, var(--brand) 15%, transparent); color: var(--brand); }
+.user-chip .role-ops { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
 .user-chip .role-viewer { background: var(--bg-tint); color: var(--ink-mute); }
 
 /* chip 现在是下拉的触发按钮：补手型光标与继承字体 */

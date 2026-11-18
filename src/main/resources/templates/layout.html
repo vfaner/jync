@@ -209,8 +209,8 @@
                     <svg class="ico"><use href="#shield-check"/></svg>
                     <span class="uname" th:text="${currentUsername}">admin</span>
                     <span class="role"
-                          th:classappend="${isAdmin} ? 'role-admin' : 'role-viewer'"
-                          th:text="${isAdmin} ? #{role.admin} : #{role.viewer}">ADMIN</span>
+                          th:classappend="${isAdmin} ? 'role-admin' : (${isOps} ? 'role-ops' : 'role-viewer')"
+                          th:text="${isAdmin} ? #{role.admin} : (${isOps} ? #{role.ops} : #{role.viewer})">ADMIN</span>
                     <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
                 </button>
                 <div class="nav-menu">

@@ -15,6 +15,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.Locale;
+import java.util.Optional;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
@@ -26,6 +29,8 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.model.Project;
+import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.ConversionAssistService;
 
 /**
@@ -55,6 +60,9 @@ class ConversionControllerViewTest {
 
     @MockitoBean
     private ConversionAssistService assistService;
+
+    @MockitoBean
+    private ProjectService projectService;
 
     /**
      * Builds an {@link ConversionAssistService.Summary} by reflection.
@@ -105,6 +113,52 @@ class ConversionControllerViewTest {
         return mvc.perform(get(url))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
+    }
+
+    private static Project projectOwnedBy(String owner) {
+        Project project = new Project();
+        project.setId(1L);
+        project.setName("proj");
+        project.setOwnerUsername(owner);
+        return project;
+    }
+
+    @Test
+    @WithMockUser(username = "alice", roles = "OPS")
+    void anOpsGetsTheEditorOnItsOwnConversion() throws Exception {
+        when(assistService.load(1L, "PROCEDURE", "GET_TOTAL"))
+                .thenReturn(detail(null, true, false));
+        when(projectService.findById(1L)).thenReturn(Optional.of(projectOwnedBy("alice")));
+
+        String html = mvc.perform(get("/projects/1/conversions/PROCEDURE/GET_TOTAL")
+                        .locale(Locale.SIMPLIFIED_CHINESE))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("data-role=\"ai-draft\"")
+                .contains("data-role=\"validate-sql\"")
+                .contains("data-role=\"save-override\"")
+                .doesNotContain("readonly=\"readonly\"");
+    }
+
+    @Test
+    @WithMockUser(username = "bob", roles = "OPS")
+    void anOpsGetsNoEditorOnAnotherOperatorsConversion() throws Exception {
+        when(assistService.load(1L, "PROCEDURE", "GET_TOTAL"))
+                .thenReturn(detail(null, true, false));
+        when(projectService.findById(1L)).thenReturn(Optional.of(projectOwnedBy("alice")));
+
+        String html = mvc.perform(get("/projects/1/conversions/PROCEDURE/GET_TOTAL")
+                        .locale(Locale.SIMPLIFIED_CHINESE))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Reviewing someone else's project is allowed; editing it is not, and the page must
+        // not offer the draft, validate or save controls it would refuse.
+        assertThat(html).doesNotContain("data-role=\"ai-draft\"")
+                .doesNotContain("data-role=\"validate-sql\"")
+                .doesNotContain("data-role=\"save-override\"")
+                .contains("readonly=\"readonly\"");
     }
 
     @Test

@@ -12,8 +12,10 @@
                 One-off and scheduled copies between systems that speak their own protocols.
             </p>
         </div>
-        <div class="page-actions" th:if="${isAdmin}">
-            <a class="btn btn-ghost btn-sm" href="/migrations/connections"
+        <div class="page-actions">
+            <!--/* The connection listing is WRITER_ONLY_GET — endpoint configuration — so
+                   a viewer must not be offered a link the filter chain will refuse. */-->
+            <a class="btn btn-ghost btn-sm" th:if="${canWrite}"
                th:href="@{/migrations/connections}">
                 <svg class="ico"><use href="#hdd-network"/></svg>
                 <span th:text="#{migration.manageConnections}">Manage connections</span>

@@ -4,7 +4,7 @@
 <!-- 列清洗：封闭的字符串规则集，写入目标库前在内存中生效，不改源数据。
      独立小表单而非并入配置表单：规则需要逐条增删，合并会让主表单的保存语义
      变成「整表覆盖」，误删风险更高。 -->
-<div class="card" th:if="${isAdmin}" th:fragment="card">
+<div class="card" th:if="${access.canEdit(project.ownerUsername)}" th:fragment="card">
     <div class="card-head">
         <h2><svg class="ico"><use href="#sliders"/></svg>
             <span th:text="#{columnrule.title}">Column cleansing</span></h2>

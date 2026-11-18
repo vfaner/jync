@@ -16,7 +16,7 @@
             <!-- 行数核对是显式动作：页面打开不查库，点击后才逐表 COUNT(*)。 -->
             <button type="button" class="btn btn-ghost btn-sm"
                     data-role="row-count-open"
-                    th:if="${isAdmin and !isRedisTarget and !#lists.isEmpty(progressList)}"
+                    th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(progressList)}"
                     th:attr="data-action=@{/api/projects/{id}/row-count(id=${project.id})},
                              data-running=${project.enabled},
                              title=#{rowcount.hint}">
@@ -41,8 +41,8 @@
                     <!-- 「设置游标」列：仅轮询/全量比对模式可用。日志 CDC 下游标列是死配置，
                          同调度卡片一并隐藏（data-role="polling-only" 由 app.js 联动）。 -->
                     <th class="num"
-                        th:classappend="${(isAdmin and !cdcActive)} ? '' : 'is-hidden'"
-                        th:attr="data-role=${isAdmin} ? 'polling-only' : null"
+                        th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
+                        th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null"
                         th:text="#{cursor.set}">Set cursor</th>
                     <!-- 只读预览：源/目标各一个入口。纯 GET，不改变同步状态，访客同样可见。 -->
                     <th class="num" th:text="#{preview.title}">Preview</th>
@@ -112,8 +112,8 @@
                                  : #{common.never}">never</td>
                     <!-- td 本身不 th:if 藏掉（那样 JS 联动就没法恢复），改为加 is-hidden 类；
                          isAdmin=false 时始终隐藏（访客态）。 -->
-                    <td th:classappend="${(isAdmin and !cdcActive)} ? '' : 'is-hidden'"
-                        th:attr="data-role=${isAdmin} ? 'polling-only' : null">
+                    <td th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
+                        th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null">
                         <!-- 每行一个小表单，可为单表覆盖自动识别的游标列。
                              输入框带 datalist 候选，聚焦时从后端拉取该表可用的游标列
                              （时间 + 整数类型），免去手动敲列名。 -->
@@ -135,7 +135,7 @@
                     </td>
                     <td class="num nowrap">
                         <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
-                                th:if="${isAdmin}"
+                                th:if="${access.canEdit(project.ownerUsername)}"
                                 data-side="source"
                                 th:attr="data-table=${p.objectName},
                                          data-action=@{/api/projects/{id}/preview(id=${project.id})},
@@ -146,7 +146,7 @@
                         <!--/* 目标预览与内容校验都读 JDBC 目标：Redis 目标没有 targetDbId,
                                 按钮只会换来一个错误,因此不渲染。 */-->
                         <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
-                                th:if="${isAdmin and !isRedisTarget}"
+                                th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget}"
                                 data-side="target"
                                 th:attr="data-table=${p.objectName},
                                          data-action=@{/api/projects/{id}/preview(id=${project.id})},
@@ -158,7 +158,7 @@
                                数据库的值，因此仅管理员可见。 */-->
                         <button type="button" class="btn btn-ghost btn-xs"
                                 data-role="content-audit"
-                                th:if="${isAdmin and !isRedisTarget}"
+                                th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget}"
                                 th:attr="data-table=${p.objectName},
                                          data-action=@{/api/projects/{id}/content-audit(id=${project.id})},
                                          title=#{contentAudit.hint}">
@@ -208,7 +208,7 @@
 <!-- 行数核对弹窗：行由服务端按进度列表渲染，app.js 只负责逐表填数。
      带 {0} 的文案放在 data-* 上，由 JS 替换（同 preview.truncated）。 -->
 <div class="modal" id="row-count-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:if="${isAdmin and !isRedisTarget and !#lists.isEmpty(progressList)}"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(progressList)}"
      th:attr="aria-label=#{rowcount.title},
               data-confirm=#{rowcount.confirm},
               data-confirm-running=#{rowcount.confirmRunning},
@@ -282,7 +282,7 @@
 <!--/* 内容校验弹窗：一次只校验进度行对应的那张表，结果由 app.js 按接口返回填充。
        页面只渲染空壳；表名、列名与原因都在 JS 里用 textContent 写入。 */-->
 <div class="modal" id="content-audit-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:if="${isAdmin and !isRedisTarget and !#lists.isEmpty(progressList)}"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(progressList)}"
      th:attr="aria-label=#{contentAudit.title}">
     <div class="modal-mask" data-close-modal="content-audit-modal"></div>
     <div class="modal-dialog preview-dialog">

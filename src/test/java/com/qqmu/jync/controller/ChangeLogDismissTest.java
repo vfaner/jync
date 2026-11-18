@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
@@ -77,7 +78,7 @@ class ChangeLogDismissTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.message").isNotEmpty());
 
-        verify(ddlTaskService).dismissDdl(9L);
+        verify(ddlTaskService).dismissDdl(eq(9L), any());
     }
 
     @Test
@@ -112,7 +113,7 @@ class ChangeLogDismissTest {
     @Test
     void aRefusedDismissReturnsTheReasonInsteadOfFailing() throws Exception {
         doThrow(new IllegalStateException("error.ddl.notPending")).when(ddlTaskService)
-                .dismissDdl(anyLong());
+                .dismissDdl(anyLong(), any());
 
         mvc.perform(post("/change-logs/9/dismiss").with(csrf()).with(asAdmin()))
                 .andExpect(status().isOk())

@@ -28,9 +28,9 @@
            也顺带保证浏览器不会把这些字段提交上去。
            另外：项目运行中(enabled=true)也禁用整张表单——改策略/改表/改调度必须
            先停止项目，否则改动要到下次启动才生效，运行中改完还看不到任何反馈。 */-->
-    <fieldset class="bare" th:attr="disabled=${(isAdmin and !project.enabled)} ? null : 'disabled'">
+    <fieldset class="bare" th:attr="disabled=${(access.canEdit(project.ownerUsername) and !project.enabled)} ? null : 'disabled'">
         <!-- 运行中锁定提示：仅管理员 + 运行中时展示，告诉用户为什么表单是灰的。 -->
-        <div class="card" th:if="${isAdmin and project.enabled}"
+        <div class="card" th:if="${access.canEdit(project.ownerUsername) and project.enabled}"
              style="margin-top:18px;border-left:3px solid var(--warn)">
             <div class="card-body">
                 <div class="help" style="margin:0">

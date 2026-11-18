@@ -3,6 +3,7 @@ package com.qqmu.jync.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
@@ -173,7 +174,7 @@ class ChangeLogDetailLanguageViewTest {
 
     @Test
     void anAdminCanExecuteTheEditedDdlFromTheList() throws Exception {
-        when(ddlTaskService.executeDdl(7L, "ALTER TABLE t ADD COLUMN c INT"))
+        when(ddlTaskService.executeDdl(eq(7L), eq("ALTER TABLE t ADD COLUMN c INT"), any()))
                 .thenReturn(new CdcDdlTaskService.DdlTaskOutcome(true, "orders(c)"));
         mvc.perform(post("/change-logs/7/execute")
                         .with(csrf()).with(asAdmin())
@@ -184,7 +185,7 @@ class ChangeLogDetailLanguageViewTest {
                 .andExpect(jsonPath("$.needsReplay").value(true))
                 .andExpect(jsonPath("$.affectedTables").value("orders(c)"));
 
-        verify(ddlTaskService).executeDdl(7L, "ALTER TABLE t ADD COLUMN c INT");
+        verify(ddlTaskService).executeDdl(eq(7L), eq("ALTER TABLE t ADD COLUMN c INT"), any());
     }
 
     @Test

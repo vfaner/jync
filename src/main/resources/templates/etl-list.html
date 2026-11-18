@@ -10,7 +10,7 @@
             <h1 th:text="#{etl.title}">ETL tasks</h1>
             <p class="sub" th:text="#{etl.listHint}">Copy the rows of your own extraction SQL on a schedule.</p>
         </div>
-        <div class="page-actions" th:if="${isAdmin}">
+        <div class="page-actions" th:if="${canWrite}">
             <a class="btn btn-ghost btn-sm" th:href="@{/etl/batches/new}">
                 <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.batch.new}">New batch</span>
             </a>
@@ -28,7 +28,7 @@
                     <div class="empty-ico"><svg class="ico"><use href="#diagram-3"/></svg></div>
                     <h3 th:text="#{etl.batch.empty}">No ETL batches yet.</h3>
                     <p th:text="#{etl.batch.emptyHint}">Put tables that share a source and target in one batch; they run one after another instead of each taking a schedule.</p>
-                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/etl/batches/new}">
+                    <a class="btn btn-primary btn-sm" th:if="${canWrite}" th:href="@{/etl/batches/new}">
                         <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.batch.new}">New batch</span>
                     </a>
                 </div>
@@ -54,7 +54,7 @@
                     </span>
                     <span class="badge badge-ok" th:if="${batchRunning[batch.id]}"
                           th:text="#{etl.batch.running}">Batch running</span>
-                    <th:block th:if="${isAdmin}">
+                    <th:block th:if="${access.canEdit(batch.ownerUsername)}">
                         <form method="post" style="display:inline"
                               th:action="@{/etl/batches/{id}/run(id=${batch.id})}">
                             <button type="submit" class="btn-icon is-ok"
@@ -124,7 +124,7 @@
                             <div class="btn-row" style="justify-content:flex-end">
                                 <span class="badge badge-ok" th:if="${running[member.id]}"
                                       th:text="#{etl.running}">Running</span>
-                                <th:block th:if="${isAdmin}">
+                                <th:block th:if="${access.canEdit(member.ownerUsername)}">
                                 <form method="post" style="display:inline"
                                       th:action="@{/etl/{id}/run(id=${member.id})}">
                                     <button type="submit" class="btn-icon is-ok"
@@ -165,7 +165,7 @@
                     <div class="empty-ico"><svg class="ico"><use href="#arrow-repeat"/></svg></div>
                     <h3 th:text="#{etl.empty}">No ETL tasks yet.</h3>
                     <p th:text="#{etl.emptyHint}">An ETL task copies the result of your own query; it does not claim the target matches the source.</p>
-                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/etl/new}">
+                    <a class="btn btn-primary btn-sm" th:if="${canWrite}" th:href="@{/etl/new}">
                         <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{etl.new}">New ETL task</span>
                     </a>
                 </div>
@@ -223,7 +223,7 @@
                             </td>
                             <td>
                                 <div class="btn-row" style="justify-content:flex-end">
-                                    <th:block th:if="${isAdmin}">
+                                    <th:block th:if="${access.canEdit(task.ownerUsername)}">
                                     <form method="post" style="display:inline"
                                           th:action="@{/etl/{id}/run(id=${task.id})}">
                                         <button type="submit" class="btn-icon is-ok"

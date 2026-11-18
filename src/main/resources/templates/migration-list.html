@@ -12,12 +12,12 @@
                 Copy indices and documents into an Easysearch cluster.
             </p>
         </div>
-        <div class="page-actions" th:if="${isAdmin}">
+        <div class="page-actions">
             <a class="btn btn-ghost btn-sm" th:href="@{/migrations}">
                 <svg class="ico"><use href="#arrow-left"/></svg>
                 <span th:text="#{migration.title}">Dedicated migration</span>
             </a>
-            <a class="btn btn-primary btn-sm"
+            <a class="btn btn-primary btn-sm" th:if="${canWrite}"
                th:href="@{/migrations/{type}/new(type=${type.key()})}">
                 <svg class="ico"><use href="#plus-lg"/></svg>
                 <span th:text="#{migration.new}">New migration task</span>
@@ -34,7 +34,7 @@
                     <p th:text="#{migration.emptyHint}">
                         Create a task to copy whole indices into the target cluster.
                     </p>
-                    <a class="btn btn-primary btn-sm" th:if="${isAdmin}"
+                    <a class="btn btn-primary btn-sm" th:if="${canWrite}"
                        th:href="@{/migrations/{type}/new(type=${type.key()})}">
                         <svg class="ico"><use href="#plus-lg"/></svg>
                         <span th:text="#{migration.new}">New migration task</span>
@@ -91,7 +91,7 @@
                             </td>
                             <td>
                                 <div class="btn-row" style="justify-content:flex-end">
-                                    <th:block th:if="${isAdmin}">
+                                    <th:block th:if="${access.canEdit(task.ownerUsername)}">
                                         <form method="post" style="display:inline"
                                               th:action="@{/migrations/{type}/{id}/run(type=${type.key()}, id=${task.id})}"
                                               th:unless="${running[task.id]}">

@@ -32,7 +32,7 @@
                     <span th:text="#{log.failedOnly}">Errors only</span>
                 </label>
             </form>
-            <!--/* 刷新是读操作，两个角色都该有 —— 所以放在下面 isAdmin 那层外面。 */-->
+            <!--/* 刷新是读操作，三种角色都该有 —— 所以放在下面 isAdmin 那层外面。 */-->
             <button type="button" class="btn btn-ghost btn-sm" data-role="log-refresh">
                 <svg class="ico"><use href="#arrow-clockwise"/></svg><span th:text="#{log.refresh}">Refresh</span></button>
             <!--/* 第二页往后不自动刷新：日志按时间倒序，新条目一进来整页就往下挪，

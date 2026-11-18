@@ -38,6 +38,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.sync.DataSyncService;
@@ -129,7 +130,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(true);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         assertThat(log.getDdlExecuted()).isTrue();
         // The replay is a later step: PROCESSED now would let retention prune the task.
@@ -150,7 +151,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(false);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT"))
+        assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageStartingWith("error.ddl.execute:");
 
@@ -166,7 +167,7 @@ class CdcDdlTaskServiceTest {
         log.setDdlExecuted(true);
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         verify(dataSourceManager, never()).getConnection(any());
     }
@@ -176,7 +177,7 @@ class CdcDdlTaskServiceTest {
         ChangeLog log = ChangeLog.of(3L, ObjectType.PROJECT, "db", ChangeType.INFO, "baseline rebuilt");
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
-        assertThatThrownBy(() -> service.executeDdl(9L, "DROP TABLE important"))
+        assertThatThrownBy(() -> service.executeDdl(9L, "DROP TABLE important", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.ddl.notPending");
 
@@ -187,10 +188,10 @@ class CdcDdlTaskServiceTest {
     void renamingATableOrColumnIsRejectedWithoutOpeningAnyConnection() throws Exception {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(pendingLog()));
 
-        assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE t ADD COLUMN other INT"))
+        assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE t ADD COLUMN other INT", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.ddl.statementChanged");
-        assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE other ADD COLUMN c INT"))
+        assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE other ADD COLUMN c INT", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.ddl.statementChanged");
 
@@ -215,7 +216,7 @@ class CdcDdlTaskServiceTest {
         stats.recordPrunedGap("t", List.of("suffix"));
         when(cdcConsumerManager.statsFor(3L)).thenReturn(stats);
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         // The gap is now bounded and names what a replay has to bring over.
         assertThat(log.getGapEndFile()).isEqualTo("binlog.000042");
@@ -245,7 +246,7 @@ class CdcDdlTaskServiceTest {
         when(dataSyncService.syncTable(any(), any(), any(), any(), any(), any()))
                 .thenReturn(new DataSyncService.TableSyncResult());
 
-        service.replayDdl(9L);
+        service.replayDdl(9L, AccessGuard.system());
 
         // The affected source table is re-read and upserted; the task is now complete.
         verify(dataSyncService).syncTable(any(), any(), eq(tableMeta), any(), any(), eq(ctx));
@@ -259,7 +260,7 @@ class CdcDdlTaskServiceTest {
         ChangeLog log = pendingLog();
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
-        assertThatThrownBy(() -> service.replayDdl(9L))
+        assertThatThrownBy(() -> service.replayDdl(9L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.ddl.targetNotAligned");
 
@@ -273,7 +274,7 @@ class CdcDdlTaskServiceTest {
         log.setAffectedTables(null);
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
-        assertThatThrownBy(() -> service.replayDdl(9L))
+        assertThatThrownBy(() -> service.replayDdl(9L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.ddl.nothingToReplay");
 
@@ -294,7 +295,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(true);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE t DROP COLUMN c");
+        service.executeDdl(9L, "ALTER TABLE t DROP COLUMN c", AccessGuard.system());
 
         // Nothing was left behind, so there is no row to bring over: the task is done.
         assertThat(log.getDdlExecuted()).isTrue();
@@ -353,7 +354,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(true);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE t ADD INDEX idx_name (name)");
+        service.executeDdl(9L, "ALTER TABLE t ADD INDEX idx_name (name)", AccessGuard.system());
 
         // No row carries a new column value, so there is no gap to replay.
         assertThat(log.getDdlExecuted()).isTrue();
@@ -370,7 +371,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(true);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         // The consumer recorded nothing (restart) and the live column diff finds nothing
         // (the target is already aligned). The statement itself names the table a replay has
@@ -391,7 +392,7 @@ class CdcDdlTaskServiceTest {
         config.setObjectSelectionExplicit(true); // syncs no table at all
         when(contextFactory.parseConfig(any())).thenReturn(config);
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         // Rows of a table the project never syncs were never replicated, so no gap exists.
         assertThat(log.getReplayDone()).isTrue();
@@ -409,7 +410,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(true);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN d INT, DROP COLUMN c");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN d INT, DROP COLUMN c", AccessGuard.system());
 
         assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PENDING);
         assertThat(log.getReplayDone()).isNotEqualTo(Boolean.TRUE);
@@ -427,7 +428,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = dropMissingColumn();
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE t DROP COLUMN c");
+        service.executeDdl(9L, "ALTER TABLE t DROP COLUMN c", AccessGuard.system());
 
         // That is the state the statement asks for — not a failure.
         assertThat(log.getDdlExecuted()).isTrue();
@@ -510,7 +511,7 @@ class CdcDdlTaskServiceTest {
         otherTable.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
         when(changeLogRepository.findOpenDdlTasks(3L)).thenReturn(List.of(otherTable));
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         // orders still needs its own column; only t was aligned.
         assertThat(otherTable.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PENDING);
@@ -532,7 +533,7 @@ class CdcDdlTaskServiceTest {
         sameTable.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
         when(changeLogRepository.findOpenDdlTasks(3L)).thenReturn(List.of(sameTable));
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         assertThat(sameTable.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_PROCESSED);
         assertThat(sameTable.getReplayDone()).isTrue();
@@ -659,7 +660,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(true);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE src.t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE src.t ADD COLUMN c INT", AccessGuard.system());
 
         assertThat(log.getTargetDdlSql()).isEqualTo("ALTER TABLE MixedSchema.t ADD COLUMN c INT");
     }
@@ -680,7 +681,7 @@ class CdcDdlTaskServiceTest {
         when(connection.getSchema()).thenReturn("APP");
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "ALTER TABLE src.t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE src.t ADD COLUMN c INT", AccessGuard.system());
 
         // The service name addresses the database, not the schema; qualified with it the
         // statement would fail on a healthy target.
@@ -708,7 +709,7 @@ class CdcDdlTaskServiceTest {
         when(contextFactory.parseConfig(any())).thenReturn(config);
 
         service.executeDdl(9L,
-                "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)");
+                "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)", AccessGuard.system());
 
         assertThat(log.getTargetDdlSql()).isEqualTo(
                 "ALTER TABLE tgt_db.orders_tgt ADD COLUMN `note` VARCHAR(64)");
@@ -719,7 +720,7 @@ class CdcDdlTaskServiceTest {
         ChangeLog log = pendingLog();
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
-        service.dismissDdl(9L);
+        service.dismissDdl(9L, AccessGuard.system());
 
         // The administrator decided the gap needs no action (fixed by hand, or the table
         // is no longer synced). Without this the task stays open forever and keeps the
@@ -738,7 +739,7 @@ class CdcDdlTaskServiceTest {
         log.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
-        service.dismissDdl(9L);
+        service.dismissDdl(9L, AccessGuard.system());
 
         verify(changeLogRepository, never()).save(log);
     }
@@ -749,7 +750,7 @@ class CdcDdlTaskServiceTest {
                 "baseline rebuilt");
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
-        assertThatThrownBy(() -> service.dismissDdl(9L))
+        assertThatThrownBy(() -> service.dismissDdl(9L, AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.ddl.notPending");
     }
@@ -767,7 +768,7 @@ class CdcDdlTaskServiceTest {
         Connection connection = connectionExecuting(true);
         when(dataSourceManager.getConnection(any())).thenReturn(connection);
 
-        service.executeDdl(9L, "alter table t add column c int comment 'remark'");
+        service.executeDdl(9L, "alter table t add column c int comment 'remark'", AccessGuard.system());
 
         assertThat(log.getDdlExecuted()).isTrue();
         assertThat(log.getTargetDdlSql()).contains("remark");
@@ -789,7 +790,7 @@ class CdcDdlTaskServiceTest {
         config.setTableNameMapping(Map.of("orders", "orders_tgt"));
         when(contextFactory.parseConfig(any())).thenReturn(config);
 
-        service.executeDdl(9L, "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)");
+        service.executeDdl(9L, "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)", AccessGuard.system());
 
         // A replay reads the source table. The recorded name must therefore be the source's;
         // the mapped target name does not exist on the source at all.
@@ -817,7 +818,7 @@ class CdcDdlTaskServiceTest {
         older.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
         when(changeLogRepository.findOpenDdlTasks(3L)).thenReturn(List.of(older));
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         // The executed statement now targets t_tgt, but the open task still names its source
         // table t. Same column on the same logical table: the older task is moot.
@@ -838,7 +839,7 @@ class CdcDdlTaskServiceTest {
         stats.recordPrunedGap("other", List.of("x"));
         when(cdcConsumerManager.statsFor(3L)).thenReturn(stats);
 
-        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT");
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
 
         // other's rows were pruned for another table's column; this task must not claim
         // them and must leave them for the task that owns that table.
@@ -952,12 +953,12 @@ class CdcDdlTaskServiceTest {
         when(contextFactory.parseConfig(any())).thenReturn(config);
 
         assertThatThrownBy(() -> service.executeDdl(9L,
-                "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)"))
+                "ALTER TABLE `src_db`.`orders` ADD COLUMN `note` VARCHAR(64)", AccessGuard.system()))
                 .hasMessageStartingWith("error.ddl.execute:");
         String prefilled = log.getTargetDdlSql();
         assertThat(prefilled).contains("orders_tgt");
 
-        service.executeDdl(9L, prefilled);
+        service.executeDdl(9L, prefilled, AccessGuard.system());
 
         // The prefilled statement is one this service produced itself. Rejecting it as a
         // structural change strands every mapped project after a single failed attempt,
@@ -973,7 +974,7 @@ class CdcDdlTaskServiceTest {
         when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
 
         assertThatThrownBy(() -> service.executeDdl(9L,
-                "CREATE VIEW `src_db`.`v` AS SELECT * FROM `src_db`.`orders`"))
+                "CREATE VIEW `src_db`.`v` AS SELECT * FROM `src_db`.`orders`", AccessGuard.system()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("error.ddl.unsupportedStatement");
 

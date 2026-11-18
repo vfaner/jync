@@ -2,14 +2,14 @@
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
 <!--/* Redis 缓存维护卡片：只有在目标类型为 REDIS 且当前账号是管理员时才渲染
-       （装配处在 isRedisTarget 分支里引用，根元素再用 isAdmin 门控）。重建缓存要清位点、
+       （装配处在 isRedisTarget 分支里引用，根元素再按项目归属门控）。重建缓存要清位点、
        整表重写，属于低频维护动作，不放进日常运行按钮行；与数据库任务的「重建基线」
        互不影响——后者走 cdc-rebaseline，重建的是 JDBC 目标。
 
        按钮故意不用 data-role="api-btn"：是否需要先清空键由页面上的复选框在点击时决定，
        而 api-btn 的 action 是渲染时写死的。专属的 bindRedisRebuild(app.js) 补上 sweep 参数，
        其余约定（加载态、确认框、成功后刷新）与 api-btn 一致。 */-->
-<div class="card" th:fragment="card" th:if="${isAdmin}" id="redis-maintenance">
+<div class="card" th:fragment="card" th:if="${access.canEdit(project.ownerUsername)}" id="redis-maintenance">
     <div class="card-head">
         <h2>
             <svg class="ico"><use href="#arrow-counterclockwise"/></svg>

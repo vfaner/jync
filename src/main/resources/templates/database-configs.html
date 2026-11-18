@@ -15,7 +15,7 @@
     <div th:replace="~{connections/tabs :: tabs('jdbc')}"></div>
 
     <!--/* 健康点的接口地址与本地化文案：脚本按这张表取，取不到(查看者)就整列都不存在 */-->
-    <div th:if="${isAdmin}" id="db-health" hidden
+    <div th:if="${canWrite}" id="db-health" hidden
          th:attr="data-health-url=@{/api/databases/health},
                   data-ok=#{db.health.ok},
                   data-fail=#{db.health.fail},
@@ -32,7 +32,7 @@
                 <span th:text="#{db.section.sources}">Source connections</span>
                 <span class="hint" th:text="'(' + ${sources.totalElements} + ')'">(0)</span>
             </h2>
-            <div class="card-head-tools" th:if="${isAdmin}">
+            <div class="card-head-tools" th:if="${canWrite}">
                 <button type="button" class="btn btn-ghost btn-sm" th:if="${!sources.empty}"
                         data-health-refresh>
                     <svg class="ico"><use href="#arrow-clockwise"/></svg>
@@ -47,7 +47,7 @@
             <div th:if="${sources.empty}" class="empty">
                 <div class="empty-ico"><svg class="ico"><use href="#box-arrow-up-right"/></svg></div>
                 <h3 th:text="#{db.noSources}">No source connections yet.</h3>
-                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='SOURCE')}">
+                <a class="btn btn-primary btn-sm" th:if="${canWrite}" th:href="@{/databases/new(role='SOURCE')}">
                     <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newSource}">New source</span>
                 </a>
             </div>
@@ -57,23 +57,25 @@
                     <thead>
                     <tr>
                         <th th:text="#{common.name}">Name</th>
-                        <th th:if="${isAdmin}" th:text="#{db.health}">Status</th>
+                        <th th:if="${canWrite}" th:text="#{db.health}">Status</th>
                         <th th:text="#{common.type}">Type</th>
                         <th th:text="#{db.host}">Host</th>
                         <th th:text="#{db.databaseName}">Database</th>
                         <th th:text="#{db.username}">User</th>
-                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
+                        <th class="num" th:if="${canWrite}" th:text="#{common.actions}">Actions</th>
                     </tr>
                     </thead>
                     <tbody>
                     <tr th:each="config : ${sources.content}">
                         <td style="font-weight:600" th:text="${config.name}">name</td>
-                        <td th:if="${isAdmin}" class="health-cell"
-                            th:attr="data-health-id=${config.id}">
+                        <td th:if="${canWrite}" class="health-cell"
+                            th:attr="data-health-id=${access.canEdit(config.ownerUsername) ? config.id : null}">
+                            <th:block th:if="${access.canEdit(config.ownerUsername)}">
                             <span class="health is-unknown">
                                 <span class="health-dot"></span>
                                 <span class="health-text" th:text="#{db.health.unknown}">Not checked</span>
                             </span>
+                            </th:block>
                         </td>
                         <td>
                             <span class="badge badge-brand"
@@ -84,8 +86,9 @@
                                      ? |${config.host}:${config.port}| : '—'">host</td>
                         <td class="mono small" th:text="${config.databaseName ?: '—'}">db</td>
                         <td class="mono small" th:text="${config.username ?: '—'}">user</td>
-                        <td th:if="${isAdmin}">
-                            <div class="btn-row" style="justify-content:flex-end">
+                        <td th:if="${canWrite}">
+                            <div class="btn-row" style="justify-content:flex-end"
+                                 th:if="${access.canEdit(config.ownerUsername)}">
                                 <button type="button" class="btn-icon is-ok" data-role="api-btn"
                                         th:attr="data-action=@{/api/databases/{id}/test(id=${config.id})},
                                                  data-busy-text=''"
@@ -138,7 +141,7 @@
                 <span th:text="#{db.section.targets}">Target connections</span>
                 <span class="hint" th:text="'(' + ${targets.totalElements} + ')'">(0)</span>
             </h2>
-            <div class="card-head-tools" th:if="${isAdmin}">
+            <div class="card-head-tools" th:if="${canWrite}">
                 <button type="button" class="btn btn-ghost btn-sm" th:if="${!targets.empty}"
                         data-health-refresh>
                     <svg class="ico"><use href="#arrow-clockwise"/></svg>
@@ -153,7 +156,7 @@
             <div th:if="${targets.empty}" class="empty">
                 <div class="empty-ico"><svg class="ico"><use href="#box-arrow-in-down-left"/></svg></div>
                 <h3 th:text="#{db.noTargets}">No target connections yet.</h3>
-                <a class="btn btn-primary btn-sm" th:if="${isAdmin}" th:href="@{/databases/new(role='TARGET')}">
+                <a class="btn btn-primary btn-sm" th:if="${canWrite}" th:href="@{/databases/new(role='TARGET')}">
                     <svg class="ico"><use href="#plus-lg"/></svg><span th:text="#{db.newTarget}">New target</span>
                 </a>
             </div>
@@ -163,23 +166,25 @@
                     <thead>
                     <tr>
                         <th th:text="#{common.name}">Name</th>
-                        <th th:if="${isAdmin}" th:text="#{db.health}">Status</th>
+                        <th th:if="${canWrite}" th:text="#{db.health}">Status</th>
                         <th th:text="#{common.type}">Type</th>
                         <th th:text="#{db.host}">Host</th>
                         <th th:text="#{db.databaseName}">Database</th>
                         <th th:text="#{db.username}">User</th>
-                        <th class="num" th:if="${isAdmin}" th:text="#{common.actions}">Actions</th>
+                        <th class="num" th:if="${canWrite}" th:text="#{common.actions}">Actions</th>
                     </tr>
                     </thead>
                     <tbody>
                     <tr th:each="config : ${targets.content}">
                         <td style="font-weight:600" th:text="${config.name}">name</td>
-                        <td th:if="${isAdmin}" class="health-cell"
-                            th:attr="data-health-id=${config.id}">
+                        <td th:if="${canWrite}" class="health-cell"
+                            th:attr="data-health-id=${access.canEdit(config.ownerUsername) ? config.id : null}">
+                            <th:block th:if="${access.canEdit(config.ownerUsername)}">
                             <span class="health is-unknown">
                                 <span class="health-dot"></span>
                                 <span class="health-text" th:text="#{db.health.unknown}">Not checked</span>
                             </span>
+                            </th:block>
                         </td>
                         <td>
                             <span class="badge badge-brand"
@@ -190,8 +195,9 @@
                                      ? |${config.host}:${config.port}| : '—'">host</td>
                         <td class="mono small" th:text="${config.databaseName ?: '—'}">db</td>
                         <td class="mono small" th:text="${config.username ?: '—'}">user</td>
-                        <td th:if="${isAdmin}">
-                            <div class="btn-row" style="justify-content:flex-end">
+                        <td th:if="${canWrite}">
+                            <div class="btn-row" style="justify-content:flex-end"
+                                 th:if="${access.canEdit(config.ownerUsername)}">
                                 <button type="button" class="btn-icon is-ok" data-role="api-btn"
                                         th:attr="data-action=@{/api/databases/{id}/test(id=${config.id})},
                                                  data-busy-text=''"

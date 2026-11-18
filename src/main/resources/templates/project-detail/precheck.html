@@ -5,7 +5,7 @@
        分组，ERROR 仍是一次成功的预检（HTTP 200），页面只负责把它展示出来。 */-->
 <th:block th:fragment="modal" th:remove="tag">
 <div class="modal" id="precheck-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:if="${isAdmin}"
+     th:if="${access.canEdit(project.ownerUsername)}"
      th:attr="aria-label=#{precheck.title}">
     <div class="modal-mask" data-close-modal="precheck-modal"></div>
     <div class="modal-dialog preview-dialog">
