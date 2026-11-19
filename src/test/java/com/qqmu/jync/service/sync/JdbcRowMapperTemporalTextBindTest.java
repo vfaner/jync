@@ -23,6 +23,7 @@ import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.converter.OracleDialect;
 import com.qqmu.jync.service.converter.PostgresDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.service.converter.TdengineDialect;
 
 /**
  * MySQL DATETIME reaches the binder as the server's wall-clock TEXT — Connector/J's
@@ -98,6 +99,29 @@ class JdbcRowMapperTemporalTextBindTest {
         bind(ps, "838:59:59", Types.TIME, new OracleDialect(23));
 
         verify(ps).setObject(1, "838:59:59");
+    }
+
+    /**
+     * TDengine 3.3.6 目标列是 TIMESTAMP 时,驱动不接受文本绑定:docker 实测
+     * {@code setObject(idx, "2026-10-13 12:34:56.789012")} 报
+     * {@code ERROR (0x2303): unsupported timestamp data type : [B},整批 ETL 失败;
+     * 同一个字面量解析成 {@code LocalDateTime} 后原样写入。TDengine 只接 ETL 目标
+     * (实时同步没有它的写入路径),因此这里守的是 MySQL DATETIME → TDengine 的 ETL。
+     */
+    @Test
+    void mysqlWallClockTextBecomesATypedTemporalForATdengineTarget() throws Exception {
+        bind(ps, DATETIME_TEXT, Types.TIMESTAMP, new TdengineDialect());
+
+        verify(ps).setObject(1, LocalDateTime.parse(DATETIME_TEXT.replace(' ', 'T')));
+        verify(ps, never()).setObject(eq(1), eq(DATETIME_TEXT));
+    }
+
+    /** TIME 同理:只带时分秒的文本同样过不了 TIMESTAMP 列的类型检查。 */
+    @Test
+    void timeOfDayTextBecomesAnAnchoredWallClockForATdengineTarget() throws Exception {
+        bind(ps, "12:34:56", Types.TIME, new TdengineDialect());
+
+        verify(ps).setObject(1, LocalDateTime.of(1970, 1, 1, 12, 34, 56));
     }
 
     @Test

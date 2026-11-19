@@ -28,6 +28,13 @@ class TdengineDialectTest {
     }
 
     @Test
+    void needsTypedTemporalsBecauseTheDriverRejectsTextInATimestampColumn() {
+        // docker 实测 3.3.6:setObject(idx, "2026-10-13 12:34:56") 写 TIMESTAMP 列报
+        // 0x2303 unsupported timestamp data type;解析成 java.time 值后原样写入。
+        assertThat(dialect.requiresTypedTemporalBind()).isTrue();
+    }
+
+    @Test
     void readsATimestampUpperBoundWithLastBecauseMaxRejectsTimestamps() {
         // TDengine 3.3.6 answers MAX(`ts`) with "Invalid parameter data type : max";
         // LAST returns the value of the row with the greatest timestamp.

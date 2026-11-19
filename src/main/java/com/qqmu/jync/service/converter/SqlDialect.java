@@ -131,8 +131,9 @@ public interface SqlDialect {
      * literal — Connector/J's {@code getTimestamp} would shift it across zones — and this
      * target products differ in what they can do with that text: PostgreSQL casts it
      * ({@code ?::timestamp}), MySQL/T-SQL/DB2 convert it implicitly, Oracle runs it through
-     * the session's NLS format and rejects it (ORA-01843). Those answering {@code true}
-     * get the literal parsed into a {@code java.sql.Timestamp}/{@code Date} before binding.
+     * the session's NLS format and rejects it (ORA-01843), and TDengine refuses the bind
+     * outright (0x2303). Those answering {@code true} get the literal parsed into a
+     * {@code java.time} temporal before binding.
      */
     default boolean requiresTypedTemporalBind() {
         return false;

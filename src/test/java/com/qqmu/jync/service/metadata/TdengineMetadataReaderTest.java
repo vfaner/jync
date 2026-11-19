@@ -3,9 +3,12 @@ package com.qqmu.jync.service.metadata;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.sql.Types;
@@ -101,6 +104,32 @@ class TdengineMetadataReaderTest {
         when(conn.createStatement()).thenReturn(statement);
 
         assertThat(READER.listTableNames(conn, "iot")).containsExactly("meter", "meters");
+    }
+
+    @Test
+    void theRowCountProbeRunsAtMostOncePerTtlWindow() throws Exception {
+        // TDengine exposes no row statistics, so the estimate is SELECT COUNT(*) — a full
+        // scan of every child table behind a stable. A polling cycle resolves the strategy of
+        // every table and asks for this estimate whenever no cursor column is configured, so
+        // without the shared TTL cache a large stable would be scanned every cycle.
+        Connection conn = mock(Connection.class);
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(conn.getMetaData()).thenReturn(md);
+        when(md.getURL()).thenReturn("jdbc:TAOS-WS://count-cache/iot");
+        Statement statement = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(statement);
+        ResultSet rs = mock(ResultSet.class);
+        when(statement.executeQuery(anyString())).thenReturn(rs);
+        when(rs.next()).thenReturn(true);
+        when(rs.getLong(1)).thenReturn(42L);
+
+        assertThat(READER.estimateRowCount(conn, "iot", "meters")).isEqualTo(42L);
+        assertThat(READER.estimateRowCount(conn, "iot", "meters")).isEqualTo(42L);
+
+        verify(statement, times(1)).executeQuery(anyString());
+        // The count is qualified with the resolved database, backtick-quoted like every other
+        // TDengine statement here.
+        verify(statement).executeQuery("SELECT COUNT(*) FROM `iot`.`meters`");
     }
 
     @Test

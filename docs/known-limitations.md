@@ -90,7 +90,7 @@ Doris、ClickHouse、Hive、Impala、TDengine、Elasticsearch、MongoDB（Atlas 
 
 - **只做源，不做目标。** 目标端需要建表、按主键 upsert、按主键删改，这七种引擎或没有事务、或没有行级更新，用通用 ANSI 方言写过去属于"能保存、一跑就错"。它们不会出现在项目表单与批量建任务页的目标下拉中，批量建任务接口也会直接拒绝；项目表单的保存接口不做这道硬校验（表单本身不提供这些选项），不要绕过表单直接提交。
 - **只有轮询与全表比对。** 没有日志 CDC，因此既不显示任何 CDC 卡片，也不能保存 CDC 策略。需要收敛的场面用全表比对（它会比对并修补差异），轮询只做增量追加。
-- **一律按无主键读取。** 这些驱动报告的"主键"其实是排序键或索引信息，不是唯一约束。信它会让增量计划按一个表无法兑现的键推进，目标端的 upsert 还会把源里不同的行折叠成一行——静默丢数据。因此它们的表按无主键处理：**轮询看不到 UPDATE / DELETE，只追加新行**。
+- **除 TDengine 外一律按无主键读取。** 这些驱动报告的"主键"其实是排序键或索引信息，不是唯一约束。信它会让增量计划按一个表无法兑现的键推进，目标端的 upsert 还会把源里不同的行折叠成一行——静默丢数据。因此它们的表按无主键处理：**轮询看不到 UPDATE / DELETE，只追加新行**。TDengine 是例外：它的唯一键由服务端保证（`ts` 天然唯一，声明主键与 TAG 一并参与），元数据直接给出，目标端也按这个复合主键建表（见第 17 节）。
 - **分页能力分两档。** ClickHouse、Doris 与 TDengine 支持 `LIMIT n OFFSET m`，无主键大表可按偏移分块并行读取；Hive、Impala、Elasticsearch 与 MongoDB 只有 `LIMIT`，无主键表只能单次流式读取（内存与耗时随表增长）。这是沿用 "无法验证就不启用 OFFSET" 的既有策略。
 - **Elasticsearch 的取数上限。** 受 `index.max_result_window`（默认 1 万）约束，超大索引要么调服务端参数，要么只同步窗口内的数据。
 - **真实验证覆盖不完整。** v1.12.0 起 ClickHouse 24.8（仅源）在自动化容器里验证了元数据读取、无主键 OFFSET 分块全量、目标建表与空转；MariaDB 11.4 作为源/目标的轮询也进入容器套件。Doris（仅源）与 Elasticsearch SQL（仅源，需自备 X-Pack SQL JDBC）是环境门控测试，本次未运行；Hive、Impala 与 MongoDB Atlas SQL 在本地无法验证，只有单元测试覆盖的 SQL 形状。逐产品的版本、驱动、验证级别与命令见[真实数据库验证矩阵](verification-matrix.md)。上线前仍请对目标版本做一次连通与全量试跑。
@@ -393,7 +393,14 @@ Redis 是**实时同步的目标端**，不是数据库连接的一种：它只�
 - 只支持 WS（6041）；REST 与原生协议不作为同步通道。驱动需自备官方 `-dist` jar。
 - 只作实时同步的源；需要写入 TDengine 时用 ETL，且目标表必须事先存在（普通表或子表），
   或在「前置 SQL」里自行建表；Jync 不会自动建表。
-- 没有 CDC；删除不传播。轮询间隔内被覆盖的行只表现为新值。
+- 没有 CDC：轮询窗口看不到物理删除，轮询间隔内被覆盖的行也只表现为新值。开启「同步删除」且表在
+  `sync.full-compare-max-rows` / `sync.delete-compare-max-rows` 上限内时，按主键比对仍可
+  删掉目标端多余的行；比对时文本列按文本读取（驱动对 VARCHAR 的 `getObject` 答 `byte[]`，
+  裸读会把每个文本键渲染成十六进制，导致整表被误判为已删除）。
+- ETL 的「范围覆盖」把范围条件原样拼成 `DELETE` 的条件；TDengine 只接受带明确时间窗的
+  `DELETE`（`0x2655 The DELETE statement must only have a definite time window range`），
+  条件必须用 `ts` 限定范围，否则该轮在删除阶段失败（不会写入任何行）。「覆盖」模式的整表
+  `DELETE` 可用。
 - 游标列必须手工指定（通常是 `ts`），自动发现不识别该列名。TDengine 拒绝 TIMESTAMP 列的
   `MAX`/`MIN`（`0x2802 Invalid parameter data type`），时间戳游标的水位上限改用 `LAST(列)`，
   即最大时间戳那一行的值；整型/字符游标仍用 `MAX`（`LAST(id)` 是最大时间戳那一行的 id，
@@ -405,6 +412,13 @@ Redis 是**实时同步的目标端**，不是数据库连接的一种：它只�
 - 唯一键来自 TDengine 自身：无声明主键时 `ts` 唯一；超级表按 `ts + 主键 + TAG` 定位，
   子表不单独列举。
 - 超级表不能作 ETL 目标；ETL 不支持 UPSERT 模式；没有事务，失败重跑可能留下部分数据。
+  目标列是 TIMESTAMP 时，ETL 把源端的墙上时间文本（MySQL DATETIME / TIME）先解析成
+  `java.time` 值再绑定——驱动拒绝把文本直接写进 TIMESTAMP 列（`0x2303`）。
+- **不要把 `DECIMAL` 列用作 ETL 目标列。** docker 实测服务端 3.3.6.0 配驱动 3.10.0（3.8.4
+  同样）：驱动把 DECIMAL 参数按文本发给服务端，服务端按二进制解码，写入的是错误数值且不报错
+  （`1.25` 落成 `8924810.73`，三者结果稳定复现），`setObject`/`setBigDecimal`/`setString`
+  都一样；同一条 INSERT 用字面量写则数值正确。这是驱动/服务端组合的缺陷，Jync 侧没有可用的
+  绑定方式绕过，建表时请改用 `DOUBLE`（有精度损失）或换用已修复的服务端/驱动组合。
 - `BIGINT UNSIGNED` 落到 `DECIMAL(20,0)`；`GEOMETRY` 落到 `VARBINARY`；`BINARY` 与
   `VARCHAR` 在驱动层不可区分，按文本读取（非 UTF-8 字节会损坏），二进制保真请用 `VARBINARY`。
 - 版本基线：服务端 3.3.6 社区版、驱动 3.10.0；其他版本未验证。

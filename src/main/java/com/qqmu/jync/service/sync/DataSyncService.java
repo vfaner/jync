@@ -3950,7 +3950,7 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
             try (ResultSet rs = st.executeQuery(sourceSql)) {
                 while (rs.next()) {
-                    sourceKeys.add(cleansedKeyOf(cleanser, pk, rs));
+                    sourceKeys.add(cleansedKeyOf(cleanser, pk, rs, ctx.getSourceType()));
                 }
             }
         }
@@ -3963,7 +3963,7 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
             try (ResultSet rs = st.executeQuery(targetSql)) {
                 while (rs.next()) {
-                    if (!sourceKeys.contains(keyOf(rs, pk.size()))) {
+                    if (!sourceKeys.contains(keyOf(rs, pk.size(), ctx.getTargetType()))) {
                         List<Object> values = new ArrayList<>(pk.size());
                         for (int i = 1; i <= pk.size(); i++) {
                             values.add(rs.getObject(i));
@@ -4069,7 +4069,7 @@ public class DataSyncService {
                     break;
                 }
                 java.util.Set<String> stillInSource = sourceKeysOf(sourceConn, sourceRef,
-                        sourceColumns, pk, sourceDialect, chunk);
+                        sourceColumns, pk, sourceDialect, ctx.getSourceType(), chunk);
                 for (Object[] row : chunk) {
                     if (stillInSource.contains(renderKey(row))) {
                         continue;
@@ -4190,7 +4190,8 @@ public class DataSyncService {
      */
     private java.util.Set<String> sourceKeysOf(Connection conn, String sourceRef,
                                                String sourceColumns, List<String> pk,
-                                               SqlDialect dialect, List<Object[]> chunk)
+                                               SqlDialect dialect, DatabaseType sourceType,
+                                               List<Object[]> chunk)
             throws SQLException {
         String predicate;
         if (pk.size() == 1) {
@@ -4215,7 +4216,7 @@ public class DataSyncService {
             }
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    keys.add(keyOf(rs, pk.size()));
+                    keys.add(keyOf(rs, pk.size(), sourceType));
                 }
             }
         }
@@ -4224,7 +4225,7 @@ public class DataSyncService {
 
     /**
      * The composite-key text a row of raw values renders to — the same format as
-     * {@link #keyOf(ResultSet, int)} so both paths compare identical strings.
+     * {@link #keyOf(ResultSet, int, DatabaseType)} so both paths compare identical strings.
      */
     private static String renderKey(Object[] values) {
         StringBuilder sb = new StringBuilder();
@@ -4236,11 +4237,11 @@ public class DataSyncService {
     }
 
     /** Source-side key, transformed by the project's column rules before comparison. */
-    private String cleansedKeyOf(ColumnCleanser cleanser, List<String> pk, ResultSet rs)
-            throws SQLException {
+    private String cleansedKeyOf(ColumnCleanser cleanser, List<String> pk, ResultSet rs,
+                                 DatabaseType sourceType) throws SQLException {
         Map<String, Object> values = new java.util.LinkedHashMap<>();
         for (int i = 0; i < pk.size(); i++) {
-            values.put(pk.get(i), rs.getObject(i + 1));
+            values.put(pk.get(i), keyColumn(rs, i + 1, sourceType));
         }
         cleanser.apply(values);
         StringBuilder sb = new StringBuilder();
@@ -4252,14 +4253,34 @@ public class DataSyncService {
     }
 
     /** Builds a comparable composite-key string from the leading columns of a row. */
-    private String keyOf(ResultSet rs, int columnCount) throws SQLException {
+    private String keyOf(ResultSet rs, int columnCount, DatabaseType type)
+            throws SQLException {
         StringBuilder sb = new StringBuilder();
         for (int i = 1; i <= columnCount; i++) {
             // Length-prefix each part so ("a","bc") and ("ab","c") cannot collide.
-            String part = keyPartOf(rs.getObject(i));
+            String part = keyPartOf(keyColumn(rs, i, type));
             sb.append(part.length()).append(':').append(part).append('\u0001');
         }
         return sb.toString();
+    }
+
+    /**
+     * One key column read the way the value path reads it.
+     *
+     * <p>TDengine's driver reports VARCHAR and answers {@code getObject} with {@code byte[]}
+     * (docker 实测 3.3.6), so a textual key — a declared VARCHAR primary key, or a super
+     * table's TAG — would render as hex while the target holds the text: every target row
+     * would look "deleted at source" and deletion detection would empty the table. The
+     * shared reader is exactly what the copy path wrote from, so keys are read through it.
+     */
+    private static Object keyColumn(ResultSet rs, int oneBasedIndex, DatabaseType type)
+            throws SQLException {
+        if (type != DatabaseType.TDENGINE) {
+            return rs.getObject(oneBasedIndex);
+        }
+        ResultSetMetaData meta = rs.getMetaData();
+        return JdbcRowMapper.readValue(rs, oneBasedIndex, meta.getColumnType(oneBasedIndex),
+                meta.getColumnTypeName(oneBasedIndex), type);
     }
 
     /**

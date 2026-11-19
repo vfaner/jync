@@ -7,10 +7,13 @@ import java.lang.reflect.Proxy;
 import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
+import java.sql.Types;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -26,6 +29,7 @@ import com.qqmu.jync.dto.ColumnRule;
 import com.qqmu.jync.dto.ColumnRuleType;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 
 /**
@@ -123,6 +127,41 @@ class DataSyncServiceDeletionsTest {
 
         assertThat(deleted).isZero();
         assertThat(count("PAD_T")).isEqualTo(1);
+    }
+
+    /**
+     * TDengine 的驱动把 VARCHAR 也按字节答出来:docker 实测 3.3.6,{@code getObject} 对文本
+     * 列返回 {@code byte[]},只有 {@code getString} 给出文本。声明的 VARCHAR 主键和超级表
+     * 的 TAG 都是这种列,裸读会把键渲染成十六进制,而目标库里存的是文本——每一行都像
+     * 「源库已删除」,删除同步会把整张目标表清空。键必须和写入路径用同一个读取器。
+     */
+    @Test
+    void tdengineByteArrayTextKeysAreNotADeletion() throws SQLException {
+        exec(source, "CREATE TABLE METER (SN VARCHAR(32) PRIMARY KEY)");
+        exec(target, "CREATE TABLE METER (SN VARCHAR(32) PRIMARY KEY)");
+        exec(source, "INSERT INTO METER VALUES ('sn-1'), ('sn-2')");
+        exec(target, "INSERT INTO METER VALUES ('sn-1'), ('sn-2'), ('sn-3')");
+
+        int deleted = service.syncDeletions(byteArrayTextInside(source), target,
+                table("METER", "SN", 3), tdengineCtx());
+
+        assertThat(deleted).as("只有源库真正失去的那一行").isEqualTo(1);
+        assertThat(count("METER")).isEqualTo(2);
+    }
+
+    /** 分块比对走另一处源端读键,同一个驱动形状同样不能把整表判成删除。 */
+    @Test
+    void tdengineByteArrayTextKeysAreNotADeletionInTheChunkedPath() throws SQLException {
+        exec(source, "CREATE TABLE METER (SN VARCHAR(32) PRIMARY KEY)");
+        exec(target, "CREATE TABLE METER (SN VARCHAR(32) PRIMARY KEY)");
+        exec(source, "INSERT INTO METER VALUES ('sn-1'), ('sn-2')");
+        exec(target, "INSERT INTO METER VALUES ('sn-1'), ('sn-2'), ('sn-3')");
+
+        int deleted = service(chunkedProperties()).syncDeletions(byteArrayTextInside(source),
+                target, table("METER", "SN", 25_000L), tdengineCtx());
+
+        assertThat(deleted).isEqualTo(1);
+        assertThat(count("METER")).isEqualTo(2);
     }
 
     @Test
@@ -432,6 +471,58 @@ class DataSyncServiceDeletionsTest {
         assertThat(DataSyncService.keyPartOf(LocalTime.of(10, 0)))
                 .as("LocalTime must agree with java.sql.Time")
                 .isEqualTo(DataSyncService.keyPartOf(java.sql.Time.valueOf("10:00:00")));
+    }
+
+    /** The source is a TDengine connection: key reads must go through the shared reader. */
+    private SyncContext tdengineCtx() {
+        return ctx.toBuilder().sourceType(DatabaseType.TDENGINE).build();
+    }
+
+    /**
+     * TDengine 驱动的读取形状:{@code getObject} 对文本列答 {@code byte[]},只有
+     * {@code getString} 给出文本。真实驱动已实测,这里用代理复刻,免得测试依赖容器。
+     */
+    private static Connection byteArrayTextInside(Connection real) {
+        return (Connection) Proxy.newProxyInstance(
+                Connection.class.getClassLoader(), new Class<?>[] {Connection.class},
+                (proxy, method, args) -> {
+                    Object result = method.invoke(real, args);
+                    if (result instanceof PreparedStatement prepared
+                            && "prepareStatement".equals(method.getName())) {
+                        return proxyStatement(prepared, PreparedStatement.class);
+                    }
+                    if (result instanceof Statement statement
+                            && "createStatement".equals(method.getName())) {
+                        return proxyStatement(statement, Statement.class);
+                    }
+                    return result;
+                });
+    }
+
+    private static <T> T proxyStatement(T real, Class<T> type) {
+        return type.cast(Proxy.newProxyInstance(
+                type.getClassLoader(), new Class<?>[] {type},
+                (proxy, method, args) -> {
+                    Object result = method.invoke(real, args);
+                    return result instanceof ResultSet rs ? proxyResultSet(rs) : result;
+                }));
+    }
+
+    private static ResultSet proxyResultSet(ResultSet real) {
+        return (ResultSet) Proxy.newProxyInstance(
+                ResultSet.class.getClassLoader(), new Class<?>[] {ResultSet.class},
+                (proxy, method, args) -> {
+                    if ("getObject".equals(method.getName()) && args != null
+                            && args.length == 1 && args[0] instanceof Integer column) {
+                        ResultSetMetaData meta = real.getMetaData();
+                        if (meta.getColumnType(column) == Types.VARCHAR) {
+                            String text = real.getString(column);
+                            return text == null ? null : text.getBytes(
+                                    java.nio.charset.StandardCharsets.UTF_8);
+                        }
+                    }
+                    return method.invoke(real, args);
+                });
     }
 
     private TableMeta table(String name, String pk, long approximateRows) {

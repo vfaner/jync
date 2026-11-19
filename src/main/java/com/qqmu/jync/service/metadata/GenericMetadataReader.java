@@ -712,12 +712,10 @@ public class GenericMetadataReader implements MetadataReader {
             }
         }
 
-        String qualified = JdbcUtil.qualifiedName(
-                JdbcUtil.identifierQuote(conn), schema, tableName);
         long count;
         try (Statement st = conn.createStatement()) {
             MetadataTimeouts.apply(st);
-            try (ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM " + qualified)) {
+            try (ResultSet rs = st.executeQuery(rowCountSql(conn, schema, tableName))) {
                 count = rs.next() ? rs.getLong(1) : 0L;
             }
         }
@@ -734,6 +732,18 @@ public class GenericMetadataReader implements MetadataReader {
         }
         countCache.put(cacheKey, new TimedCount(now, count));
         return count;
+    }
+
+    /**
+     * The statement behind {@link #estimateRowCount}'s fallback, so a reader whose product
+     * needs more than the generic qualified name overrides the SQL but keeps the shared TTL
+     * cache. TDengine is the one such product: its schema is the database name, which the
+     * reader resolves itself when the configured schema is blank.
+     */
+    protected String rowCountSql(Connection conn, String schema, String tableName)
+            throws SQLException {
+        return "SELECT COUNT(*) FROM "
+                + JdbcUtil.qualifiedName(JdbcUtil.identifierQuote(conn), schema, tableName);
     }
 
     /**

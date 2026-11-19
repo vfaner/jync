@@ -127,15 +127,17 @@ public class TdengineMetadataReader extends GenericMetadataReader {
         return conn.getMetaData().getUserName();
     }
 
+    /**
+     * TDengine has no row statistics, so the estimate is a {@code COUNT(*)} over the table —
+     * on a stable, over every child table. The generic reader's TTL cache is what keeps a
+     * table without a configured cursor (the strategy resolver asks for its size each cycle)
+     * from being fully scanned every poll. Only the schema differs: it is the database name,
+     * resolved from the session when the configured schema is blank.
+     */
     @Override
-    public long estimateRowCount(Connection conn, String schema, String tableName)
+    protected String rowCountSql(Connection conn, String schema, String tableName)
             throws SQLException {
-        String database = database(conn, schema);
-        try (Statement statement = conn.createStatement();
-             ResultSet rs = statement.executeQuery(
-                     "SELECT COUNT(*) FROM " + qualified(database, tableName))) {
-            return rs.next() ? rs.getLong(1) : 0L;
-        }
+        return "SELECT COUNT(*) FROM " + qualified(database(conn, schema), tableName);
     }
 
     private String database(Connection conn, String schema) throws SQLException {

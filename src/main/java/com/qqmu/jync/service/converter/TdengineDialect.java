@@ -6,8 +6,8 @@ import com.qqmu.jync.model.DatabaseType;
  * TDengine read-only dialect: backtick identifiers and {@code LIMIT / OFFSET} paging.
  *
  * <p>TDengine 3.3.6 rejects window functions, so the full-compare strategies that rely on
- * them are off for this source. It never takes part in a write path — the ETL engine writes
- * through the customer's own SQL, and real-time sync treats it as a polling source only.
+ * them are off for this source. Real-time sync treats it as a polling source only; the one
+ * write path is ETL, whose target table the operator creates in advance.
  */
 public class TdengineDialect extends PollingSourceDialect {
 
@@ -18,6 +18,19 @@ public class TdengineDialect extends PollingSourceDialect {
     @Override
     public boolean supportsWindowFunctions() {
         return false;
+    }
+
+    /**
+     * The driver refuses text bound into a TIMESTAMP column — docker 实测 3.3.6:
+     * {@code setObject(idx, "2026-10-13 12:34:56")} answers
+     * {@code ERROR (0x2303): unsupported timestamp data type : [B} and fails the whole ETL
+     * batch. The reader hands MySQL DATETIME/TIME to the binder as wall-clock text, so those
+     * values are parsed into a real temporal before binding; a {@code LocalDateTime} writes
+     * through {@code setObject} unchanged.
+     */
+    @Override
+    public boolean requiresTypedTemporalBind() {
+        return true;
     }
 
     /**
