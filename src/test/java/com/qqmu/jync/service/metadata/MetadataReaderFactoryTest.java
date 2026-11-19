@@ -25,6 +25,7 @@ class MetadataReaderFactoryTest {
             new Db2MetadataReader(),
             new HanaMetadataReader(),
             new KeylessEngineMetadataReader(),
+            new TdengineMetadataReader(),
             new GenericMetadataReader()));
 
     @Test
@@ -73,6 +74,13 @@ class MetadataReaderFactoryTest {
                 .isInstanceOf(SqlServerMetadataReader.class);
         assertThat(factory.forType(DatabaseType.DB2))
                 .isInstanceOf(Db2MetadataReader.class);
+    }
+
+    @Test
+    @DisplayName("TDengine 走 information_schema 读取器")
+    void tdengineGetsItsOwnReader() {
+        assertThat(factory.forType(DatabaseType.TDENGINE))
+                .isInstanceOf(TdengineMetadataReader.class);
     }
 
     @Test
