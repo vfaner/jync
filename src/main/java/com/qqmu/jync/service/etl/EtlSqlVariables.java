@@ -37,7 +37,8 @@ final class EtlSqlVariables {
     static final Pattern REFERENCE = Pattern.compile("\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}");
 
     static final Set<String> BUILT_INS = Set.of(
-            "date", "datetime", "yesterday", "month", "year", "taskName", "targetTable");
+            "date", "datetime", "yesterday", "month", "year", "taskName", "targetTable",
+            "runIndex");
 
     static final int MAX_NAME_LENGTH = 128;
     static final int MAX_VALUE_LENGTH = 4000;
@@ -134,6 +135,9 @@ final class EtlSqlVariables {
         values.put("year", now.format(YEAR));
         values.put("taskName", task.getName() == null ? "" : task.getName().trim());
         values.put("targetTable", targetName(task, targetConfig));
+        // Completed successful runs before this one; a null column predates the counter.
+        values.put("runIndex",
+                Integer.toString(task.getRunIndex() == null ? 0 : task.getRunIndex()));
         values.putAll(parseDefinitions(task.getVariables()));
         return values;
     }

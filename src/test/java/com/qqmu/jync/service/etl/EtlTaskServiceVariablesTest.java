@@ -109,6 +109,41 @@ class EtlTaskServiceVariablesTest {
         verify(checkpointStore, never()).clear(eq(5L));
     }
 
+    /**
+     * The counter answers "how many runs has this query had". A new extraction is a new
+     * question, so its first run must read 0 — otherwise ${runIndex} would start wherever the
+     * old query stopped. A rewrite of the same configuration is not a new question.
+     */
+    @Test
+    void changingTheExtractionRestartsTheRunSeries() {
+        stubConnections();
+        captureSaved();
+        EtlTask existing = existing(5L, "tenant='acme'");
+        existing.setRunIndex(7);
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
+
+        EtlTask edit = form("tenant='other'");
+        edit.setId(5L);
+        service.save(edit, AccessGuard.system());
+
+        assertThat(captured.getRunIndex()).isZero();
+    }
+
+    @Test
+    void rewritingTheSameExtractionKeepsTheRunSeries() {
+        stubConnections();
+        captureSaved();
+        EtlTask existing = existing(5L, "tenant='acme'");
+        existing.setRunIndex(7);
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
+
+        EtlTask edit = form("  tenant='acme'  ");
+        edit.setId(5L);
+        service.save(edit, AccessGuard.system());
+
+        assertThat(captured.getRunIndex()).isEqualTo(7);
+    }
+
     @Test
     void changingTheVariablesOfARunningTaskIsRefused() {
         stubConnections();

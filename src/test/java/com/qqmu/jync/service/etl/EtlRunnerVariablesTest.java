@@ -149,6 +149,26 @@ class EtlRunnerVariablesTest {
         assertThat(rows("SELECT id FROM dst ORDER BY id")).containsExactly("1", "8");
     }
 
+    /**
+     * The counter is read once at resolution, before the query is sent. With it a run can pick
+     * the slice that belongs to it — the Nth hour, file or partition — instead of repeating
+     * the same extraction on every trigger.
+     */
+    @Test
+    void theRunIndexAnswersTheReference() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT, slot INT)",
+                "INSERT INTO src VALUES (1, 0), (2, 1), (3, 2)");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT, slot INT)");
+        EtlTask task = task("SELECT id, slot FROM src WHERE slot = ${runIndex}", "dst",
+                EtlWriteMode.OVERWRITE);
+        task.setRunIndex(1);
+
+        EtlRunResult result = runner.run(task, source, target, connections);
+
+        assertThat(result.success()).as("run failed: %s", result.errorMessage()).isTrue();
+        assertThat(rows("SELECT id FROM dst")).containsExactly("2");
+    }
+
     /** An unanswered placeholder is a configuration defect, found before anything is opened. */
     @Test
     void anUnknownVariableFailsAsProgramWithoutOpeningAConnection() {

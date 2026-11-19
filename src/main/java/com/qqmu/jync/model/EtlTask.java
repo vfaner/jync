@@ -128,6 +128,14 @@ public class EtlTask {
     @Column(name = "timeout_seconds")
     private Integer timeoutSeconds;
 
+    /**
+     * Successful runs completed since the task was created or its extraction last changed.
+     * {@code ${runIndex}} reads it, so the first run of a series reads 0; only a successful
+     * run advances it. Null on rows written before the counter existed, read as 0.
+     */
+    @Column(name = "run_index")
+    private Integer runIndex;
+
     @Column(name = "last_run_time")
     private Instant lastRunTime;
 

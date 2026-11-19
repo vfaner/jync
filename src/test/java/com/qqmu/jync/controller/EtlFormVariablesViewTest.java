@@ -89,7 +89,7 @@ class EtlFormVariablesViewTest {
         assertThat(page).contains("one name=value per line");
         // Every built-in the operator can write without defining it.
         assertThat(page).contains("${date}", "${datetime}", "${yesterday}", "${month}",
-                "${year}", "${taskName}", "${targetTable}");
+                "${year}", "${taskName}", "${targetTable}", "${runIndex}");
     }
 
     /** Read order: define the values first, then write the query that references them. */

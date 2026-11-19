@@ -184,6 +184,12 @@ public class EtlTaskService {
             entity.setEnabled(false);
         }
         entity.setTimeoutSeconds(form.getTimeoutSeconds());
+        if (extractionChanged) {
+            // A new task or a changed extraction is a new series: its first run reads 0.
+            // ${runIndex} answers "how many runs has this query had", not "how many has this
+            // row" — carrying the old query's count into an unrelated one would be a lie.
+            entity.setRunIndex(0);
+        }
 
         EtlTask saved;
         try {
@@ -349,6 +355,11 @@ public class EtlTaskService {
             return;
         }
         Instant finishedAt = Instant.now();
+        if (result.success()) {
+            // Only a successful run consumes a number: the retry of a failed run must read the
+            // same value the failed attempt did, or the window it never loaded is skipped.
+            task.setRunIndex((task.getRunIndex() == null ? 0 : task.getRunIndex()) + 1);
+        }
         task.setLastRunTime(finishedAt);
         task.setLastRunSuccess(result.success());
         // Columns the existing target lacks are skipped, not failed; the summary names them so

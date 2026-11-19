@@ -72,6 +72,33 @@ class EtlSqlVariablesTest {
                 .containsEntry("targetTable", "dwh.orders");
     }
 
+    /**
+     * {@code ${runIndex}} is how many runs of this task have already succeeded: the first run
+     * of a series reads 0 and each success adds one, so the SQL can build a window that
+     * advances with every run. A row that predates the counter has none and reads as 0, the
+     * same as a task that has never run.
+     */
+    @Test
+    void runIndexIsTheTasksCompletedRunCount() {
+        EtlTask task = task("SELECT * FROM t WHERE seq = ${runIndex}");
+
+        assertThat(EtlSqlVariables.values(task, CLOCK, target()))
+                .containsEntry("runIndex", "0");
+
+        task.setRunIndex(12);
+        assertThat(EtlSqlVariables.values(task, CLOCK, target()))
+                .containsEntry("runIndex", "12");
+        assertThat(EtlSqlVariables.resolve(task, true, CLOCK, target()).getSourceSql())
+                .isEqualTo("SELECT * FROM t WHERE seq = 12");
+    }
+
+    @Test
+    void runIndexCannotBeRedefined() {
+        assertThatThrownBy(() -> EtlSqlVariables.parseDefinitions("runIndex=5"))
+                .isInstanceOf(EtlVariableException.class)
+                .hasMessage("error.etl.var.reserved:runIndex");
+    }
+
     @Test
     void aCustomDefinitionIsInsertedVerbatim() {
         EtlTask task = task("SELECT * FROM t WHERE tenant = ${tenant}");

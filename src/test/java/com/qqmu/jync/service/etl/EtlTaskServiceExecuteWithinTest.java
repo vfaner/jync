@@ -95,6 +95,63 @@ class EtlTaskServiceExecuteWithinTest {
         assertThat(loadedAtStart.getLastRunSuccess()).isNull();
     }
 
+    /**
+     * {@code ${runIndex}} must advance once per completed run so the next run reads a window
+     * one step further on; a failure must not consume a number, or a retry would skip data.
+     */
+    @Test
+    void aSuccessfulRunAdvancesTheRunIndex() {
+        EtlTask task = task(7L);
+        task.setRunIndex(4);
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
+        stubConnections();
+        EtlConnectionProvider connections = mock(EtlConnectionProvider.class);
+        when(runner.run(eq(task), any(), any(), same(connections)))
+                .thenReturn(EtlRunResult.success(2, 2));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.executeWithin(7L, connections);
+
+        assertThat(task.getRunIndex()).isEqualTo(5);
+    }
+
+    @Test
+    void aFailedRunKeepsTheRunIndex() {
+        EtlTask task = task(7L);
+        task.setRunIndex(4);
+        when(taskRepository.findById(7L)).thenReturn(Optional.of(task));
+        stubConnections();
+        EtlConnectionProvider connections = mock(EtlConnectionProvider.class);
+        when(runner.run(eq(task), any(), any(), same(connections)))
+                .thenReturn(EtlRunResult.failure(0, 0, EtlRunResult.Side.SOURCE, "down"));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.executeWithin(7L, connections);
+
+        assertThat(task.getRunIndex()).isEqualTo(4);
+    }
+
+    /** The counter advances from the row as it stands after the run, like the outcome does. */
+    @Test
+    void theRunIndexAdvancesOnTheRowAsItStandsAfterTheRun() {
+        EtlTask loadedAtStart = task(7L);
+        loadedAtStart.setRunIndex(4);
+        EtlTask editedDuringTheRun = task(7L);
+        editedDuringTheRun.setRunIndex(9);
+        when(taskRepository.findById(7L))
+                .thenReturn(Optional.of(loadedAtStart), Optional.of(editedDuringTheRun));
+        stubConnections();
+        EtlConnectionProvider connections = mock(EtlConnectionProvider.class);
+        when(runner.run(eq(loadedAtStart), any(), any(), same(connections)))
+                .thenReturn(EtlRunResult.success(1, 1));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.executeWithin(7L, connections);
+
+        assertThat(editedDuringTheRun.getRunIndex()).isEqualTo(10);
+        assertThat(loadedAtStart.getRunIndex()).isEqualTo(4);
+    }
+
     @Test
     void executeWithinTurnsAConfigurationFailureIntoAProgramFailure() {
         EtlTask task = task(7L);
