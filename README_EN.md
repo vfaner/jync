@@ -24,6 +24,7 @@ An out-of-the-box web application that keeps **structure and data** in sync betw
 - **Resumable by design**: crashes, network drops and killed processes resume from the last checkpoint; every write is idempotent, and changes made while Jync was down are caught up on restart.
 - **Dedicated migration too**: three whole-index / whole-collection copy chains outside JDBC, each with its own connection model, leaving sync and ETL untouched.
 - **Failures reach you**: seven fault categories — sync failures, CDC stalls, data drift and more — can be pushed to DingTalk, WeCom, Feishu or a custom Webhook.
+- **An optional AI operations assistant**: with a model connected, ask the floating panel about task state, database health and current alerts in plain language, and self-check a stalled change log; the assistant is read-only and never part of sync, and creating a task stops at a draft.
 
 | Resource | Link |
 |---|---|
@@ -60,7 +61,7 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 | Roles and ownership | System administrator / operator / viewer; an operator sees every resource but may create, edit, delete or run only what they own, and a viewer is read-only; external authentication can name administrator and operator users |
 | Data shaping | Column cleansing (13 rule types, including phone/ID/name/email masking and SHA-256 hashing), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
 | AI assist (optional) | The model drafts candidate SQL for procedures and functions; nothing is stored until a person approves it, and AI never takes part in synchronization |
-| AI assistant (optional) | Embedded panel (ADMIN/OPS): streamed answers on task status, source/target row counts, database metrics and throughput; how-to answers from the bundled knowledge base; creating a task stops at a draft for human confirmation |
+| AI assistant (optional) | Embedded panel (ADMIN/OPS): streamed answers on task status, source/target row counts, database metrics and throughput, plus current alerts, the latest ETL result and a change-log prerequisite self-check; how-to answers from the bundled knowledge base; creating a task stops at a draft for human confirmation |
 | Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog, plus "CDC target table repaired" and "CDC DDL skipped"; DingTalk / WeCom / Feishu / generic JSON; cooldown and recovery notices |
 | Reliability and observability | Idempotent upsert, checkpoint resume, database leases, at-least-once; dashboard, change / audit / system logs, performance charts, optional Prometheus scrape endpoint |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout; local accounts plus three SSO modes |
@@ -92,6 +93,25 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 </table>
 
 > More screens (log CDC, performance charts, column cleansing, alerting, AI drafting, dark theme …) are on the [features page](https://jync.qqmu.com/features.html).
+
+---
+
+## AI capabilities (optional)
+
+AI is an **assistant** in Jync, never part of the sync path: with no provider enabled nothing leaves the machine, and `sync.ai.enabled=false` removes the feature entirely.
+
+<table>
+  <tr>
+    <td align="center"><a href="docs/images/jync_ai_kefu.png" target="_blank" rel="noopener"><img src="docs/images/jync_ai_kefu.png" alt="AI operations assistant" width="100%"></a><br><sub><b>AI operations assistant</b> · ask about task state, database health and alerts in plain language; self-check the change log</sub></td>
+  </tr>
+</table>
+
+- **Ask instead of hunting**: task state, progress and throughput, source/target row counts, database metrics (sessions, QPS, cache hit, locks), current alerts and the latest ETL result each have a **read-only tool**; ids come from list tools, never guessed.
+- **A fixed diagnosis order**: for a stalled change log it self-checks the prerequisites item by item (connectivity, privileges, position, skipped events; this one opens the source, so it is capped per conversation). Alerts → task → log stream → self-check → docs, and every answer names the tool it relied on.
+- **Read-only with budgets**: the assistant cannot run SQL, change configuration, start, stop or delete a task. Creating a task stops at a **draft** for a person to review and save. Tool results are capped and each conversation has round and time budgets.
+- **Bundled knowledge**: usage, prerequisites and limitations come from the bundled documentation, not a web search; when the docs do not cover a question it says so instead of inventing an answer.
+- **AI-drafted structure conversion**: the model drafts candidate SQL for procedures and functions; a person reviews and edits before anything is stored.
+- **Any model**: OpenAI-compatible endpoints (self-hosted and most Chinese providers included), Anthropic, and Ollama (native or compatibility layer); keys are encrypted at rest and never shown back.
 
 ---
 
