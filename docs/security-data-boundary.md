@@ -15,7 +15,7 @@ Jync 是自托管单体进程：业务数据只在「源库 → Jync 进程内�
 | CDC 大字段溢写文件 | `${java.io.tmpdir}/jync-lob`（`sync.lob.spill-dir`） | 事务缓冲中超过 1 MB 的 LOB 原值，明文落盘，按事务边界删除 |
 | 配置包（手工导出） | 管理员选择的下载位置 | 用导出时输入的口令加密；勾选「包含运行状态」时会带出更多配置 |
 
-驱动 jar 由使用方自备（GBase、神通、GaussDB、HANA、ClickHouse、Hive、Impala、Elasticsearch、MongoDB 等），程序不会自动下载任何构件。
+驱动 jar 由使用方自备（GBase、神通、GaussDB、HANA、ClickHouse、Hive、Impala、TDengine、Elasticsearch、MongoDB 等），程序不会自动下载任何构件。
 
 ## 2. 出网点清单
 
