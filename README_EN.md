@@ -1,6 +1,6 @@
 # Jync · Heterogeneous Database Real-Time Sync
 
-> **Jync**, pronounced "sync" — **J** for Java; the Chinese name 捷同 means "swift and identical".
+> **Jync**: **J** for Java, **ync** from "sync"; the Chinese name 捷同 means "swift and identical" — data stays the same on both sides.
 > A single-JAR database synchronization engine: **chunked parallel full load, read-only incremental capture, second-level log CDC**, plus SQL-driven ETL and Webhook alerting.
 
 [简体中文](README.md) | **English**
@@ -54,13 +54,14 @@ Existing tools always leave one gap. Commercial sync products are licensed per n
 | Log CDC | MySQL binlog, Oracle LogMiner, DM LogMiner, PostgreSQL-family logical decoding, SQL Server CDC, YashanDB YStream; long-lived streaming replay with second-level latency; when source DDL leaves the target short of columns, rows are pruned in-stream and a DDL task is filed — the stream keeps running; a deleted target table is recreated and reloaded on its own without moving the position (bounded attempts) |
 | Redis cache projection | A real-time sync target can be Redis: CDC projects each row to `<prefix><table>:<primary key>` as JSON or HASH, with baseline, replay and prefix-scoped rebuild; log CDC only — see [Known limitations](docs/known-limitations.md) |
 | Structure sync | Tables, indexes, views, procedures and functions; type mapping, function conversion, identifier quoting, pagination and DDL overrides |
-| ETL | Copy result rows from a customer SQL query; `${name}` variables and built-in date values in the extraction, pre-sql, post-sql and range condition; 7 analytic engines; multi-statement scripts; overwrite / append / range overwrite / upsert by key; resumable runs; tables sharing a source and target can form a **batch** with one connection pair and one schedule |
+| ETL | Copy result rows from a customer SQL query; `${name}` variables in the extraction, pre-sql, post-sql and range condition, with built-in date values plus `${runIndex}` (successful runs so far); 7 analytic engines; multi-statement scripts; overwrite / append / range overwrite / upsert by key; resumable runs; tables sharing a source and target can form a **batch** with one connection pair and one schedule |
 | Dedicated migration | Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB and MongoDB → KingbaseES copy whole objects over a connection model independent of JDBC; precheck, manual or cron runs, cancellation and run history |
-| System management | Configuration package export/import (passphrase-encrypted, optional runtime state, re-encrypted with the target key), page-level force-HTTPS switch, in-app TLS certificate upload (PKCS#12 / JKS / PEM) |
+| System management | Configuration package export/import (passphrase-encrypted, optional runtime state, re-encrypted with the target key), page-level force-HTTPS switch, in-app TLS certificates (upload PKCS#12 / JKS / PEM, or point at a server path for in-place renewal), in-app update check and one-click upgrade (GitHub / Gitee, switchable off) |
+| Roles and ownership | System administrator / operator / viewer; an operator sees every resource but may create, edit, delete or run only what they own, and a viewer is read-only; external authentication can name administrator and operator users |
 | Data shaping | Column cleansing (13 rule types, including phone/ID/name/email masking and SHA-256 hashing), table-name mapping, read-only data preview, on-demand row-count audit, task cloning, bulk task creation (binned by table size) |
 | AI assist (optional) | The model drafts candidate SQL for procedures and functions; nothing is stored until a person approves it, and AI never takes part in synchronization |
 | AI assistant (optional) | Embedded panel (ADMIN/OPS): streamed answers on task status, source/target row counts, database metrics and throughput; how-to answers from the bundled knowledge base; creating a task stops at a draft for human confirmation |
-| Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog, plus "CDC target table repaired"; DingTalk / WeCom / Feishu / generic JSON; cooldown and recovery notices |
+| Alerting | Webhook pushes for sync failures, stuck polling, projects not running, CDC stalls, data drift, unhealthy connections and PG slot backlog, plus "CDC target table repaired" and "CDC DDL skipped"; DingTalk / WeCom / Feishu / generic JSON; cooldown and recovery notices |
 | Reliability and observability | Idempotent upsert, checkpoint resume, database leases, at-least-once; dashboard, change / audit / system logs, performance charts, optional Prometheus scrape endpoint |
 | Delivery | jar / Docker / Kubernetes; Chinese and English UI, light and dark themes; responsive layout; local accounts plus three SSO modes |
 
@@ -215,7 +216,7 @@ com.qqmu.jync
 mvn test
 ```
 
-The suite has 5,300+ unit tests and covers dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, Redis projection and dedicated migration, ETL and alerting, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.
+The suite has 6,100+ unit tests and covers dialect and SQL rewriting, full load and resume, CDC prerequisites and position discipline for six engines, Redis projection and dedicated migration, ETL variables and alerting, roles and resource ownership, the AI assistant, security (encrypted storage, viewer POST rejection, CSRF), UI i18n, and the dual-channel upgrade fallback.
 
 Real-database integration tests (`*IT`, excluded from the default suite, require Docker): Oracle 23ai parallel full load with `ROWDEPENDENCIES`; MySQL 8 binlog baseline → streaming, crash rerun, 100k-row consistency and fault injection. Run with `-Dapi.version=1.44` (Docker Engine ≥ 29).
 
