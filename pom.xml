@@ -19,8 +19,8 @@
 
     <licenses>
         <license>
-            <name>MIT License</name>
-            <url>https://opensource.org/licenses/MIT</url>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0</url>
             <distribution>repo</distribution>
         </license>
     </licenses>
@@ -489,6 +489,27 @@
                                     <directory>${project.basedir}/docs/release-notes</directory>
                                     <includes>
                                         <include>RELEASE_NOTES_v${project.version}.md</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <!-- Apache-2.0 §4(a)/(d): ship the license and NOTICE, including the
+                             footer attribution notice, inside the executable jar. -->
+                        <id>copy-legal</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/META-INF</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}</directory>
+                                    <includes>
+                                        <include>LICENSE</include>
+                                        <include>NOTICE</include>
                                     </includes>
                                 </resource>
                             </resources>

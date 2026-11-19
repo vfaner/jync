@@ -13,6 +13,9 @@ WORKDIR /build
 COPY pom.xml .
 RUN mvn -q -B dependency:go-offline
 COPY src ./src
+# Apache-2.0 要求发行包附带 LICENSE 与 NOTICE(copy-legal 会把它们打进 jar 的
+# META-INF);构建阶段只拷了 pom 与 src,这两个文件也必须显式拷进来。
+COPY LICENSE NOTICE ./
 # 设置页「本版本更新内容」靠 maven-resources-plugin 把当前版本的发布说明打进 jar;
 # 说明文件在 docs/release-notes/ 下,必须显式拷进构建阶段 —— .dockerignore 排除了
 # 整个 docs/ 只把它放回上下文。漏了这一步构建照样成功,jar 里只是静默没有

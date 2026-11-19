@@ -23,8 +23,13 @@ import org.springframework.core.io.ClassPathResource;
  */
 class BannerVersionTest {
 
-    /** A version as it appears in prose: v1.8.1, or 1.8.1 without the v. */
-    private static final Pattern LITERAL_VERSION = Pattern.compile("\\bv?\\d+\\.\\d+(\\.\\d+)?");
+    /**
+     * A version hard-coded on the banner's Version line: v1.8.1, or 1.8.1 without the v. The
+     * pattern is line-scoped so the license name ("Apache License, 2.0") is not mistaken for an
+     * application version.
+     */
+    private static final Pattern LITERAL_VERSION =
+            Pattern.compile("(?m)^\\s*Version\\s*:.*\\bv?\\d+\\.\\d+(\\.\\d+)?");
 
     @Test
     @DisplayName("banner.txt takes its version from the build, not from a literal")

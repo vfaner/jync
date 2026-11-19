@@ -2,7 +2,7 @@
 
 ## Author and contact
 
-Jync is developed and maintained by 沐沐开源工坊 under the MIT license. Official website:
+Jync is developed and maintained by 沐沐开源工坊 under the Apache License, 2.0. Official website:
 https://jync.qqmu.com. Contact: QQ 817094 / 2912167928; WeChat qqmu66; QQ group 426669837;
 email vfaner@88.com. The Jync name, logo and author attribution must not be replaced when
 redistributing — see TRADEMARK.md in the repository.

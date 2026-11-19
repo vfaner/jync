@@ -10,6 +10,6 @@ ${AnsiColor.BRIGHT_BLUE}
 ${AnsiColor.BRIGHT_BLACK}
  Version    : v${app.version}
  Author     : 沐沐开源工坊
- License    : MIT License
+ License    : Apache License, Version 2.0
  Website    : https://jync.qqmu.com
 ${AnsiColor.DEFAULT}

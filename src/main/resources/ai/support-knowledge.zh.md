@@ -2,7 +2,7 @@
 
 ## 作者与联系方式
 
-Jync（捷同）由沐沐开源工坊开发和维护，采用 MIT 许可。官网：https://jync.qqmu.com。
+Jync（捷同）由沐沐开源工坊开发和维护，采用 Apache-2.0 许可。官网：https://jync.qqmu.com。
 联系方式：QQ 817094 / 2912167928；微信 qqmu66；QQ 群 426669837；邮箱 vfaner@88.com。
 「Jync / 捷同」名称、logo 与作者署名不得替换后发行，详见仓库中的 TRADEMARK.md。
 
