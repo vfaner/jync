@@ -164,7 +164,7 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .shell { max-width: 1440px; margin: 0 auto; padding: 26px 28px 56px; }
 
 /* 容器内图标尺寸：SVG 不再受 font-size 影响，需显式给出 */
-.logo-mark  .ico { width: 17px; height: 17px; }
+.logo-mark  .ico { width: 34px; height: 34px; }
 .icon-btn   .ico { width: 16px; height: 16px; }
 .btn-icon   .ico { width: 14px; height: 14px; }
 .stat-ico   .ico { width: 21px; height: 21px; }
@@ -198,7 +198,7 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .logo:hover { color: var(--ink); }
 .logo-mark {
   width: 34px; height: 34px; border-radius: 9px;
-  background: linear-gradient(135deg, var(--brand), var(--accent));
+  background: linear-gradient(135deg, #7c86f6, #6366f1 55%, #d94ba7);
   display: grid; place-items: center; color: #fff; font-size: 16px;
   box-shadow: 0 4px 14px rgba(79, 70, 229, .35);
   flex-shrink: 0;
@@ -1558,11 +1558,11 @@ table.tbl a.truncate { display: block; }
 .login-brand { text-align: center; margin-bottom: 24px; }
 .login-mark {
   width: 54px; height: 54px; border-radius: 15px; margin: 0 auto 14px;
-  background: linear-gradient(135deg, var(--brand), var(--accent));
+  background: linear-gradient(135deg, #7c86f6, #6366f1 55%, #d94ba7);
   display: grid; place-items: center; color: #fff;
   box-shadow: var(--shadow-brand);
 }
-.login-mark .ico { width: 26px; height: 26px; }
+.login-mark .ico { width: 54px; height: 54px; }
 .login-brand h1 {
   font-size: 21px; font-weight: 700; margin: 0 0 6px; color: var(--ink);
   letter-spacing: -.2px;

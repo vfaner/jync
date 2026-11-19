@@ -22,6 +22,8 @@
     <script th:replace="~{fragments/theme-bootstrap :: script}"></script>
 
     <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
+    <link rel="icon" type="image/png" sizes="32x32" th:href="@{/vendor/favicon-32.png}">
+    <link rel="apple-touch-icon" th:href="@{/vendor/apple-touch-icon.png}">
     <!--/* 带版本号防缓存：发版后浏览器若沿用旧 app.js，新接口会被静默退回旧路径 */-->
     <link rel="stylesheet" th:href="@{/css/app.css(v=${appVersion})}">
 
