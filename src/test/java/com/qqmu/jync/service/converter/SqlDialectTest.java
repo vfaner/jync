@@ -729,19 +729,116 @@ class SqlDialectTest {
      * column is already NOT NULL. MODIFY ... NOT NULL then fails with ORA-01442 ("column to
      * be modified to NOT NULL is already NOT NULL"), and because the engine deliberately
      * keeps the old snapshot after a failed change, every subsequent poll re-attempts and
-     * re-fails forever. Nullability may only be stated when relaxing.
+     * re-fails forever. MODIFY ... NULL on an already nullable column is just as fatal:
+     * ORA-01451 ("column to be modified to NULL cannot be modified to NULL"). The statement
+     * therefore states no nullability at all; omitting the clause keeps whatever the target
+     * column currently has.
      */
     @Test
-    void oracleModifyNeverStatesNotNull() {
+    void oracleModifyNeverStatesNullability() {
         ColumnMeta notNull = column("amount", "NUMBER", Types.NUMERIC, 10);
         notNull.setNullable(false);
         assertThat(oracle.getModifyColumnSql("s", "orders", notNull, DatabaseType.ORACLE))
-                .doesNotContain("NOT NULL");
+                .doesNotContain("NULL");
 
         ColumnMeta relaxed = column("amount", "NUMBER", Types.NUMERIC, 10);
         relaxed.setNullable(true);
         assertThat(oracle.getModifyColumnSql("s", "orders", relaxed, DatabaseType.ORACLE))
-                .contains(" NULL");
+                .doesNotContain("NULL");
+    }
+
+    // --- Defaults on mapped types -------------------------------------------------------
+
+    /**
+     * Connector/J reports MySQL {@code TINYINT(1)} as a boolean, so the column becomes
+     * PostgreSQL {@code BOOLEAN} — but the MySQL default arrives as the literal {@code 0}.
+     * PostgreSQL refuses {@code BOOLEAN ... DEFAULT 0} ("default expression is of type
+     * integer"), so a numeric boolean default has to be re-rendered as a boolean literal.
+     */
+    @Test
+    void postgresRendersIntegerDefaultsOnBooleanColumnsAsBooleanLiterals() {
+        TableMeta table = new TableMeta();
+        table.setName("wcs_dev_conn_s7");
+
+        ColumnMeta id = column("id", "BIGINT", Types.BIGINT, 19);
+        id.setNullable(false);
+        ColumnMeta deleted = column("deleted", "BIT", Types.BIT, 1);
+        deleted.setNullable(false);
+        deleted.setDefaultValue("0");
+        ColumnMeta enabled = column("enabled", "BIT", Types.BIT, 1);
+        enabled.setNullable(false);
+        enabled.setDefaultValue("1");
+        table.setColumns(List.of(id, deleted, enabled));
+        table.setPrimaryKeys(List.of("id"));
+
+        String ddl = postgres.getCreateTableSql(table, "s", "wcs_dev_conn_s7", DatabaseType.MYSQL);
+
+        assertThat(ddl).contains("\"deleted\" BOOLEAN NOT NULL DEFAULT FALSE");
+        assertThat(ddl).contains("\"enabled\" BOOLEAN NOT NULL DEFAULT TRUE");
+        assertThat(ddl).doesNotContain("DEFAULT 0").doesNotContain("DEFAULT 1");
+    }
+
+    /**
+     * A numeric default that is not a boolean value (2, -1, …) has no boolean rendering.
+     * Dropping it loses a default but keeps the table creatable, which is the same trade-off
+     * this converter already makes for types that accept no default.
+     */
+    @Test
+    void postgresDropsNumericDefaultsOnBooleanColumnsThatAreNotBooleanValues() {
+        TableMeta table = new TableMeta();
+        table.setName("flags");
+
+        ColumnMeta flag = column("flag", "BIT", Types.BIT, 1);
+        flag.setNullable(false);
+        flag.setDefaultValue("2");
+        table.setColumns(List.of(flag));
+
+        String ddl = postgres.getCreateTableSql(table, "s", "flags", DatabaseType.MYSQL);
+
+        assertThat(ddl).contains("\"flag\" BOOLEAN NOT NULL");
+        assertThat(ddl).doesNotContain("DEFAULT");
+    }
+
+    /**
+     * The numeric-to-boolean default rewrite is a PostgreSQL grammar requirement, not a
+     * general one: every other target renders a boolean-ish column as an integer type
+     * (TINYINT(1), NUMBER(1), BIT, SMALLINT) and takes {@code DEFAULT 0} as-is. Keep them
+     * that way — rewriting to FALSE/TRUE there would be wrong.
+     */
+    @Test
+    void otherTargetsKeepNumericDefaultsOnTheirBooleanRepresentations() {
+        List<SqlDialect> integerTargets = List.of(mysql, oracle, sqlServer, db2,
+                new HanaSqlDialect(), new GenericSqlDialect());
+        for (SqlDialect dialect : integerTargets) {
+            TableMeta table = new TableMeta();
+            table.setName("flags");
+            ColumnMeta flag = column("flag", "BIT", Types.BIT, 1);
+            flag.setNullable(false);
+            flag.setDefaultValue("0");
+            table.setColumns(List.of(flag));
+
+            String ddl = dialect.getCreateTableSql(table, "s", "flags", DatabaseType.MYSQL);
+
+            assertThat(ddl).as(dialect.getClass().getSimpleName())
+                    .contains("DEFAULT 0").doesNotContain("FALSE");
+        }
+    }
+
+    /** openGauss and GaussDB inherit the PostgreSQL dialect, including the default rewrite. */
+    @Test
+    void openGaussFamilyAlsoRewritesNumericBooleanDefaults() {
+        TableMeta table = new TableMeta();
+        table.setName("flags");
+        ColumnMeta flag = column("flag", "BIT", Types.BIT, 1);
+        flag.setNullable(false);
+        flag.setDefaultValue("0");
+        table.setColumns(List.of(flag));
+
+        for (SqlDialect dialect : List.of(new OpenGaussDialect(), new GaussDbDialect())) {
+            String ddl = dialect.getCreateTableSql(table, "s", "flags", DatabaseType.MYSQL);
+            assertThat(ddl).as(dialect.getClass().getSimpleName())
+                    .contains("BOOLEAN NOT NULL DEFAULT FALSE");
+        }
     }
 
     // --- Streaming reads ----------------------------------------------------------------

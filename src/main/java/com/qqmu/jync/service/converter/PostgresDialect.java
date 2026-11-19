@@ -6,6 +6,8 @@ import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
 
+import lombok.extern.slf4j.Slf4j;
+
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
@@ -17,6 +19,7 @@ import com.qqmu.jync.model.DatabaseType;
  * ON CONFLICT upserts.
  */
 @Component
+@Slf4j
 public class PostgresDialect extends AbstractSqlDialect {
 
     @Override
@@ -164,6 +167,31 @@ public class PostgresDialect extends AbstractSqlDialect {
     @Override
     protected String renderBooleanDefault(boolean value) {
         return value ? "TRUE" : "FALSE";
+    }
+
+    /**
+     * Connector/J reports MySQL {@code TINYINT(1)} as a boolean, so the column maps to
+     * {@code BOOLEAN} — but the source default arrives as the bare number {@code 0}/{@code 1}
+     * and {@code renderDefaultValue} copies a numeric literal verbatim before any boolean
+     * conversion happens. PostgreSQL rejects {@code BOOLEAN DEFAULT 0} ("default expression is
+     * of type integer"), so re-render the two boolean values and drop any other number, which
+     * has no boolean meaning (losing a default keeps the table creatable).
+     */
+    @Override
+    protected String adjustDefaultForType(String renderedDefault, String targetType) {
+        if (renderedDefault == null || !"BOOLEAN".equals(targetType)
+                || !isNumeric(renderedDefault)) {
+            return renderedDefault;
+        }
+        if ("0".equals(renderedDefault)) {
+            return renderBooleanDefault(false);
+        }
+        if ("1".equals(renderedDefault)) {
+            return renderBooleanDefault(true);
+        }
+        log.debug("Skipping non-boolean numeric default {} on a BOOLEAN column",
+                renderedDefault);
+        return null;
     }
 
     /** SERIAL/BIGSERIAL create the sequence and default in one token. */
