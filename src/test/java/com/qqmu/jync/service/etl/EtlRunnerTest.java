@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -1135,6 +1136,47 @@ class EtlRunnerTest {
         tdengine.setType(DatabaseType.TDENGINE);
         EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
         task.setPreSql("DELETE FROM dst");
+
+        EtlRunResult result = runner.run(task, source, tdengine, mocked);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorMessage()).contains("error.etl.tdengine.stableTarget");
+        verify(targetConn, never()).prepareStatement(anyString());
+    }
+
+    /**
+     * A pre-SQL may create the target, and what it creates may be a super table. The
+     * post-pre-SQL check must refuse that before the write-mode DELETE, with the friendly
+     * message, instead of letting the first INSERT surface the server's raw error.
+     */
+    @Test
+    void aTdenginePreSqlThatCreatesASuperTableFailsWithTheFriendlyMessage() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        Connection targetConn = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        ResultSet exists = mock(ResultSet.class);
+        ResultSet stable = mock(ResultSet.class);
+        when(stable.next()).thenReturn(true);
+        when(targetConn.createStatement()).thenReturn(statement);
+        AtomicInteger probes = new AtomicInteger();
+        when(statement.executeQuery(anyString())).thenAnswer(inv -> {
+            String sql = inv.getArgument(0).toString();
+            if (sql.contains("ins_stables")) {
+                return stable;
+            }
+            if (probes.getAndIncrement() == 0) {
+                // The target does not exist until the pre-SQL creates it.
+                throw new SQLException("Table \"DST\" not found", "42S02", 42102);
+            }
+            return exists;
+        });
+        EtlConnectionProvider mocked = config -> config.getId() != null && config.getId() == 1L
+                ? DriverManager.getConnection(SOURCE_URL, "sa", "") : targetConn;
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(2L);
+        tdengine.setType(DatabaseType.TDENGINE);
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPreSql("CREATE STABLE dst (ts TIMESTAMP, id INT) TAGS (name VARCHAR(16))");
 
         EtlRunResult result = runner.run(task, source, tdengine, mocked);
 

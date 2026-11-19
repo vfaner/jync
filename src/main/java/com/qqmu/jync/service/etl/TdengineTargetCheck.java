@@ -33,6 +33,19 @@ final class TdengineTargetCheck {
         }
     }
 
+    /**
+     * Best-effort variant for the check after a pre-SQL that may have created the target.
+     * A server that cannot answer the dictionary query must not fail a run the pre-SQL just
+     * made possible; when the answer is unknown the INSERT itself reports the real error.
+     */
+    static boolean isSuperTableIfKnown(Connection conn, String qualifiedTable) {
+        try {
+            return isSuperTable(conn, qualifiedTable);
+        } catch (SQLException e) {
+            return false;
+        }
+    }
+
     private static String escape(String value) {
         return value.replace("'", "''");
     }

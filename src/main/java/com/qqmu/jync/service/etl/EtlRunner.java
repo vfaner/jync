@@ -224,6 +224,13 @@ public class EtlRunner {
                         throw new EtlProgramException(
                                 "error.etl.tdengine.targetTableMissing:" + targetName);
                     }
+                    if (TdengineTargetCheck.isSuperTableIfKnown(target, targetName)) {
+                        // The pre-SQL may have created a super table. Refuse it here with the
+                        // same message the pre-existing case uses, instead of letting the
+                        // first INSERT surface the server's raw "tbname required" error.
+                        throw new EtlProgramException(
+                                "error.etl.tdengine.stableTarget:" + targetName);
+                    }
                 }
                 deleteForWriteMode(target, task, targetName, checkpoint);
 
