@@ -328,6 +328,16 @@ public class CdcConsumerManager {
                             + " prepared; not starting it", projectId);
                     return;
                 }
+                if (shuttingDown) {
+                    // onShutdown() may have run while we were connecting: it saw an empty
+                    // registry (this start was not in it yet), returned, and the bar is now
+                    // up. Registering here would start a consumer after the context closed,
+                    // holding a lease until the JVM dies.
+                    lock.close();
+                    log.info("CDC project {} start refused: the context shut down while its"
+                            + " consumer was being prepared", projectId);
+                    return;
+                }
                 Thread thread = starter.start(consumer, "jync-cdc-" + projectId);
                 registry.put(projectId, new Registration(consumer, thread, stats, lock));
             }

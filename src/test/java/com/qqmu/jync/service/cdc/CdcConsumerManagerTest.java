@@ -580,4 +580,31 @@ class CdcConsumerManagerTest {
         verify(lockService, never()).tryAcquireForDaemon(any(), anyLong()); // 连租约都不试
         verify(contextFactory, never()).build(any(), anyString(), any());
     }
+
+    @Test
+    void aStartAlreadyPastTheShutdownGateDoesNotRegisterItsConsumer() throws Exception {
+        // 门闩只在入口检查一次。一次启动如果已经拿到租约、正在建连(最慢要等满连接超时),
+        // 停机恰好在这期间跑完并清空了注册表;它回到监视器时旧实现只看 stopGenerations,
+        // 于是消费者在 ContextClosedEvent 之后注册、起线程,带着租约活到 JVM 退出。
+        CountDownLatch buildEntered = new CountDownLatch(1);
+        CountDownLatch releaseBuild = new CountDownLatch(1);
+        when(lockService.tryAcquireForDaemon(9L, 30_000L)).thenReturn(lock);
+        when(contextFactory.build(any(), anyString(), any())).thenAnswer(inv -> {
+            buildEntered.countDown();
+            releaseBuild.await(10, TimeUnit.SECONDS);
+            return SyncContext.builder().config(new SyncConfig()).build();
+        });
+
+        Thread start = new Thread(() -> manager.ensureStarted(cdcProject(9L, true)),
+                "shutdown-race");
+        start.start();
+        assertThat(buildEntered.await(5, TimeUnit.SECONDS)).isTrue();
+
+        manager.onShutdown();
+        releaseBuild.countDown();
+        start.join(5_000L);
+
+        assertThat(starter.last).as("停机后不得再注册消费者").isNull();
+        verify(lock).close();                                // 租约必须放回去
+    }
 }
