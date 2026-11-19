@@ -370,6 +370,34 @@ class EtlPrecheckServiceTest {
                 .isEqualTo(EtlPrecheckResult.Level.ERROR);
     }
 
+    /**
+     * The precheck cannot execute DDL, so it cannot know whether the pre-SQL creates the
+     * table. A non-blank pre-SQL makes a missing TDengine target a warning: the run itself
+     * re-checks after the pre-SQL and fails there if nothing created the table.
+     */
+    @Test
+    void aMissingTdengineTargetWithPreSqlIsOnlyAWarning() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)");
+        Connection targetConn = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        when(targetConn.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenThrow(
+                new SQLException("internal error 0x2603", "", 9731));
+        EtlConnectionProvider mocked = config -> config.getId() != null && config.getId() == 1L
+                ? DriverManager.getConnection(SOURCE_URL, "sa", "") : targetConn;
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(2L);
+        tdengine.setType(DatabaseType.TDENGINE);
+        EtlTask task = form("SELECT id FROM src", "dst", EtlWriteMode.APPEND);
+        task.setPreSql("CREATE TABLE dst (id INT)");
+
+        EtlPrecheckResult result = service.check(task, source, tdengine, mocked);
+
+        assertThat(result.passed()).isTrue();
+        assertThat(check(result, "etl.precheck.target.missing.tdengine.presql").level())
+                .isEqualTo(EtlPrecheckResult.Level.WARN);
+    }
+
     @Test
     void aTdengineSuperTableTargetIsAnError() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)");

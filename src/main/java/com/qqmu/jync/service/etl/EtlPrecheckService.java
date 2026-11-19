@@ -159,9 +159,14 @@ public class EtlPrecheckService {
             // Creating the table is the runner's first step for ordinary targets, so a missing
             // one is information. TDengine's generated DDL is rejected by the server (no
             // PRIMARY KEY/NOT NULL in this form), and a super table cannot be a target at
-            // all, so a missing table there is a fault the run will refuse.
+            // all, so a missing table there is a fault the run will refuse — unless the task
+            // has a pre-SQL, which may create it. The precheck cannot execute DDL, so that
+            // case is a warning; the run re-checks after the pre-SQL and fails there if the
+            // table still does not exist.
             checks.add(tdengine
-                    ? error("etl.precheck.target.missing.tdengine", name)
+                    ? (task.getPreSql() != null && !task.getPreSql().isBlank()
+                            ? warn("etl.precheck.target.missing.tdengine.presql", name)
+                            : error("etl.precheck.target.missing.tdengine", name))
                     : ok("etl.precheck.target.missing", name));
             if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE) {
                 // Resolution can leave the condition empty even though save saw a non-blank
