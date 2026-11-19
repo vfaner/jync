@@ -204,6 +204,11 @@ public class DatabaseApiController {
         // 原生 MongoDB 只有 URI 可填:表单隐藏 jar/驱动类,也不显示厂商驱动开关。
         body.put("nativeMongo", dbType == DatabaseType.MONGODB_NATIVE);
         body.put("jdbc", dbType.hasJdbcDriver());
+        // 外部驱动预设给出厂商实际发布的包名(带动词后缀与实测版本),内置驱动不写该键。
+        String jarHint = dbType.driverJarHint();
+        if (jarHint != null) {
+            body.put("jarHint", jarHint);
+        }
 
         return ResponseEntity.ok(body);
     }

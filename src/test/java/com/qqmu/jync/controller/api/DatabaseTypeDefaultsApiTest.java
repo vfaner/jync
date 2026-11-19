@@ -161,4 +161,29 @@ class DatabaseTypeDefaultsApiTest {
                 .andExpect(jsonPath("$.type").value("CUSTOM"))
                 .andExpect(jsonPath("$.bundled").value(false));
     }
+
+    @Test
+    @DisplayName("外部驱动预设返回推荐 jar 文件名,带动词的 -dist 后缀")
+    void externalDriverPresetCarriesTheRecommendedJar() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "TDENGINE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jarHint")
+                        .value("taos-jdbcdriver-3.10.0-dist.jar"));
+        mvc.perform(get("/api/databases/type-defaults").param("type", "HIVE"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jarHint")
+                        .value("hive-jdbc-3.1.3-standalone.jar"));
+    }
+
+    @Test
+    @DisplayName("内置驱动的预设没有推荐 jar,响应里不出现该字段")
+    void bundledPresetHasNoJarHint() throws Exception {
+        mvc.perform(get("/api/databases/type-defaults").param("type", "MYSQL"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jarHint").doesNotExist());
+        // CUSTOM 没有预设驱动,自然也无所推荐
+        mvc.perform(get("/api/databases/type-defaults").param("type", "CUSTOM"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.jarHint").doesNotExist());
+    }
 }

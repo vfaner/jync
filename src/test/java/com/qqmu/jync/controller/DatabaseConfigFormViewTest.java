@@ -454,6 +454,78 @@ class DatabaseConfigFormViewTest {
     }
 
     @Test
+    void editingATdengineConnectionNamesTheDistJar() throws Exception {
+        // 占位符原来写死成 gbase-jdbc.jar:换到 TDengine 后这条提示仍然指着 GBase 的
+        // 包名,而 TDengine 必须用 -dist 包(含 Netty),拿错包只会得到 NoClassDefFoundError。
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(25L);
+        tdengine.setName("td-prod");
+        tdengine.setType(DatabaseType.TDENGINE);
+        when(service.findById(25L)).thenReturn(Optional.of(tdengine));
+
+        String page = html(mvc.perform(get("/databases/25/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(extractInput(page, "customJarPath"))
+                .contains("/opt/drivers/taos-jdbcdriver-3.10.0-dist.jar");
+        assertThat(elementTag(page, "jar-hint-row")).doesNotContain("hidden");
+        assertThat(page).contains("id=\"jar-hint\"");
+        assertThat(page).doesNotContain("??db.jarHint");
+    }
+
+    @Test
+    void aBundledPresetHidesTheJarRecommendation() throws Exception {
+        DatabaseConfig dm = new DatabaseConfig();
+        dm.setId(26L);
+        dm.setName("dm-prod");
+        dm.setType(DatabaseType.DM);
+        when(service.findById(26L)).thenReturn(Optional.of(dm));
+
+        String page = html(mvc.perform(get("/databases/26/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(elementTag(page, "jar-hint-row")).contains("hidden");
+        // 没有预设 jar 时占位符保持中性,不再摆一个看似某产品的包名
+        assertThat(extractInput(page, "customJarPath"))
+                .contains("/opt/drivers/driver.jar")
+                .doesNotContain("gbase-jdbc.jar");
+    }
+
+    @Test
+    void theDriverClassPlaceholderShowsThePresetClass() throws Exception {
+        // com.example.jdbc.Driver 是一个不存在的类:预设连接里看到它只会诱导用户
+        // 去填一个错误的类名。留空本来就用预设类,占位符理应直接显示那个类。
+        DatabaseConfig impala = new DatabaseConfig();
+        impala.setId(27L);
+        impala.setName("impala-prod");
+        impala.setType(DatabaseType.IMPALA);
+        when(service.findById(27L)).thenReturn(Optional.of(impala));
+
+        String page = html(mvc.perform(get("/databases/27/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(extractInput(page, "customDriver"))
+                .contains("placeholder=\"com.cloudera.impala.jdbc.Driver\"")
+                .doesNotContain("com.example.jdbc.Driver");
+    }
+
+    @Test
+    void customConnectionsKeepTheExampleDriverClassPlaceholder() throws Exception {
+        // CUSTOM 没有预设驱动类,示例值才是正确的提示。
+        DatabaseConfig custom = new DatabaseConfig();
+        custom.setId(28L);
+        custom.setName("custom-prod");
+        custom.setType(DatabaseType.CUSTOM);
+        when(service.findById(28L)).thenReturn(Optional.of(custom));
+
+        String page = html(mvc.perform(get("/databases/28/edit").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk()));
+
+        assertThat(extractInput(page, "customDriver"))
+                .contains("placeholder=\"com.example.jdbc.Driver\"");
+    }
+
+    @Test
     void editingAnExternalDriverPresetAllowsADriverClassOverride() throws Exception {
         // 厂商 jar 里的驱动类名常与预设不同（GaussDB 的 gsjdbc200.jar 就是
         // com.huawei.gauss200.jdbc.Driver），外部驱动类型的表单必须能改驱动类。

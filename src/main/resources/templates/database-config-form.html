@@ -224,7 +224,9 @@
                         <label for="customJarPath" th:text="#{db.customJarPath}">Driver jar path</label>
                         <div class="input-group">
                             <input type="text" class="input mono" id="customJarPath" th:field="*{customJarPath}"
-                                   placeholder="/opt/drivers/gbase-jdbc.jar"
+                                   th:attr="placeholder=${driverJarHint != null
+                                                ? '/opt/drivers/' + driverJarHint
+                                                : '/opt/drivers/driver.jar'}"
                                    th:disabled="${driverCardEnabled and !mongoNative} ? null : 'disabled'">
                             <!--/* 探测驱动读的是调用者自己填的 jar：与这张表单同一权限级（写角色），
                                    所以不用 isAdmin 门控；访客本就打不开这张表单。 */-->
@@ -236,6 +238,14 @@
                             </button>
                         </div>
                         <div class="help" th:text="#{db.customJarPathHelp}">help</div>
+                        <!--/* 占位符只在空值时可见，用户一旦输入就不再提示；这里常驻一行推荐包名。
+                               包名必须带厂商要求的分发词缀（-dist / -standalone / -all），错包会让
+                               驱动类加载不到依赖。切换类型时 app.js 用 type-defaults 的 jarHint 更新。 */-->
+                        <div class="help" id="jar-hint-row"
+                             th:attr="hidden=${driverJarHint == null} ? 'hidden' : null">
+                            <span th:text="#{db.jarHintPrefix}">Recommended driver:</span>
+                            <span class="mono" id="jar-hint" th:text="${driverJarHint}"></span>
+                        </div>
                     </div>
                     <div class="field" id="driver-class-field"
                          th:attr="hidden=${mongoNative} ? 'hidden' : null">
@@ -244,7 +254,10 @@
                                 预设类,提示行显示的就是它。控件随开关一起禁用,残留值不提交。 */-->
                         <label for="customDriver" th:text="#{db.customDriver}">Driver class</label>
                         <input type="text" class="input mono" id="customDriver" th:field="*{customDriver}"
-                               list="driver-options" placeholder="com.example.jdbc.Driver"
+                               list="driver-options"
+                               th:attr="placeholder=${config.type != null and config.type.driverClassName != null
+                                            ? config.type.driverClassName
+                                            : 'com.example.jdbc.Driver'}"
                                th:disabled="${driverCardEnabled and !mongoNative} ? null : 'disabled'">
                         <datalist id="driver-options"></datalist>
                         <div class="help mono" id="driver-hint"

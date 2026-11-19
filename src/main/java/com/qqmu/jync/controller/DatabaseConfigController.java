@@ -97,6 +97,9 @@ public class DatabaseConfigController {
         model.addAttribute("driverCardAvailable", driverCardAvailable(config.getType()));
         model.addAttribute("driverCardRequired", driverCardRequired(config.getType()));
         model.addAttribute("driverCardEnabled", driverCardEnabled(config));
+        // 首屏就给出该预设的推荐 jar;切换类型时 app.js 用 type-defaults 的同名字段更新。
+        model.addAttribute("driverJarHint",
+                config.getType() == null ? null : config.getType().driverJarHint());
     }
 
     /**

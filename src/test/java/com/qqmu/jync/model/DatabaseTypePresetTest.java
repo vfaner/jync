@@ -170,4 +170,43 @@ class DatabaseTypePresetTest {
     void tdengineIsSelectableByItsName() {
         assertThat(DatabaseType.fromName("TDENGINE")).isSameAs(DatabaseType.TDENGINE);
     }
+
+    /**
+     * A wrong jar is the most common reason an external-driver preset fails to connect:
+     * TDengine's plain jar lacks Netty, Hive's plain jar lacks the Hadoop client, and the
+     * MongoDB SQL driver's plain jar lacks its dependencies. The form's placeholder and hint
+     * line therefore name the exact artifact the vendor publishes.
+     */
+    @Test
+    void externalDriverPresetsNameTheirVendorJar() {
+        assertThat(DatabaseType.GAUSSDB.driverJarHint()).isEqualTo("gaussdbjdbc.jar");
+        assertThat(DatabaseType.GBASE.driverJarHint())
+                .isEqualTo("gbase-connector-java-9.5.3.0-build1-bin.jar");
+        assertThat(DatabaseType.OSCAR.driverJarHint()).isEqualTo("oscarJDBC.jar");
+        assertThat(DatabaseType.HANA.driverJarHint()).isEqualTo("ngdbc-2.30.12.jar");
+        assertThat(DatabaseType.CLICKHOUSE.driverJarHint())
+                .isEqualTo("clickhouse-jdbc-0.11.0-all.jar");
+        assertThat(DatabaseType.HIVE.driverJarHint())
+                .isEqualTo("hive-jdbc-3.1.3-standalone.jar");
+        assertThat(DatabaseType.IMPALA.driverJarHint()).isEqualTo("ImpalaJDBC42.jar");
+        assertThat(DatabaseType.ELASTICSEARCH.driverJarHint())
+                .isEqualTo("x-pack-sql-jdbc-7.17.22.jar");
+        assertThat(DatabaseType.MONGODB.driverJarHint())
+                .isEqualTo("mongodb-jdbc-4.0.3-all.jar");
+        assertThat(DatabaseType.TDENGINE.driverJarHint())
+                .isEqualTo("taos-jdbcdriver-3.10.0-dist.jar");
+    }
+
+    @Test
+    void bundledPresetsAndCustomHaveNoJarToRecommend() {
+        // The bundled-driver presets connect without a jar; the two vendor-driver presets
+        // default to the bundled Connector/J, so their optional override keeps the generic
+        // placeholder instead of naming a jar most deployments never fill in.
+        for (DatabaseType type : new DatabaseType[] {
+                DatabaseType.MYSQL, DatabaseType.DM, DatabaseType.POSTGRESQL,
+                DatabaseType.DB2, DatabaseType.H2, DatabaseType.GOLDENDB,
+                DatabaseType.GREATDB, DatabaseType.CUSTOM, DatabaseType.MONGODB_NATIVE}) {
+            assertThat(type.driverJarHint()).as(type.name()).isNull();
+        }
+    }
 }

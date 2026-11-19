@@ -12,6 +12,7 @@ import java.nio.file.Paths;
 import java.security.KeyStore;
 import java.time.Instant;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -75,15 +76,15 @@ class TlsCertificateServiceTest {
 
     /**
      * The port picked in setUp can be claimed by another test's socket before the service
-     * binds it; the full suite hit exactly that. A fresh port and a retry is honest here —
-     * the service's check is that same bind, so a port that fails it is genuinely unusable.
+     * binds it; the full suite hit exactly that, on every save path. A fresh port and a retry
+     * is honest here — the service's check is that same bind, so a port that fails it is
+     * genuinely unusable. The port check runs before anything is written, so a retry cannot
+     * double-write.
      */
-    private void save() {
+    private <T> T withFreePort(Supplier<T> action) {
         for (int attempt = 0; ; attempt++) {
             try {
-                service().save(TestKeystores.pkcs12(), "certificate.p12", "changeit",
-                        httpsPort, true);
-                return;
+                return action.get();
             } catch (TlsKeystoreException e) {
                 if (attempt >= 2 || !"error.tls.portInUse".equals(e.messageKey())) {
                     throw e;
@@ -95,6 +96,11 @@ class TlsCertificateServiceTest {
                 }
             }
         }
+    }
+
+    private void save() {
+        withFreePort(() -> service().save(TestKeystores.pkcs12(), "certificate.p12", "changeit",
+                httpsPort, true));
     }
 
     // ── Rejections ─────────────────────────────────────────────────────────────
@@ -404,8 +410,8 @@ class TlsCertificateServiceTest {
     void saveKeystorePathStoresThePathInsteadOfACopy() throws Exception {
         Path external = Files.write(dir.resolve("mounted.p12"), TestKeystores.pkcs12());
 
-        TlsConfig saved = service().saveKeystorePath(external.toString(), "changeit",
-                httpsPort, true);
+        TlsConfig saved = withFreePort(() -> service().saveKeystorePath(external.toString(),
+                "changeit", httpsPort, true));
 
         assertThat(saved.file()).isEqualTo(external.toAbsolutePath().normalize().toString());
         assertThat(service().pageState().serverPaths())
@@ -445,8 +451,8 @@ class TlsCertificateServiceTest {
                 TestKeystores.certificatePem());
         Path key = Files.writeString(dir.resolve("privkey.pem"), TestKeystores.privateKeyPem());
 
-        TlsConfig saved = service().savePemPath(certificate.toString(), key.toString(),
-                httpsPort, true);
+        TlsConfig saved = withFreePort(() -> service().savePemPath(certificate.toString(),
+                key.toString(), httpsPort, true));
 
         assertThat(store.snapshot().serverPaths()).isEqualTo(new TlsConfiguredPaths(null,
                 certificate.toAbsolutePath().normalize().toString(),
@@ -461,7 +467,7 @@ class TlsCertificateServiceTest {
         Path combined = Files.writeString(dir.resolve("bundle.pem"),
                 TestKeystores.certificatePem() + TestKeystores.privateKeyPem());
 
-        service().savePemPath(combined.toString(), null, httpsPort, true);
+        withFreePort(() -> service().savePemPath(combined.toString(), null, httpsPort, true));
 
         assertThat(store.snapshot().serverPaths().pemKeyPath()).isNull();
     }
@@ -511,8 +517,8 @@ class TlsCertificateServiceTest {
 
         assertThat(stored).isAbsolute();
         assertThat(stored.getFileName().toString()).endsWith("-server.p12");
-        TlsConfig saved = service().saveKeystorePath(stored.toString(), "changeit", httpsPort,
-                true);
+        TlsConfig saved = withFreePort(() -> service().saveKeystorePath(stored.toString(),
+                "changeit", httpsPort, true));
         assertThat(saved.file()).isEqualTo(stored.toString());
     }
 
@@ -540,8 +546,9 @@ class TlsCertificateServiceTest {
 
     @Test
     void savePemStoresAPkcs12ThatOpensWithTheGeneratedPassphrase() {
-        TlsConfig saved = service().savePem(bytes(TestKeystores.certificatePem()),
-                bytes(TestKeystores.privateKeyPem()), httpsPort, true);
+        TlsConfig saved = withFreePort(() -> service().savePem(
+                bytes(TestKeystores.certificatePem()), bytes(TestKeystores.privateKeyPem()),
+                httpsPort, true));
 
         assertThat(saved.format()).isEqualTo(TlsKeystoreFormat.PKCS12);
         assertThat(saved.passphrase()).isNotEmpty();
@@ -557,7 +564,8 @@ class TlsCertificateServiceTest {
         // second key input is then redundant and may be left empty.
         String combined = TestKeystores.certificatePem() + TestKeystores.privateKeyPem();
 
-        TlsConfig saved = service().savePem(bytes(combined), null, httpsPort, true);
+        TlsConfig saved = withFreePort(() -> service().savePem(bytes(combined), null,
+                httpsPort, true));
 
         TlsCertificateInfo info = inspector.inspect(store.keystoreBytes(saved),
                 TlsKeystoreFormat.PKCS12, saved.passphrase().toCharArray());
@@ -582,8 +590,9 @@ class TlsCertificateServiceTest {
 
     @Test
     void savePemDoesNotLeaveThePrivateKeyOrThePassphraseInPlaintext() throws IOException {
-        TlsConfig saved = service().savePem(bytes(TestKeystores.certificatePem()),
-                bytes(TestKeystores.privateKeyPem()), httpsPort, false);
+        TlsConfig saved = withFreePort(() -> service().savePem(
+                bytes(TestKeystores.certificatePem()), bytes(TestKeystores.privateKeyPem()),
+                httpsPort, false));
 
         try (java.util.stream.Stream<Path> files = Files.walk(dir)) {
             for (Path file : files.filter(Files::isRegularFile).toList()) {

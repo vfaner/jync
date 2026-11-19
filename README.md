@@ -75,7 +75,7 @@
 [![数据库能力地图与专属迁移链路](docs/images/jync_dbmaps.webp)](https://jync.qqmu.com/database.html)
 
 - **自定义数据库**：JDBC URL + 驱动类名 + 驱动 jar 路径，运行时用独立 `URLClassLoader` 加载，可选方言家族。
-- **需自备驱动**：GBase、神通 Oscar、华为 GaussDB、SAP HANA、ClickHouse、Hive、Impala、TDengine、Elasticsearch、MongoDB（Atlas SQL）的构件不可再分发，需自备 jar；驱动类名与预设不同时可在同一张卡片覆盖。TDengine 必须使用官方 `-dist` jar，走 WebSocket 端口 6041，连接必须写明数据库名，且只作同步源与 ETL 目标。
+- **需自备驱动**：GBase、神通 Oscar、华为 GaussDB、SAP HANA、ClickHouse、Hive、Impala、TDengine、Elasticsearch、MongoDB（Atlas SQL）的构件不可再分发，需自备 jar；驱动类名与预设不同时可在同一张卡片覆盖。TDengine 必须使用官方 `taos-jdbcdriver-3.10.0-dist.jar`（`-dist` 包已含 Netty 等依赖），走 WebSocket 端口 6041，连接必须写明数据库名，且只作同步源与 ETL 目标。
 - **分析型 / 搜索型引擎**：Doris、ClickHouse、Hive、Impala、TDengine、Elasticsearch、MongoDB 没有日志 CDC，**只作实时同步的源**（轮询 / 全表比对）；ETL 中除 Elasticsearch 与 MongoDB 外都可写入。
 - **Redis 是同步目标，不是数据库**：在项目页选「目标类型 = Redis」，连接管理里单独维护 Redis 目标（单机或 Cluster，不支持 Sentinel）；源端仍是数据库连接，且必须走日志 CDC。它不是 `DatabaseType`，不出现在数据库能力矩阵与 ETL 引擎列表里。
 - **专属迁移不走 JDBC**：三条链路由独立的「专属连接」与迁移任务完成，不进入 JDBC 能力矩阵；边界见[已知限制](docs/known-limitations.md)。GaussDB 与 openGauss 的差异、TDSQL / PolarDB 分版本、HANA 的 CDC 限制见[官网数据库页](https://jync.qqmu.com/database.html)。

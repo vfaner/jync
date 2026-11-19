@@ -2,6 +2,7 @@ package com.qqmu.jync.model;
 
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.Map;
 import java.util.Set;
 
 import lombok.Getter;
@@ -371,6 +372,39 @@ public enum DatabaseType {
     /** Whether the connection form offers an <em>optional</em> vendor URL / jar / class override. */
     public boolean supportsVendorDriver() {
         return OPTIONAL_VENDOR_DRIVER_PRESETS.contains(this);
+    }
+
+    /**
+     * The exact jar file the vendor publishes for presets whose driver is not bundled.
+     *
+     * <p>The connection form used to show one placeholder for every product
+     * ({@code gbase-jdbc.jar}), which is a file no vendor actually ships: TDengine's plain
+     * jar lacks Netty ({@code -dist} bundles it), Hive's plain jar lacks the Hadoop client
+     * ({@code -standalone} bundles it), and the MongoDB SQL driver's plain jar lacks its
+     * dependencies ({@code -all} bundles them). A user who follows the old placeholder
+     * downloads a jar the driver loader accepts and the class loader then fails on. These
+     * names are the recommendation; any path the user types still wins.
+     *
+     * <p>Versions follow the row measured in {@code docs/verification-matrix.md} where one
+     * exists (TDengine 3.10.0, ClickHouse 0.11.0, Elasticsearch 7.17.22), otherwise the
+     * current vendor release. A bundled-driver preset (and CUSTOM, and the optional
+     * vendor-driver presets that default to the bundled Connector/J) answers {@code null}.
+     */
+    private static final Map<DatabaseType, String> DRIVER_JAR_HINTS = Map.ofEntries(
+            Map.entry(GAUSSDB, "gaussdbjdbc.jar"),
+            Map.entry(GBASE, "gbase-connector-java-9.5.3.0-build1-bin.jar"),
+            Map.entry(OSCAR, "oscarJDBC.jar"),
+            Map.entry(HANA, "ngdbc-2.30.12.jar"),
+            Map.entry(CLICKHOUSE, "clickhouse-jdbc-0.11.0-all.jar"),
+            Map.entry(HIVE, "hive-jdbc-3.1.3-standalone.jar"),
+            Map.entry(IMPALA, "ImpalaJDBC42.jar"),
+            Map.entry(ELASTICSEARCH, "x-pack-sql-jdbc-7.17.22.jar"),
+            Map.entry(MONGODB, "mongodb-jdbc-4.0.3-all.jar"),
+            Map.entry(TDENGINE, "taos-jdbcdriver-3.10.0-dist.jar"));
+
+    /** Recommended vendor jar file name, or {@code null} when the driver is bundled. */
+    public String driverJarHint() {
+        return DRIVER_JAR_HINTS.get(this);
     }
 
     /**

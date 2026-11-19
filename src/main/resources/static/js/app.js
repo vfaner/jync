@@ -1411,6 +1411,22 @@
           syncMinerSection(select.closest('form'));
           var driverHint = document.getElementById('driver-hint');
           if (driverHint) driverHint.textContent = p.driverClass || '';
+          // 占位符用预设的真实驱动类,而不是不存在的示例类;CUSTOM 没有预设,保留示例。
+          var driverInput = document.getElementById('customDriver');
+          if (driverInput) {
+            driverInput.placeholder = p.driverClass || 'com.example.jdbc.Driver';
+          }
+          // 推荐 jar 随类型切换:占位符给出厂商实际包名(带 -dist 之类词缀),常驻提示行
+          // 在用户已填路径时仍能看到应该用哪个包。内置驱动的预设两者都回退/隐藏。
+          var jarInput = document.getElementById('customJarPath');
+          if (jarInput) {
+            jarInput.placeholder = p.jarHint ? '/opt/drivers/' + p.jarHint
+                : '/opt/drivers/driver.jar';
+          }
+          var jarHintRow = document.getElementById('jar-hint-row');
+          if (jarHintRow) jarHintRow.hidden = !p.jarHint;
+          var jarHint = document.getElementById('jar-hint');
+          if (jarHint) jarHint.textContent = p.jarHint || '';
         })
         .catch(function () { /* 预填失败只是少了便利，表单仍可手填 */ });
     }
