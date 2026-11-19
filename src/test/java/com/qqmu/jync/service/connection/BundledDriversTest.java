@@ -91,6 +91,26 @@ class BundledDriversTest {
                 "taos-jdbcdriver 必须保持 test scope,否则会随发行包分发");
     }
 
+    /**
+     * The TDengine driver's own POM depends on {@code netty-all}. Spring Boot's dependency
+     * management pins the QUIC pieces of netty-all to {@code runtime} scope, which overrides
+     * the scope inherited from our test-scoped dependency — so without an exclusion the fat
+     * jar grows by the five {@code netty-codec-native-quic} natives (~13 MB) for a driver the
+     * distribution never ships. Lettuce already brings the netty core jars at compile scope,
+     * so the matrix IT keeps what it needs when netty-all is dropped.
+     */
+    @Test
+    @DisplayName("TDengine 驱动不得把 netty-all 的运行时子件带进发行包")
+    void tdengineDriverDoesNotDragNettyAllIntoTheJar() throws Exception {
+        String pom = Files.readString(Path.of("pom.xml"));
+        int start = pom.indexOf("<artifactId>taos-jdbcdriver</artifactId>");
+        assertTrue(start > 0, "pom.xml 里找不到 taos-jdbcdriver 依赖");
+        String block = pom.substring(start, pom.indexOf("</dependency>", start));
+        assertTrue(block.contains("<exclusion>") && block.contains("<artifactId>netty-all</artifactId>"),
+                "taos-jdbcdriver 必须排除 netty-all:Spring Boot BOM 会把它的 QUIC 子件"
+                        + "提升为 runtime scope,约 13 MB 的 netty-codec-native-quic 会进入发行包");
+    }
+
     @Test
     @DisplayName("内置驱动预设共 24 个:MySQL/MariaDB/Oracle/SQL Server/DB2/Postgres/openGauss/达梦/金仓/OceanBase/TiDB/GoldenDB/TDSQL/PolarDB/万里 GreatDB/银联 UPDRDB/星环 KunDB/平安 RASESQL/东方金信 SeaboxSQL/瀚高/海量/崖山/Doris/H2")
     void twentyFourDriversAreBundled() {
