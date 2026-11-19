@@ -46,8 +46,12 @@ class TlsCertificateServiceTest {
         store = new TlsKeystoreStore(dir.toString(), crypto);
         inspector = new TlsCertificateInspector();
         runtime = runtimeWith(Optional.empty());
+        httpsPort = freePort();
+    }
+
+    private static int freePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0)) {
-            httpsPort = socket.getLocalPort();
+            return socket.getLocalPort();
         }
     }
 
@@ -69,8 +73,28 @@ class TlsCertificateServiceTest {
         return state;
     }
 
+    /**
+     * The port picked in setUp can be claimed by another test's socket before the service
+     * binds it; the full suite hit exactly that. A fresh port and a retry is honest here —
+     * the service's check is that same bind, so a port that fails it is genuinely unusable.
+     */
     private void save() {
-        service().save(TestKeystores.pkcs12(), "certificate.p12", "changeit", httpsPort, true);
+        for (int attempt = 0; ; attempt++) {
+            try {
+                service().save(TestKeystores.pkcs12(), "certificate.p12", "changeit",
+                        httpsPort, true);
+                return;
+            } catch (TlsKeystoreException e) {
+                if (attempt >= 2 || !"error.tls.portInUse".equals(e.messageKey())) {
+                    throw e;
+                }
+                try {
+                    httpsPort = freePort();
+                } catch (IOException io) {
+                    throw e;
+                }
+            }
+        }
     }
 
     // ── Rejections ─────────────────────────────────────────────────────────────
