@@ -502,6 +502,13 @@ public final class JdbcRowMapper {
             // A BIT(1) source value arriving as Boolean must be accepted by an integer
             // target; PostgreSQL-family drivers do not coerce Boolean→INTEGER.
             ps.setObject(idx, (Boolean) value ? 1 : 0);
+        } else if (value instanceof Number && isBooleanType(targetType)) {
+            // Connector/J reports MySQL TINYINT(1) as BIT, so the target column is boolean;
+            // the JDBC read path hands the cell over as Boolean, but the binlog decoder
+            // delivers TINY as Integer 0/1. PostgreSQL-family drivers reject int4 bound
+            // into a boolean column, so a numeric image becomes the flag it means —
+            // nonzero is true, the server's own integer-to-boolean cast rule.
+            ps.setBoolean(idx, ((Number) value).doubleValue() != 0d);
         } else if (typedTemporal && value instanceof CharSequence
                 && targetType != null && CursorTypes.isTemporal(targetType)) {
             // The reader hands MySQL DATETIME/TIME over as the server's wall-clock text
@@ -701,6 +708,11 @@ public final class JdbcRowMapper {
         } catch (java.time.format.DateTimeParseException e) {
             return null;
         }
+    }
+
+    /** Boolean-like target columns: {@code BOOLEAN} and the {@code BIT} a MySQL source reports. */
+    private static boolean isBooleanType(Integer jdbcType) {
+        return jdbcType != null && (jdbcType == Types.BIT || jdbcType == Types.BOOLEAN);
     }
 
     private static boolean isNumericType(Integer jdbcType) {

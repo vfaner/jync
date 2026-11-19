@@ -64,4 +64,16 @@ class JdbcRowMapperBitBindTest {
         bind(ps, "c", Boolean.TRUE, Types.SMALLINT);
         verify(ps).setObject(1, 1);
     }
+
+    @Test
+    void integerValuesBindAsBooleanToBooleanTargets() throws Exception {
+        // Connector/J reports MySQL TINYINT(1) as BIT — the full load hands the cell over
+        // as Boolean, but the binlog decoder delivers TINY as Integer 0/1. The mapped
+        // target column is BOOLEAN, and PostgreSQL rejects int4 bound into it.
+        bind(ps, "c", Integer.valueOf(1), Types.BIT);
+        verify(ps).setBoolean(1, true);
+
+        bind(ps, "c", Integer.valueOf(0), Types.BOOLEAN);
+        verify(ps).setBoolean(1, false);
+    }
 }
