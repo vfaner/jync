@@ -1096,6 +1096,27 @@ class EtlRunnerTest {
         assertThat(result.errorMessage()).contains("error.etl.tdengine.targetTableMissing");
     }
 
+    /**
+     * The refusal message tells the operator to create the table first or put its DDL in the
+     * pre-SQL. The second half has to work: the runner must not refuse a missing TDengine
+     * target before the pre-SQL had its chance to create it.
+     */
+    @Test
+    void aTdenginePreSqlMayCreateTheMissingTarget() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(2L);
+        tdengine.setType(DatabaseType.TDENGINE);
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.APPEND);
+        task.setPreSql("CREATE TABLE dst (id INT)");
+
+        EtlRunResult result = runner.run(task, source, tdengine, connections);
+
+        assertThat(result.success()).as(String.valueOf(result.errorMessage())).isTrue();
+        assertThat(result.rowsWritten()).isEqualTo(1);
+        assertThat(rows("SELECT id FROM dst")).containsExactly("1");
+    }
+
     @Test
     void aTdengineSuperTableTargetFailsBeforeAnyDeleteOrPreSql() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");

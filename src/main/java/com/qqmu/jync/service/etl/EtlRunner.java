@@ -215,6 +215,16 @@ public class EtlRunner {
                         executePreOrPost(target, task, task.getPreSql());
                     }
                 }
+                if (targetConfig.effectiveType() == DatabaseType.TDENGINE && !targetExists) {
+                    // Jync cannot generate TDengine DDL, so a missing target is not created
+                    // by ensureTargetTable — the operator's pre-sql may have created it just
+                    // now. Refuse here, before the write-mode DELETE and any row write, so a
+                    // missing table still costs nothing.
+                    if (!EtlSqlSupport.exists(target, targetName)) {
+                        throw new EtlProgramException(
+                                "error.etl.tdengine.targetTableMissing:" + targetName);
+                    }
+                }
                 deleteForWriteMode(target, task, targetName, checkpoint);
 
                 String insertSql = insertSql(targetName, writeColumns);
@@ -796,9 +806,10 @@ public class EtlRunner {
         }
         if (targetConfig.effectiveType() == DatabaseType.TDENGINE) {
             // The generated DDL carries NOT NULL and PRIMARY KEY (...), which TDengine
-            // rejects; creating tables is the operator's responsibility (or a pre-sql
-            // statement), and this fails before the pre-sql or the write-mode DELETE runs.
-            throw new EtlProgramException("error.etl.tdengine.targetTableMissing:" + targetName);
+            // rejects, so Jync never creates a TDengine table. The caller re-checks after
+            // the pre-sql (which may carry the operator's own CREATE TABLE) and fails there
+            // before the write-mode DELETE or any row write.
+            return false;
         }
         TableMeta table = new TableMeta();
         table.setName(configuredTable);

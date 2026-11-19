@@ -758,8 +758,9 @@ public class DataSyncService {
     }
 
     /**
-     * Reads {@code MAX(cursorColumn)} from the source — the upper bound of this cycle's
-     * window, captured before any data is read.
+     * Reads the dialect's upper-bound aggregate over the cursor column — {@code MAX} for
+     * most products, {@code LAST} where a TIMESTAMP has no {@code MAX} (TDengine). It is
+     * the upper bound of this cycle's window, captured before any data is read.
      */
     private String readHighWatermark(Connection sourceConn, TableMeta table,
                                      CursorStrategy strategy, SyncContext ctx) throws SQLException {
