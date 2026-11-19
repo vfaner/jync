@@ -24,4 +24,11 @@ class TdengineDialectTest {
     void hasNoWindowFunctions() {
         assertThat(dialect.supportsWindowFunctions()).isFalse();
     }
+
+    @Test
+    void readsTheUpperBoundWithLastBecauseMaxRejectsTimestamps() {
+        // TDengine 3.3.6 answers MAX(`ts`) with "Invalid parameter data type : max";
+        // LAST returns the value of the row with the greatest timestamp.
+        assertThat(dialect.highWatermarkMaxExpression("`ts`")).isEqualTo("LAST(`ts`)");
+    }
 }

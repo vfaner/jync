@@ -220,6 +220,17 @@ public interface SqlDialect {
     }
 
     /**
+     * The aggregate that yields a cycle's high-watermark upper bound over an
+     * already-quoted column reference.
+     *
+     * <p>TDengine has no {@code MAX}/{@code MIN} over TIMESTAMP and answers with
+     * "Invalid parameter data type"; its dialect substitutes {@code LAST}.
+     */
+    default String highWatermarkMaxExpression(String columnRef) {
+        return "MAX(" + columnRef + ")";
+    }
+
+    /**
      * Whether an initial full load into a <em>confirmed-empty</em> target of this dialect may
      * write plain {@code INSERT} instead of the upsert. On an empty table the upsert's match
      * test can never fire, so it only adds per-row work; on a non-empty one the INSERT fails

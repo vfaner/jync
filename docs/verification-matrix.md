@@ -32,6 +32,7 @@
 | YashanDB | 源 + 目标 | 由使用者提供（无公开镜像） | `com.yashandb:yashandb-jdbc:1.9.27`（内置） | 轮询建表与行送达；YStream CDC 需单独探测 | 环境门控 | 本次未运行 | `YashanDbPollingIT`；本测试**不宣称** YStream CDC 已验证 |
 | Elasticsearch SQL | 仅源 | 由使用者提供（集群 + X-Pack SQL JDBC jar） | 用户自备 `customJarPath`（如 `org.elasticsearch.xpack.sql.jdbc.EsDriver`） | 简单索引全量到 JDBC 目标 | 手工 / 环境门控 | 本次未运行 | `ElasticsearchSqlSourceIT`；驱动不在 Maven Central，缺 jar 时 `assumeTrue` 跳过 |
 | SAP HANA | 源 + 目标 | HANA Express 2.00.082（手工实例） | `com.sap.db:ngdbc`（已在 Maven Central，不随包再分发） | 结构同步、LIMIT/OFFSET、`UPSERT … WITH PRIMARY KEY`、轮询；真 CDC 不支持 | 手工 | 2026-11-01 spike；v1.12.0 未重跑 | 基本 DDL/分页/upsert 已实测；**DECIMAL identity 规则未真库验证**：按官方文档保留 scale 0 的 `DECIMAL(p,0)`，正数 scale 强制提升到整数段 |
+| TDengine | 仅源 | `tdengine/tdengine:3.3.6.0` | `com.taosdata.jdbc:taos-jdbcdriver:3.10.0`（**仅测试**，应用不内置） | 元数据读取、复合主键（`ts` + 声明键）全量装载、时间戳游标轮询与空转、VARCHAR 按文本读取、超级表入清单而子表不入 | 自动化容器 | **2026-11-19（v2.4.0 之后新增）** | `TdengineSourceIT`（目标 PostgreSQL 16）；3.3.6 对 TIMESTAMP 列的 `MAX`/`MIN` 报 `0x2802`，水位上限改走 `LAST`；无窗口函数、无 CDC，ETL 目标表须预先存在 |
 | H2 | 仅元数据 | 内嵌 | `com.h2database:h2` | Jync 元数据库启动/迁移 | 自动化（单元/上下文测试） | v1.11.0 及以前持续回归 | 不作为同步源或目标 |
 | MongoDB（原生驱动） | 仅 ETL/专属迁移源 | `mongo:6` | `org.mongodb:mongodb-driver-sync` | ETL 取数、Mongo → Mongo、Mongo → KingbaseES | 自动化容器 | v1.11.0 | 不参与 JDBC 实时同步矩阵 |
 

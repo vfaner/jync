@@ -19,4 +19,15 @@ public class TdengineDialect extends PollingSourceDialect {
     public boolean supportsWindowFunctions() {
         return false;
     }
+
+    /**
+     * TDengine rejects {@code MAX}/{@code MIN} over a TIMESTAMP column
+     * ({@code 0x2802 "Invalid parameter data type : max"}). {@code LAST} returns the value
+     * of the row with the greatest timestamp — the same upper bound the watermark wants on
+     * a time-ordered source, and it also accepts INT and VARCHAR columns.
+     */
+    @Override
+    public String highWatermarkMaxExpression(String columnRef) {
+        return "LAST(" + columnRef + ")";
+    }
 }

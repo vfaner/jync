@@ -767,7 +767,8 @@ public class DataSyncService {
             return null;
         }
         SqlDialect dialect = ctx.getSourceDialect();
-        String sql = "SELECT MAX(" + KeysetChunker.sqlRef(dialect, strategy) + ") FROM "
+        String sql = "SELECT " + dialect.highWatermarkMaxExpression(
+                        KeysetChunker.sqlRef(dialect, strategy)) + " FROM "
                 + dialect.qualify(ctx.getSourceSchema(), table.getName());
         try (Statement st = sourceConn.createStatement()) {
             // A MAX over an unindexed cursor column is a full scan: it belongs to the copy's
