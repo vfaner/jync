@@ -165,6 +165,52 @@ class JdbcRowMapperReadSpecialTypesTest {
         assertThat(row.get("c")).isSameAs(nativeArray);
     }
 
+    @Test
+    void tdengineVarcharIsReadAsTextBecauseTheDriverReturnsBytes() throws Exception {
+        // TDengine reports VARCHAR and BINARY identically (jdbc 12, name BINARY) and
+        // getObject answers byte[], so a text target would receive a binary blob.
+        ResultSet rs = mockRow(Types.VARCHAR, "BINARY");
+        when(rs.getObject(1)).thenReturn("hello".getBytes());
+        when(rs.getString(1)).thenReturn("hello");
+        when(rs.wasNull()).thenReturn(false);
+
+        Map<String, Object> row = JdbcRowMapper.readRow(rs, List.of("c"),
+                List.of(Types.VARCHAR), List.of("BINARY"),
+                com.qqmu.jync.model.DatabaseType.TDENGINE);
+
+        assertThat(row.get("c")).isEqualTo("hello");
+    }
+
+    @Test
+    void otherSourcesKeepTheirObjectForVarchar() throws Exception {
+        Object marker = new Object();
+        ResultSet rs = mockRow(Types.VARCHAR, "VARCHAR");
+        when(rs.getObject(1)).thenReturn(marker);
+        when(rs.wasNull()).thenReturn(false);
+
+        Map<String, Object> row = JdbcRowMapper.readRow(rs, List.of("c"),
+                List.of(Types.VARCHAR), List.of("VARCHAR"),
+                com.qqmu.jync.model.DatabaseType.MYSQL);
+
+        assertThat(row.get("c")).isSameAs(marker);
+    }
+
+    @Test
+    void tdengineUnsignedBigintIsReadAsBigDecimal() throws Exception {
+        // getObject answers a BigInteger, which pgjdbc refuses to bind.
+        java.math.BigDecimal value = new java.math.BigDecimal("18446744073709551615");
+        ResultSet rs = mockRow(Types.DECIMAL, "BIGINT UNSIGNED");
+        when(rs.getObject(1)).thenReturn(new java.math.BigInteger("18446744073709551615"));
+        when(rs.getBigDecimal(1)).thenReturn(value);
+        when(rs.wasNull()).thenReturn(false);
+
+        Map<String, Object> row = JdbcRowMapper.readRow(rs, List.of("c"),
+                List.of(Types.DECIMAL), List.of("BIGINT UNSIGNED"),
+                com.qqmu.jync.model.DatabaseType.TDENGINE);
+
+        assertThat(row.get("c")).isSameAs(value);
+    }
+
     private static ResultSet mockRow(int jdbcType, String typeName) throws Exception {
         ResultSetMetaData md = mock(ResultSetMetaData.class);
         when(md.getColumnCount()).thenReturn(1);

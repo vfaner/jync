@@ -239,6 +239,23 @@ public final class JdbcRowMapper {
             case Types.LONGNVARCHAR:
                 value = rs.getString(idx);
                 break;
+            case Types.CHAR:
+            case Types.VARCHAR:
+            case Types.NCHAR:
+            case Types.NVARCHAR:
+                // TDengine reports VARCHAR and BINARY with the same JDBC type and type
+                // name, and getObject answers byte[] for both; only getString yields the
+                // text a character target expects. Other sources keep their getObject.
+                value = sourceType == com.qqmu.jync.model.DatabaseType.TDENGINE
+                        ? rs.getString(idx) : rs.getObject(idx);
+                break;
+            case Types.DECIMAL:
+                // TDengine's BIGINT UNSIGNED comes back from getObject as a BigInteger,
+                // which pgjdbc refuses to bind. getBigDecimal is valid for both it and
+                // genuine DECIMAL(p, s) columns.
+                value = sourceType == com.qqmu.jync.model.DatabaseType.TDENGINE
+                        ? rs.getBigDecimal(idx) : rs.getObject(idx);
+                break;
             case Types.TIMESTAMP:
             case Types.TIMESTAMP_WITH_TIMEZONE:
                 value = readTemporal(rs, idx, type, typeName, sourceType);

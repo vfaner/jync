@@ -16,6 +16,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.List;
 import java.util.Optional;
 
@@ -410,5 +411,47 @@ class TablePreviewServiceTest {
         // A slow source must not hide the target count that did succeed.
         assertThat(counts.target().status()).isEqualTo(TableRowCount.Status.OK);
         assertThat(counts.target().count()).isEqualTo(1L);
+    }
+
+    @Test
+    void aTdengineTextColumnIsPreviewedAsTextNotAsBytes() throws Exception {
+        // The TDengine driver reports VARCHAR (and BINARY) as jdbcType 12 and answers
+        // getObject with byte[], so a text column would otherwise render as
+        // "<binary N bytes>" in the preview modal.
+        source.setType(DatabaseType.TDENGINE);
+        source.setSchemaName("iot");
+        Connection conn = mock(Connection.class);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        ResultSet rs = mock(ResultSet.class);
+        ResultSetMetaData md = mock(ResultSetMetaData.class);
+        when(conn.prepareStatement("SELECT * FROM `iot`.`EVENTS`")).thenReturn(ps);
+        when(ps.executeQuery()).thenReturn(rs);
+        when(rs.getMetaData()).thenReturn(md);
+        when(md.getColumnCount()).thenReturn(1);
+        when(md.getColumnLabel(1)).thenReturn("NOTE");
+        when(md.getColumnType(1)).thenReturn(Types.VARCHAR);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getObject(1)).thenReturn("hello".getBytes());
+        when(rs.getString(1)).thenReturn("hello");
+        when(dataSourceManager.getConnection(source)).thenReturn(conn);
+
+        MetadataReader tdengineReader = mock(MetadataReader.class);
+        when(tdengineReader.supports(DatabaseType.TDENGINE)).thenReturn(true);
+        when(tdengineReader.listTableNames(conn, "iot")).thenReturn(List.of("EVENTS"));
+        when(tdengineReader.listViewNames(conn, "iot")).thenReturn(List.of());
+        SqlDialect dialect = mock(SqlDialect.class);
+        when(dialect.explicitType()).thenReturn(DatabaseType.TDENGINE);
+        when(dialect.family()).thenReturn(DatabaseType.DialectFamily.GENERIC);
+        when(dialect.withServerMajorVersion(null)).thenReturn(dialect);
+        when(dialect.forProduct(any())).thenReturn(dialect);
+        when(dialect.qualify("iot", "EVENTS")).thenReturn("`iot`.`EVENTS`");
+        service = new TablePreviewService(projectRepository, databaseConfigRepository,
+                dataSourceManager, new MetadataReaderFactory(List.of(tdengineReader)),
+                new SqlDialectFactory(List.of(dialect), new GenericSqlDialect()),
+                new ObjectMapper());
+
+        TablePreview preview = service.preview(1L, "events", TablePreviewService.Side.SOURCE);
+
+        assertThat(preview.rows()).containsExactly(List.of("hello"));
     }
 }

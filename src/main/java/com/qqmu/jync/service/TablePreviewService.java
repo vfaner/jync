@@ -97,7 +97,8 @@ public class TablePreviewService {
             String requested = side == Side.TARGET
                     ? parseConfig(project).targetTableName(table) : table;
             String actualTable = resolveTableName(conn, reader, schema, requested);
-            return read(conn, dialect, schema, actualTable, config.getName(), side, started);
+            return read(conn, dialect, schema, actualTable, config.getName(), side, started,
+                    config.effectiveType());
         } catch (SQLException e) {
             // Keep driver detail server-side; the browser only resolves the key.
             log.debug("Cannot preview '{}' on the {} side of project '{}': {}",
@@ -181,7 +182,8 @@ public class TablePreviewService {
     }
 
     private TablePreview read(Connection conn, SqlDialect dialect, String schema, String table,
-                              String connectionName, Side side, long started)
+                              String connectionName, Side side, long started,
+                              DatabaseType sourceType)
             throws SQLException {
         String sql = "SELECT * FROM " + dialect.qualify(schema, table);
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -202,7 +204,7 @@ public class TablePreviewService {
                         truncated = true;
                         break;
                     }
-                    rows.add(readRow(rs, meta.getColumnCount()));
+                    rows.add(readRow(rs, meta, sourceType));
                 }
                 // Measured here, after the rows are read: the modal shows this as how long
                 // the preview took, and computing it before the SELECT reported ~0 ms.
@@ -213,10 +215,18 @@ public class TablePreviewService {
         }
     }
 
-    private List<String> readRow(ResultSet rs, int columnCount) throws SQLException {
+    private List<String> readRow(ResultSet rs, ResultSetMetaData meta, DatabaseType sourceType)
+            throws SQLException {
+        int columnCount = meta.getColumnCount();
         List<String> row = new ArrayList<>(columnCount);
         for (int i = 1; i <= columnCount; i++) {
-            row.add(format(rs.getObject(i)));
+            // TDengine's driver reports VARCHAR and BINARY identically and answers getObject
+            // with byte[], so a text cell would show as "<binary N bytes>". Text columns are
+            // read through getString; every other source keeps getObject.
+            Object value = sourceType == DatabaseType.TDENGINE
+                    && meta.getColumnType(i) == java.sql.Types.VARCHAR
+                    ? rs.getString(i) : rs.getObject(i);
+            row.add(format(value));
         }
         return row;
     }

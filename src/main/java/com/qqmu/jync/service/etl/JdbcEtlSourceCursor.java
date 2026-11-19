@@ -163,6 +163,14 @@ final class JdbcEtlSourceCursor implements EtlSourceCursor {
             case Types.TIME_WITH_TIMEZONE:
                 return timeValue(oneBasedIndex);
             default:
+                if (sourceType == DatabaseType.TDENGINE) {
+                    // The shared reader is what gives TDengine its VARCHAR -> String and
+                    // DECIMAL -> BigDecimal normalization; every other source keeps the
+                    // plain getObject this branch has always returned (readValue would
+                    // reroute plain TIMESTAMP through readTemporal for them too).
+                    return JdbcRowMapper.readValue(resultSet, oneBasedIndex,
+                            column.jdbcType(), column.typeName(), sourceType);
+                }
                 return resultSet.getObject(oneBasedIndex);
         }
     }
