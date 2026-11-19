@@ -47,8 +47,8 @@ public class ProjectStatusTool implements SupportTool {
     }
 
     public String description() {
-        return "Read one project's running state, activity cycle, progress rows, "
-                + "last failure and 1h metrics.";
+        return "Read one project's running state, activity cycle, progress rows, last failure "
+                + "and 1h throughput/lag. projectId comes from list_projects.";
     }
 
     public Map<String, Object> parameters() {

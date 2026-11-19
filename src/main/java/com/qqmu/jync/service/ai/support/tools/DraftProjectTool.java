@@ -48,8 +48,9 @@ public class DraftProjectTool implements SupportTool {
     }
 
     public String description() {
-        return "Draft a new sync project. Does not save anything: it returns a token the user "
-                + "opens to get a prefilled form they must review and save.";
+        return "Draft a new sync project from a description. Saves nothing: returns a token the "
+                + "user opens to get a prefilled form they must review and save. sourceDbId and "
+                + "targetDbId come from list_connections.";
     }
 
     public Map<String, Object> parameters() {

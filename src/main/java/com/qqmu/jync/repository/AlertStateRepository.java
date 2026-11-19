@@ -1,6 +1,7 @@
 package com.qqmu.jync.repository;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -25,6 +26,9 @@ public interface AlertStateRepository extends JpaRepository<AlertState, Long> {
     Optional<AlertState> findByCategoryAndProjectIdAndObjectKey(AlertCategory category,
                                                                 Long projectId,
                                                                 String objectKey);
+
+    /** The live board: every condition still standing, newest first. Cleared rows are pruned. */
+    List<AlertState> findByActiveTrueOrderByFirstSeenAtDesc();
 
     /**
      * Removes every alert state owned by a project. Connection-wide rows store {@code 0}, so

@@ -2194,6 +2194,7 @@ a.type-card:focus-visible {
 .support-user { align-self: flex-end; color: #fff; background: linear-gradient(135deg, var(--brand), var(--brand-light)); border-bottom-right-radius: 4px; }
 .support-assistant { align-self: flex-start; background: var(--bg); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
 .support-error { align-self: center; color: var(--danger); background: var(--fb-danger-08); font-size: 13px; }
+.support-error-detail { align-self: center; color: var(--ink-soft); background: var(--bg); border: 1px dashed var(--line); font-family: var(--mono); font-size: 12px; }
 .support-msg.is-thinking { color: var(--ink-mute); font-style: italic; }
 .support-tool { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--ink-soft); font-size: 12px; }
 

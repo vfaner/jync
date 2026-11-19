@@ -255,7 +255,7 @@
     save({ turns: all.slice(-MAX_TURNS) });
   }
 
-  function showError(key) {
+  function showError(key, detail) {
     var el = document.createElement('div');
     el.className = 'support-msg support-error';
     var text = key === 'error.support.busy' ? labels.busy
@@ -265,6 +265,13 @@
       : (window.JyncUI ? window.JyncUI.t(key) : key);
     el.textContent = text;
     log.appendChild(el);
+    if (detail) {
+      // 供应商原文（订阅到期、密钥无效等）——只显示「调用失败」管理员不知道要修什么。
+      var why = document.createElement('div');
+      why.className = 'support-msg support-error-detail';
+      why.textContent = detail;
+      log.appendChild(why);
+    }
     log.scrollTop = log.scrollHeight;
     if (key === 'error.ai.disabled') {
       // 页面加载后管理员关掉了 AI：本次之内的输入框保持锁定，重载后整块不再渲染。
@@ -435,7 +442,7 @@
         } else if (name === 'draft') {
           showDraft(data);
         } else if (name === 'error') {
-          showError(data.messageKey || 'error.unexpected');
+          showError(data.messageKey || 'error.unexpected', data.detail);
         }
       });
     }).catch(function () {

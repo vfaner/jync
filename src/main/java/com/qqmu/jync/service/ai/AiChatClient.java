@@ -476,9 +476,8 @@ public class AiChatClient {
                     HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() / 100 != 2) {
                 String detail = extractError(readAll(response.body()));
-                boolean toolsRejected = response.statusCode() / 100 == 4 && !tools.isEmpty()
-                        && detail.toLowerCase(java.util.Locale.ROOT)
-                                .matches(".*(tool|function|does not support).*");
+                boolean toolsRejected = toolsUnsupported(
+                        response.statusCode(), detail, !tools.isEmpty());
                 log.warn("AI tool stream to '{}' failed: HTTP {} {}",
                         provider.getName(), response.statusCode(), detail);
                 return ToolChatResult.failure("HTTP " + response.statusCode()
@@ -706,9 +705,27 @@ public class AiChatClient {
             sys.put("role", "system");
             sys.put("content", system);
         }
-        for (Turn turn : turns) {
+        List<Turn> outbound = anthropic ? anthropicAlternating(turns) : turns;
+        for (int i = 0; i < outbound.size(); i++) {
+            Turn turn = outbound.get(i);
             if (anthropic) {
-                appendAnthropicMessage(messages, turn);
+                if ("tool".equals(turn.role())) {
+                    // Anthropic requires every tool_result answering one assistant turn to be in
+                    // the single user message right after it. Jync records one Turn per call, so
+                    // a round with 2+ calls arrives as consecutive tool Turns — they must collapse
+                    // into one message, not one message each.
+                    ObjectNode message = messages.addObject();
+                    message.put("role", "user");
+                    ArrayNode blocks = message.putArray("content");
+                    int j = i;
+                    while (j < outbound.size() && "tool".equals(outbound.get(j).role())) {
+                        appendAnthropicToolResult(blocks, outbound.get(j));
+                        j++;
+                    }
+                    i = j - 1;
+                } else {
+                    appendAnthropicMessage(messages, turn);
+                }
             } else if (nativeOllama) {
                 appendOllamaMessage(messages, turn);
             } else {
@@ -776,17 +793,51 @@ public class AiChatClient {
      * {@code tool_use} block, and its result comes back as a {@code tool_result} block inside a
      * {@code user} message rather than a {@code tool} role.
      */
+    /**
+     * Repairs a turn list that Anthropic would refuse with a 400 before reading it: the first
+     * message must be the user's, and two adjacent messages may not share a role ("roles must
+     * alternate between 'user' and 'assistant'").
+     *
+     * <p>A chat history can break both rules. A question whose answer failed is kept without an
+     * assistant reply, so the next question makes two user turns in a row; trimming the history
+     * to its last N turns can leave an assistant turn first. Left alone, every retry rebuilds the
+     * same invalid shape and the conversation fails until those turns age out of the window.
+     * Adjacent plain-text turns of one role are merged (their texts joined by a blank line) and a
+     * leading assistant/tool turn — context that cannot be sent without its pair — is dropped.
+     */
+    static List<Turn> anthropicAlternating(List<Turn> turns) {
+        List<Turn> out = new ArrayList<>();
+        for (Turn turn : turns) {
+            boolean plain = !"tool".equals(turn.role()) && turn.toolCalls().isEmpty();
+            if (out.isEmpty()) {
+                if (!plain || !"user".equals(turn.role())) {
+                    continue;
+                }
+                out.add(turn);
+                continue;
+            }
+            Turn last = out.get(out.size() - 1);
+            if (plain && last.role().equals(turn.role()) && last.toolCalls().isEmpty()) {
+                String a = last.content() == null ? "" : last.content();
+                String b = turn.content() == null ? "" : turn.content();
+                String merged = a.isEmpty() ? b : b.isEmpty() ? a : a + "\n\n" + b;
+                out.set(out.size() - 1, new Turn(last.role(), merged, List.of(), null));
+                continue;
+            }
+            out.add(turn);
+        }
+        return out;
+    }
+
+    private void appendAnthropicToolResult(ArrayNode blocks, Turn turn) {
+        ObjectNode block = blocks.addObject();
+        block.put("type", "tool_result");
+        block.put("tool_use_id", turn.toolCallId() == null ? "" : turn.toolCallId());
+        block.put("content", turn.content() == null ? "" : turn.content());
+    }
+
     private void appendAnthropicMessage(ArrayNode messages, Turn turn) {
         ObjectNode message = messages.addObject();
-        if ("tool".equals(turn.role())) {
-            message.put("role", "user");
-            ArrayNode blocks = message.putArray("content");
-            ObjectNode block = blocks.addObject();
-            block.put("type", "tool_result");
-            block.put("tool_use_id", turn.toolCallId() == null ? "" : turn.toolCallId());
-            block.put("content", turn.content() == null ? "" : turn.content());
-            return;
-        }
         message.put("role", turn.role());
         ArrayNode blocks = message.putArray("content");
         if (turn.content() != null && !turn.content().isEmpty()) {
@@ -799,8 +850,12 @@ public class AiChatClient {
             use.put("type", "tool_use");
             use.put("id", call.id());
             use.put("name", call.name());
+            // Anthropic types tool_use.input as an object. A malformed capture (null, an
+            // array, a bare scalar) must not be echoed back: the provider answers 400 and the
+            // tool never gets to report its own argument error.
             JsonNode input = parseOrNull(call.argumentsJson());
-            use.set("input", input == null ? mapper.createObjectNode() : input);
+            use.set("input", input != null && input.isObject()
+                    ? input : mapper.createObjectNode());
         }
         if (blocks.size() == 0) {
             message.put("content", "");
@@ -833,9 +888,8 @@ public class AiChatClient {
                     HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() / 100 != 2) {
                 String detail = extractError(readAll(response.body()));
-                boolean toolsRejected = response.statusCode() / 100 == 4 && !tools.isEmpty()
-                        && detail.toLowerCase(java.util.Locale.ROOT)
-                                .matches(".*(tool|function|does not support).*");
+                boolean toolsRejected = toolsUnsupported(
+                        response.statusCode(), detail, !tools.isEmpty());
                 log.warn("AI tool stream to '{}' failed: HTTP {} {}",
                         provider.getName(), response.statusCode(), detail);
                 return ToolChatResult.failure("HTTP " + response.statusCode()
@@ -986,9 +1040,8 @@ public class AiChatClient {
                     HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() / 100 != 2) {
                 String detail = extractError(readAll(response.body()));
-                boolean toolsRejected = response.statusCode() / 100 == 4 && !tools.isEmpty()
-                        && detail.toLowerCase(java.util.Locale.ROOT)
-                                .matches(".*(tool|function|does not support).*");
+                boolean toolsRejected = toolsUnsupported(
+                        response.statusCode(), detail, !tools.isEmpty());
                 log.warn("AI tool stream to '{}' failed: HTTP {} {}",
                         provider.getName(), response.statusCode(), detail);
                 return ToolChatResult.failure("HTTP " + response.statusCode()
@@ -1154,6 +1207,31 @@ public class AiChatClient {
     /** The model the endpoint says answered, which gateways often remap from the alias sent. */
     private String servedModel(JsonNode root) {
         return root == null ? "" : root.path("model").asString("");
+    }
+
+    /**
+     * Whether a 4xx means the endpoint has no tool support, so the caller may retry without
+     * tools.
+     *
+     * <p>Only an explicit rejection of the tool/function facility counts. A 4xx about the
+     * shape of a tool conversation — a {@code tool_use} id without its {@code tool_result},
+     * for instance — also mentions tools, but degrading to documentation-only would hide a
+     * defect in this client instead of surfacing it.
+     */
+    static boolean toolsUnsupported(int statusCode, String detail, boolean hasTools) {
+        if (!hasTools || statusCode / 100 != 4 || detail == null) {
+            return false;
+        }
+        String lower = detail.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("tool_use") || lower.contains("tool_result")
+                || lower.contains("tool_call_id")) {
+            return false;
+        }
+        boolean mentionsTools = lower.contains("tool") || lower.contains("function");
+        boolean rejected = lower.contains("not support") || lower.contains("unsupported")
+                || lower.contains("unknown field") || lower.contains("unknown parameter")
+                || lower.contains("invalid parameter");
+        return mentionsTools && rejected;
     }
 
     /** Pulls the human-readable part out of an error body, falling back to a truncated body. */

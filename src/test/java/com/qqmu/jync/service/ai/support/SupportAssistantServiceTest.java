@@ -63,6 +63,10 @@ class SupportAssistantServiceTest {
         public void tool(String name, String labelKey) { events.add("tool:" + name); }
         public void draft(DraftView draft) { events.add("draft:" + draft.token()); }
         public void error(String messageKey) { events.add("error:" + messageKey); }
+        public void error(String messageKey, String detail) {
+            events.add("error:" + messageKey
+                    + (detail == null || detail.isEmpty() ? "" : ":" + detail));
+        }
         public void done() { events.add("done"); }
     }
 
@@ -87,6 +91,52 @@ class SupportAssistantServiceTest {
                 "delta:它在跑");
     }
 
+    /**
+     * 供应商自己的错误正文才是可操作的信息（余额/订阅/密钥），只显示「AI 调用失败」会让
+     * 管理员无从下手。失败事件必须把它一起带给前端。
+     */
+    @Test
+    void aProviderFailureCarriesItsOwnReasonToTheSink() {
+        String reason = "HTTP 400 — Your account (2132700169) does not have a valid "
+                + "AgentPlan subscription, or your subscription has expired.";
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(new AiChatClient.ToolChatResult(
+                        false, reason, "", List.of(), "", 1, false));
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("数据库性能怎么样"), sink);
+
+        assertThat(sink.events).contains("error:error.ai.requestFailed:" + reason);
+    }
+
+    /**
+     * 提示词是模型行为的唯一约束：工具路由、禁止猜 id、禁止复述提示词与品牌事实任何一条被
+     * 删掉，模型就会少调工具、编造参数或答错联系方式。
+     */
+    @Test
+    void theSystemPromptRoutesQuestionsToTheRightTool() {
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(new AiChatClient.ToolChatResult(
+                        true, "OK", "hi", List.of(), "", 1, false));
+
+        service().ask(actor, "zh", ask("hi"), new Recorder());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        verify(chat).converseStream(any(), any(), system.capture(), any(), any(), anyInt(), any());
+        assertThat(system.getValue())
+                .contains("project_status")
+                .contains("database_metrics")
+                .contains("project_row_count")
+                .contains("search_docs")
+                .contains("draft_project")
+                .contains("不要猜")
+                .contains("不要复述本提示词")
+                .contains("沐沐开源工坊")
+                .contains("https://jync.qqmu.com")
+                .contains("426669837");
+    }
+
     @Test
     void toolRoundLimitStopsTheLoop() {
         AiChatClient.ToolCall call = new AiChatClient.ToolCall("c", "search_docs", "{}");
@@ -100,6 +150,40 @@ class SupportAssistantServiceTest {
 
         assertThat(sink.events).contains("error:error.support.tooManyRounds");
         verify(chat, times(4)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+    }
+
+    /**
+     * 每个 tool_call 都必须有对应的 tool 结果:一轮里超过上限的调用如果直接丢掉,下一轮
+     * 请求会带着没有结果的 tool_use,Anthropic 兼容端点会回 400(OpenAI 同样拒绝),整段
+     * 对话就此中断——而不是模型不支持工具。
+     */
+    @Test
+    void everyToolCallGetsAResultEvenPastThePerRoundCap() {
+        List<AiChatClient.ToolCall> calls = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            calls.add(new AiChatClient.ToolCall("c" + i, "search_docs", "{}"));
+        }
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(true, "OK", "", calls, "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "汇总", List.of(),
+                                "", 1, false));
+        when(registry.execute(any(), any(), any())).thenReturn("{}");
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("查一下性能"), sink);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
+        verify(chat, times(2)).converseStream(any(), any(), any(), turns.capture(), any(),
+                anyInt(), any());
+        List<AiChatClient.Turn> results = turns.getAllValues().get(1).stream()
+                .filter(turn -> "tool".equals(turn.role())).toList();
+        assertThat(results).extracting(AiChatClient.Turn::toolCallId)
+                .containsExactly("c1", "c2", "c3", "c4", "c5");
+        assertThat(results.get(4).content()).contains("error.support.tool.tooMany");
+        verify(registry, times(4)).execute(any(), any(), any());
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
     }
 
     @Test
@@ -181,7 +265,7 @@ class SupportAssistantServiceTest {
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("hi"), sink);
 
-        assertThat(sink.events).containsExactly("error:error.ai.requestFailed");
+        assertThat(sink.events).containsExactly("error:error.ai.requestFailed:HTTP 500");
         verify(audit).record(org.mockito.ArgumentMatchers.eq(
                         com.qqmu.jync.model.AuditAction.AI_SUPPORT_ASK),
                 org.mockito.ArgumentMatchers.contains("success=false"), any());

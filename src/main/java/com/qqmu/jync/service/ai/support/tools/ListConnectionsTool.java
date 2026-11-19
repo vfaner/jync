@@ -32,7 +32,9 @@ public class ListConnectionsTool implements SupportTool {
     }
 
     public String description() {
-        return "List database connections by name; never returns host, user or URL.";
+        return "List connection names and ids; never returns host, user or URL. Call it first "
+                + "to resolve the databaseId used by database_metrics; draft_project takes the "
+                + "same id.";
     }
 
     public Map<String, Object> parameters() {

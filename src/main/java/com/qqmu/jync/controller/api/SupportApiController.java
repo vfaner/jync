@@ -145,6 +145,14 @@ public class SupportApiController {
             send("error", Map.of("messageKey", messageKey));
         }
 
+        public void error(String messageKey, String detail) {
+            if (detail == null || detail.isBlank()) {
+                error(messageKey);
+                return;
+            }
+            send("error", Map.of("messageKey", messageKey, "detail", detail));
+        }
+
         public void done() {
             if (!done) {
                 done = true;

@@ -36,7 +36,9 @@ public class ListProjectsTool implements SupportTool {
     }
 
     public String description() {
-        return "List sync projects, optionally filtered by a name substring.";
+        return "List sync projects with id and state, optionally filtered by a name substring. "
+                + "Call it first to resolve the projectId used by project_status and "
+                + "project_row_count.";
     }
 
     public Map<String, Object> parameters() {

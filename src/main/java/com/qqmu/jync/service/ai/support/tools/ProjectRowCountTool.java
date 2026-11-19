@@ -9,10 +9,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.dto.TableRowCount;
+import com.qqmu.jync.model.Project;
+import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.TablePreviewService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
 import com.qqmu.jync.service.ai.support.ToolContext;
+import com.qqmu.jync.service.auth.Ownership;
 import tools.jackson.databind.JsonNode;
 
 /**
@@ -35,10 +38,12 @@ public class ProjectRowCountTool implements SupportTool {
     }
 
     private final TablePreviewService preview;
+    private final ProjectRepository projects;
     private final Map<String, Cached> cache = new ConcurrentHashMap<>();
 
-    public ProjectRowCountTool(TablePreviewService preview) {
+    public ProjectRowCountTool(TablePreviewService preview, ProjectRepository projects) {
         this.preview = preview;
+        this.projects = projects;
     }
 
     public String name() {
@@ -46,8 +51,9 @@ public class ProjectRowCountTool implements SupportTool {
     }
 
     public String description() {
-        return "Compare the exact row count of one table on the source and target sides. "
-                + "Expensive: at most three scans per conversation.";
+        return "Compare the exact source and target row counts of one table in a project. "
+                + "Expensive: at most three calls per conversation. Use only when the user "
+                + "asks whether the two sides match.";
     }
 
     public Map<String, Object> parameters() {
@@ -65,6 +71,19 @@ public class ProjectRowCountTool implements SupportTool {
     public Object execute(JsonNode args, ToolContext ctx) {
         long projectId = SupportArgs.requireLong(args, "projectId");
         String table = SupportArgs.requireText(args, "table", 128);
+        // The row-count page requires the same edit right, and the check must run before the
+        // cache: a scan someone else paid for must not answer here either. A missing project
+        // keeps its existing not-found error.
+        Project project = projects.findById(projectId).orElse(null);
+        if (project == null) {
+            return Map.of("error", "error.project.not.found");
+        }
+        try {
+            Ownership.requireReferenceable(project.getOwnerUsername(), project.getName(),
+                    ctx.actor());
+        } catch (IllegalArgumentException e) {
+            return Map.of("error", e.getMessage());
+        }
         String key = projectId + ":" + table;
         Cached hit = cache.get(key);
         long now = System.currentTimeMillis();

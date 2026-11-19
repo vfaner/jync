@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -46,6 +47,7 @@ class SupportToolsTest {
         Project p = new Project();
         p.setId(id);
         p.setName(name);
+        p.setOwnerUsername("admin");
         p.setUpdatedAt(Instant.parse("2026-11-19T00:00:00Z"));
         return p;
     }
@@ -105,11 +107,14 @@ class SupportToolsTest {
     @Test
     void rowCountScansAreCappedAndRepeatsComeFromCache() throws Exception {
         TablePreviewService preview = mock(TablePreviewService.class);
+        ProjectRepository repo = mock(ProjectRepository.class);
         when(preview.rowCount(any(), any())).thenReturn(new TableRowCount("orders",
                 new TableRowCount.SideCount(TableRowCount.Status.OK, 120L, 12),
                 new TableRowCount.SideCount(TableRowCount.Status.OK, 118L, 11), 23));
+        when(repo.findById(7L)).thenReturn(Optional.of(project(7L, "orders")));
+        when(ctx.actor().canEdit("admin")).thenReturn(true);
 
-        var tool = new ProjectRowCountTool(preview);
+        var tool = new ProjectRowCountTool(preview, repo);
         for (String table : List.of("t1", "t2", "t3")) {
             var args = mapper.createObjectNode();
             args.put("projectId", 7);
@@ -125,13 +130,38 @@ class SupportToolsTest {
                 .contains("error.support.tooManyQuestions");
 
         // Another conversation asking a scanned table gets the cache, not a new scan.
-        ToolContext other = new ToolContext(mock(AccessGuard.class));
+        AccessGuard otherActor = mock(AccessGuard.class);
+        when(otherActor.canEdit("admin")).thenReturn(true);
+        ToolContext other = new ToolContext(otherActor);
         var first = mapper.createObjectNode();
         first.put("projectId", 7);
         first.put("table", "t1");
         String cached = mapper.writeValueAsString(tool.execute(first, other));
         assertThat(cached).contains("\"cached\":true");
         verify(preview, times(3)).rowCount(any(), any());
+    }
+
+    /**
+     * The row-count page refuses a project the operator cannot edit; the assistant must refuse
+     * the same project rather than running COUNT(*) on both sides with the owner's stored
+     * connections. The refusal also comes before the cache, so one operator's scan is never
+     * handed to another.
+     */
+    @Test
+    void rowCountRefusesAnotherOperatorsProject() {
+        TablePreviewService preview = mock(TablePreviewService.class);
+        ProjectRepository repo = mock(ProjectRepository.class);
+        Project foreign = project(7L, "orders");
+        foreign.setOwnerUsername("someone-else");
+        when(repo.findById(7L)).thenReturn(Optional.of(foreign));
+        var tool = new ProjectRowCountTool(preview, repo);
+        var args = mapper.createObjectNode();
+        args.put("projectId", 7);
+        args.put("table", "orders");
+
+        assertThat(tool.execute(args, ctx))
+                .isEqualTo(Map.of("error", "error.ownership.reference:orders"));
+        verify(preview, times(0)).rowCount(any(), any());
     }
 
     @Test
@@ -155,6 +185,7 @@ class SupportToolsTest {
                 .thenReturn(new DbMetricsView(true, null, Instant.parse("2026-11-19T00:00:00Z"),
                         99.5, List.of(), Map.of("sessions", 12.0)));
 
+        when(ctx.actor().canEdit("admin")).thenReturn(true);
         var tool = new DatabaseMetricsTool(metrics, configs);
         var args = mapper.createObjectNode();
         args.put("databaseId", 1);
@@ -162,6 +193,27 @@ class SupportToolsTest {
         String json = mapper.writeValueAsString(tool.execute(args, ctx));
 
         assertThat(json).contains("\"sessions\":12.0").contains("\"uptimePercent\":99.5");
+    }
+
+    /**
+     * The performance page refuses a connection the operator cannot edit; the assistant must
+     * not become a way around that gate for the same connection.
+     */
+    @Test
+    void databaseMetricsRefusesAnotherOperatorsConnection() {
+        MetricsQueryService metrics = mock(MetricsQueryService.class);
+        DatabaseConfigService configs = mock(DatabaseConfigService.class);
+        DatabaseConfig foreign = db(1L, "prod-mysql", ConnectionRole.SOURCE, DatabaseType.MYSQL);
+        foreign.setOwnerUsername("someone-else");
+        when(configs.findById(1L)).thenReturn(Optional.of(foreign));
+        var tool = new DatabaseMetricsTool(metrics, configs);
+        var args = mapper.createObjectNode();
+        args.put("databaseId", 1);
+        args.put("window", "1h");
+
+        assertThat(tool.execute(args, ctx))
+                .isEqualTo(Map.of("error", "error.ownership.reference:prod-mysql"));
+        verifyNoInteractions(metrics);
     }
 
     @Test
@@ -217,6 +269,28 @@ class SupportToolsTest {
 
         assertThat(mapper.writeValueAsString(tool.execute(args, ctx)))
                 .contains("\"cycle\":null");
+    }
+
+    /**
+     * The description is the model's only hint about argument names; the JSON schema is the
+     * other. A description that names a parameter the schema does not have sends the model into
+     * retry loops of error.support.tool.args — database_metrics said "connectionId" while the
+     * schema says "databaseId".
+     */
+    @Test
+    void toolDescriptionsNameTheParametersTheirSchemaDeclares() {
+        assertThat(new DatabaseMetricsTool(mock(MetricsQueryService.class),
+                mock(DatabaseConfigService.class)).description())
+                .contains("databaseId")
+                .doesNotContain("connectionId");
+        assertThat(new ListConnectionsTool(mock(DatabaseConfigService.class)).description())
+                .contains("databaseId")
+                .doesNotContain("connectionId");
+        assertThat(new DraftProjectTool(mock(com.qqmu.jync.service.DatabaseConfigService.class),
+                mock(com.qqmu.jync.repository.RedisTargetRepository.class),
+                mock(com.qqmu.jync.service.ai.support.SupportDraftStore.class)).description())
+                .contains("sourceDbId")
+                .contains("targetDbId");
     }
 
     @Test

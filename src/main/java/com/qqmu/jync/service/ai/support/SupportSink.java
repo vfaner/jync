@@ -13,6 +13,15 @@ public interface SupportSink {
 
     void error(String messageKey);
 
+    /**
+     * Same as {@link #error(String)} but carries the provider's own words (HTTP status and
+     * error body) so an operator can act on it — an expired subscription or a wrong key is
+     * invisible behind a generic "call failed" message.
+     */
+    default void error(String messageKey, String detail) {
+        error(messageKey);
+    }
+
     void done();
 
     record DraftView(String token, String title, String summary, List<Field> fields) {

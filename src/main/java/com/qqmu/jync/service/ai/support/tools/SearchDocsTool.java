@@ -28,7 +28,8 @@ public class SearchDocsTool implements SupportTool {
     }
 
     public String description() {
-        return "Search the bundled product documentation for how-to answers.";
+        return "Search the bundled Jync documentation for how-to, parameters, prerequisites and "
+                + "limits. Answer only from the returned excerpts.";
     }
 
     public Map<String, Object> parameters() {

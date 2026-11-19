@@ -7,10 +7,12 @@ import java.util.Set;
 
 import org.springframework.stereotype.Component;
 
+import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
 import com.qqmu.jync.service.ai.support.ToolContext;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.service.metrics.DbMetricsView;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
 import com.qqmu.jync.service.metrics.MetricsRange;
@@ -32,7 +34,9 @@ public class DatabaseMetricsTool implements SupportTool {
     }
 
     public String description() {
-        return "Read one connection's performance metrics over 1h or 24h.";
+        return "Read one connection's performance metrics (sessions, QPS, cache hit, locks, "
+                + "latency) over a 1h or 24h window. Use when the user asks how a database is "
+                + "performing; databaseId comes from list_connections.";
     }
 
     public Map<String, Object> parameters() {
@@ -62,8 +66,18 @@ public class DatabaseMetricsTool implements SupportTool {
         if (range == null) {
             return Map.of("error", SupportArgs.BAD_ARGS);
         }
-        if (configs.findById(databaseId).isEmpty()) {
+        DatabaseConfig config = configs.findById(databaseId).orElse(null);
+        if (config == null) {
             return Map.of("error", "error.db.not.found");
+        }
+        // Same rule as the performance page: an operator may only read a connection it can
+        // edit. Without this the assistant would answer "数据库性能" for a teammate's
+        // connection the same operator cannot open in the UI.
+        try {
+            Ownership.requireReferenceable(config.getOwnerUsername(), config.getName(),
+                    ctx.actor());
+        } catch (IllegalArgumentException e) {
+            return Map.of("error", e.getMessage());
         }
         DbMetricsView view = metrics.database(databaseId, range);
         Map<String, Object> out = new LinkedHashMap<>();
