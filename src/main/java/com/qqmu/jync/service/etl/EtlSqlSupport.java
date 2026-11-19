@@ -181,6 +181,7 @@ public final class EtlSqlSupport {
                     || code == 942 // Oracle/DM ORA-00942
                     || code == 208 // SQL Server invalid object name
                     || code == -204 // DB2 undefined name
+                    || code == 9731 // TDengine 0x2603: SQLState is empty
                     || code == 42102 // H2 table not found
                     || code == 42104) { // H2 table not found in an empty database
                 return true;

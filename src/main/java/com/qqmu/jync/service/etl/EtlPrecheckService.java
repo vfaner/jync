@@ -15,6 +15,7 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.EtlWriteMode;
 import com.qqmu.jync.service.DatabaseConfigService;
@@ -153,9 +154,15 @@ public class EtlPrecheckService {
                              int timeout, List<EtlPrecheckResult.Check> checks,
                              Map<String, String> resultColumns) throws SQLException {
         String name = EtlSqlSupport.qualified(targetConfig, task.getTargetTable());
+        boolean tdengine = targetConfig.effectiveType() == DatabaseType.TDENGINE;
         if (!EtlSqlSupport.exists(target, name, timeout)) {
-            // Creating the table is the runner's first step, so this is information, not a fault.
-            checks.add(ok("etl.precheck.target.missing", name));
+            // Creating the table is the runner's first step for ordinary targets, so a missing
+            // one is information. TDengine's generated DDL is rejected by the server (no
+            // PRIMARY KEY/NOT NULL in this form), and a super table cannot be a target at
+            // all, so a missing table there is a fault the run will refuse.
+            checks.add(tdengine
+                    ? error("etl.precheck.target.missing.tdengine", name)
+                    : ok("etl.precheck.target.missing", name));
             if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE) {
                 // Resolution can leave the condition empty even though save saw a non-blank
                 // placeholder; the run refuses that, so the precheck must not stay green.
@@ -166,6 +173,12 @@ public class EtlPrecheckService {
             return;
         }
         checks.add(ok("etl.precheck.target.ok", name));
+        if (tdengine && TdengineTargetCheck.isSuperTable(target, name)) {
+            // A super table accepts SELECT but refuses an INSERT without tbname; reporting it
+            // here keeps the run from reaching its pre-SQL and write-mode DELETE first.
+            checks.add(error("etl.precheck.target.stable", name));
+            return;
+        }
 
         if (resultColumns == null) {
             return;

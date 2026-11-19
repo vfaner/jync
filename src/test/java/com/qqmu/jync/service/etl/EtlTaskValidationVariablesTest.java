@@ -97,6 +97,27 @@ class EtlTaskValidationVariablesTest {
     }
 
     @Test
+    void aTdengineTargetRefusesUpsertBeforeAskingForKeys() {
+        when(configs.findById(2L)).thenReturn(Optional.of(config(2L, DatabaseType.TDENGINE)));
+        EtlTask task = task("SELECT id FROM src");
+        task.setWriteMode(EtlWriteMode.UPSERT);
+        task.setUpsertKeyColumns("");
+
+        assertThatThrownBy(() -> EtlTaskValidation.validateExtraction(task, configs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.tdengine.upsert");
+    }
+
+    @Test
+    void aTdengineTargetStillAcceptsTheModesItCanWrite() {
+        when(configs.findById(2L)).thenReturn(Optional.of(config(2L, DatabaseType.TDENGINE)));
+
+        assertThatCode(() -> EtlTaskValidation.validateExtraction(
+                task("SELECT id FROM src"), configs))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
     void aMongoExtractionIsNotScannedButItsPreSqlIs() {
         when(configs.findById(1L)).thenReturn(Optional.of(config(1L, DatabaseType.MONGODB_NATIVE)));
         EtlTask mongo = mongoTask();

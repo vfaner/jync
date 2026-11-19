@@ -2,11 +2,13 @@ package com.qqmu.jync.service.etl;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.List;
@@ -344,6 +346,53 @@ class EtlPrecheckServiceTest {
         assertThat(result.passed()).isFalse();
         assertThat(check(result, "etl.precheck.connection.error").detail())
                 .containsIgnoringCase("refused");
+    }
+
+    @Test
+    void aMissingTdengineTargetIsAnErrorNotAnAutoCreatedOne() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)");
+        Connection targetConn = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        when(targetConn.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenThrow(
+                new SQLException("internal error 0x2603", "", 9731));
+        EtlConnectionProvider mocked = config -> config.getId() != null && config.getId() == 1L
+                ? DriverManager.getConnection(SOURCE_URL, "sa", "") : targetConn;
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(2L);
+        tdengine.setType(DatabaseType.TDENGINE);
+
+        EtlPrecheckResult result = service.check(
+                form("SELECT id FROM src", "dst", EtlWriteMode.APPEND), source, tdengine, mocked);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(check(result, "etl.precheck.target.missing.tdengine").level())
+                .isEqualTo(EtlPrecheckResult.Level.ERROR);
+    }
+
+    @Test
+    void aTdengineSuperTableTargetIsAnError() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)");
+        Connection targetConn = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        ResultSet exists = mock(ResultSet.class);
+        ResultSet stable = mock(ResultSet.class);
+        when(stable.next()).thenReturn(true);
+        when(targetConn.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenAnswer(inv ->
+                inv.getArgument(0).toString().contains("ins_stables") ? stable : exists);
+        EtlConnectionProvider mocked = config -> config.getId() != null && config.getId() == 1L
+                ? DriverManager.getConnection(SOURCE_URL, "sa", "") : targetConn;
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(2L);
+        tdengine.setType(DatabaseType.TDENGINE);
+
+        EtlPrecheckResult result = service.check(
+                form("SELECT id FROM src", "dst", EtlWriteMode.APPEND), source, tdengine, mocked);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(check(result, "etl.precheck.target.stable").level())
+                .isEqualTo(EtlPrecheckResult.Level.ERROR);
     }
 
     // --- configuration validation (public entry point) ---------------------------------

@@ -154,6 +154,13 @@ public class EtlRunner {
                                 EtlUpsertSql.parse(task.getUpsertKeyColumns()))
                         : List.of();
                 boolean targetExists = EtlSqlSupport.exists(target, targetName);
+                if (targetConfig.effectiveType() == DatabaseType.TDENGINE && targetExists
+                        && TdengineTargetCheck.isSuperTable(target, targetName)) {
+                    // Before keptColumnIndexes / pre-sql / DELETE: a super table refuses an
+                    // INSERT without tbname, so a run that got further would have already
+                    // removed rows it can never write back.
+                    throw new EtlProgramException("error.etl.tdengine.stableTarget:" + targetName);
+                }
                 // An existing table defines what can be written. Extractions routinely select
                 // more than the target carries (or an older table precedes a new column), so
                 // the run writes the intersection and reports the rest. All of this is decided
@@ -786,6 +793,12 @@ public class EtlRunner {
             throws SQLException {
         if (exists) {
             return false;
+        }
+        if (targetConfig.effectiveType() == DatabaseType.TDENGINE) {
+            // The generated DDL carries NOT NULL and PRIMARY KEY (...), which TDengine
+            // rejects; creating tables is the operator's responsibility (or a pre-sql
+            // statement), and this fails before the pre-sql or the write-mode DELETE runs.
+            throw new EtlProgramException("error.etl.tdengine.targetTableMissing:" + targetName);
         }
         TableMeta table = new TableMeta();
         table.setName(configuredTable);

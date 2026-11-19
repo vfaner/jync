@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -1079,6 +1080,46 @@ class EtlRunnerTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.TARGET);
+    }
+
+    @Test
+    void aMissingTdengineTargetFailsInsteadOfCreatingOne() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(2L);
+        tdengine.setType(DatabaseType.TDENGINE);
+
+        EtlRunResult result = runner.run(task("SELECT id FROM src", "dst",
+                EtlWriteMode.APPEND), source, tdengine, connections);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorMessage()).contains("error.etl.tdengine.targetTableMissing");
+    }
+
+    @Test
+    void aTdengineSuperTableTargetFailsBeforeAnyDeleteOrPreSql() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT)", "INSERT INTO src VALUES (1)");
+        Connection targetConn = mock(Connection.class);
+        Statement statement = mock(Statement.class);
+        ResultSet exists = mock(ResultSet.class);
+        ResultSet stable = mock(ResultSet.class);
+        when(stable.next()).thenReturn(true);
+        when(targetConn.createStatement()).thenReturn(statement);
+        when(statement.executeQuery(anyString())).thenAnswer(inv ->
+                inv.getArgument(0).toString().contains("ins_stables") ? stable : exists);
+        EtlConnectionProvider mocked = config -> config.getId() != null && config.getId() == 1L
+                ? DriverManager.getConnection(SOURCE_URL, "sa", "") : targetConn;
+        DatabaseConfig tdengine = new DatabaseConfig();
+        tdengine.setId(2L);
+        tdengine.setType(DatabaseType.TDENGINE);
+        EtlTask task = task("SELECT id FROM src", "dst", EtlWriteMode.OVERWRITE);
+        task.setPreSql("DELETE FROM dst");
+
+        EtlRunResult result = runner.run(task, source, tdengine, mocked);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorMessage()).contains("error.etl.tdengine.stableTarget");
+        verify(targetConn, never()).prepareStatement(anyString());
     }
 
     // --- helpers ------------------------------------------------------------------------

@@ -77,6 +77,15 @@ final class EtlTaskValidation {
                 && (task.getRangeCondition() == null || task.getRangeCondition().isBlank())) {
             throw new IllegalArgumentException("error.etl.range.required");
         }
+        // TDengine's "(ts, primary key) duplicate overwrites" is not a key-based UPSERT, and
+        // its super-table model makes the mode misleading. Refuse it before the operator is
+        // asked for keys that would never be used.
+        DatabaseConfig target = configs.findById(task.getTargetDbId())
+                .orElseThrow(() -> new IllegalArgumentException("error.etl.target.missing"));
+        if (target.effectiveType() == DatabaseType.TDENGINE
+                && task.getWriteMode() == EtlWriteMode.UPSERT) {
+            throw new IllegalArgumentException("error.etl.tdengine.upsert");
+        }
         if (task.getWriteMode() == EtlWriteMode.UPSERT) {
             List<String> keys = EtlUpsertSql.parse(task.getUpsertKeyColumns());
             if (keys.isEmpty()) {
