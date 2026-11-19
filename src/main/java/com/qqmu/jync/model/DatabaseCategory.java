@@ -40,7 +40,7 @@ public enum DatabaseCategory {
 
     ANALYTICS("db.category.analytics",
             DatabaseType.HANA, DatabaseType.DORIS, DatabaseType.CLICKHOUSE,
-            DatabaseType.HIVE, DatabaseType.IMPALA),
+            DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.TDENGINE),
 
     NOSQL("db.category.nosql",
             DatabaseType.ELASTICSEARCH, DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE),

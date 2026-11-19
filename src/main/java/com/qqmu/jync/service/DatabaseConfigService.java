@@ -241,6 +241,15 @@ public class DatabaseConfigService {
                     throw new IllegalArgumentException("error.connection.host.required");
                 }
             }
+            if (type == DatabaseType.TDENGINE
+                    && (config.getDatabaseName() == null || config.getDatabaseName().isBlank())
+                    && (config.getCustomUrl() == null || config.getCustomUrl().isBlank())) {
+                // A blank database still opens the connection, but SELECT DATABASE() then
+                // answers nothing and the metadata reader cannot qualify a single object;
+                // failing here beats failing on the first sync.
+                throw new IllegalArgumentException(
+                        "error.connection.tdengine.database.required");
+            }
             // GBase / Oscar and any future preset without a bundled driver must bring a jar,
             // otherwise the failure surfaces much later in English at sync time.
             if (DriverPresence.externalJarRequired(type, config.getCustomDriver())

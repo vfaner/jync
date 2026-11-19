@@ -293,6 +293,17 @@ public enum DatabaseType {
             21050, DialectFamily.GENERIC),
 
     /**
+     * TDengine 3.x through the official WebSocket JDBC driver on the REST port (6041).
+     * GENERIC: its DDL, upsert and UPDATE semantics belong to no relational family, so the
+     * preset takes part in real-time sync as a polling source and otherwise serves ETL.
+     * The official {@code -dist} jar (about 25.6 MB, bundling Netty and friends) is supplied
+     * by the user and never shipped in the distribution.
+     */
+    TDENGINE("db.type.TDENGINE", "com.taosdata.jdbc.ws.WebSocketDriver",
+            "jdbc:TAOS-WS://%s:%d/%s",
+            6041, DialectFamily.GENERIC),
+
+    /**
      * Elasticsearch SQL, read-only by nature: the X-Pack SQL JDBC driver answers queries but
      * cannot INSERT, so this connection is an ETL <em>source</em>. The endpoint has no
      * database name — the third format argument is not part of the template, and
@@ -388,7 +399,7 @@ public enum DatabaseType {
      */
     private static final Set<DatabaseType> POLLING_ONLY_SOURCES =
             Collections.unmodifiableSet(EnumSet.of(
-                    DORIS, CLICKHOUSE, HIVE, IMPALA, ELASTICSEARCH, MONGODB));
+                    DORIS, CLICKHOUSE, HIVE, IMPALA, TDENGINE, ELASTICSEARCH, MONGODB));
 
     DatabaseType(String messageKey, String driverClassName, String urlTemplate,
                  int defaultPort, DialectFamily family) {
@@ -418,7 +429,7 @@ public enum DatabaseType {
      * out of real-time projects and remain usable in ETL, where the customer supplies the
      * extraction SQL and Jync only copies rows.
      *
-     * <p>The six {@linkplain #POLLING_ONLY_SOURCES polling-only engines} are the exception, and
+     * <p>The seven {@linkplain #POLLING_ONLY_SOURCES polling-only engines} are the exception, and
      * only as a source: reading needs nothing more than quoting and pagination, which their
      * read-only dialects supply.
      */
@@ -435,7 +446,7 @@ public enum DatabaseType {
         return family != DialectFamily.GENERIC;
     }
 
-    /** True for the six engine presets that may only ever be a sync source. */
+    /** True for the seven engine presets that may only ever be a sync source. */
     public boolean pollingOnlySource() {
         return POLLING_ONLY_SOURCES.contains(this);
     }

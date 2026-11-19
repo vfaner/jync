@@ -35,7 +35,8 @@ class BundledDriversTest {
             EnumSet.of(DatabaseType.CUSTOM, DatabaseType.GBASE, DatabaseType.OSCAR,
                     DatabaseType.GAUSSDB, DatabaseType.HANA, DatabaseType.CLICKHOUSE,
                     DatabaseType.HIVE, DatabaseType.IMPALA, DatabaseType.ELASTICSEARCH,
-                    DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE);
+                    DatabaseType.MONGODB, DatabaseType.MONGODB_NATIVE,
+                    DatabaseType.TDENGINE);
 
     @Test
     @DisplayName("每个预设类型要么内置驱动,要么显式走外部 jar")
@@ -43,11 +44,13 @@ class BundledDriversTest {
         for (DatabaseType type : DatabaseType.values()) {
             boolean present = DriverPresence.isPresent(type.getDriverClassName());
             if (EXTERNAL.contains(type)) {
-                // ClickHouse is present here only because ClickHouseSourceIT needs the
-                // driver on the test classpath; the dependency is test-scoped, so Maven
-                // never puts it in the distribution. clickHouseDriverStaysTestScoped
-                // guards that scope — without it this exemption would hide a real leak.
-                if (type == DatabaseType.CLICKHOUSE && present) {
+                // ClickHouse and TDengine are present here only because their matrix ITs
+                // need the drivers on the test classpath; both dependencies are test-scoped,
+                // so Maven never puts them in the distribution. The two *DriverStaysTestScoped
+                // guards below protect that scope — without them this exemption would hide a
+                // real leak.
+                if ((type == DatabaseType.CLICKHOUSE || type == DatabaseType.TDENGINE)
+                        && present) {
                     continue;
                 }
                 assertFalse(present,
@@ -74,6 +77,18 @@ class BundledDriversTest {
         assertTrue(end > start, "clickhouse-jdbc 依赖块不完整");
         assertTrue(pom.substring(start, end).contains("<scope>test</scope>"),
                 "clickhouse-jdbc 必须保持 test scope,否则会随发行包分发");
+    }
+
+    @Test
+    @DisplayName("TDengine JDBC 只作为测试夹具,不得进入发行包")
+    void tdengineDriverStaysTestScoped() throws Exception {
+        String pom = Files.readString(Path.of("pom.xml"));
+        int start = pom.indexOf("<artifactId>taos-jdbcdriver</artifactId>");
+        assertTrue(start > 0, "pom.xml 里找不到 taos-jdbcdriver 依赖");
+        int end = pom.indexOf("</dependency>", start);
+        assertTrue(end > start, "taos-jdbcdriver 依赖块不完整");
+        assertTrue(pom.substring(start, end).contains("<scope>test</scope>"),
+                "taos-jdbcdriver 必须保持 test scope,否则会随发行包分发");
     }
 
     @Test

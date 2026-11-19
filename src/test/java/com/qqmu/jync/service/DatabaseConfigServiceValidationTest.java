@@ -123,6 +123,45 @@ class DatabaseConfigServiceValidationTest {
     }
 
     @Test
+    void tdengineWithoutADatabaseNameIsRejected() {
+        DatabaseConfig c = preset(DatabaseType.TDENGINE, null);
+        c.setDatabaseName(" ");
+
+        assertThatThrownBy(() -> service.save(c, null, null, AccessGuard.system()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.connection.tdengine.database.required");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void tdengineWithADatabaseNameIsAccepted() {
+        when(repository.findByName(any())).thenReturn(Optional.empty());
+        when(cryptoUtil.encrypt(any())).thenReturn("enc");
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig c = preset(DatabaseType.TDENGINE, null);
+        c.setDatabaseName("iot");
+
+        service.save(c, null, null, AccessGuard.system());
+
+        verify(repository).save(any());
+    }
+
+    @Test
+    void tdengineWithACustomUrlNeedsNoDatabaseName() {
+        when(repository.findByName(any())).thenReturn(Optional.empty());
+        when(cryptoUtil.encrypt(any())).thenReturn("enc");
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DatabaseConfig c = preset(DatabaseType.TDENGINE, null);
+        c.setCustomUrl("jdbc:TAOS-WS://tdengine:6041/iot");
+
+        service.save(c, null, null, AccessGuard.system());
+
+        verify(repository).save(any());
+    }
+
+    @Test
     void missingRoleIsRejected() {
         DatabaseConfig c = preset(DatabaseType.MYSQL, null);
         c.setRole(null);

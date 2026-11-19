@@ -6,9 +6,10 @@ import org.springframework.context.annotation.Configuration;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.converter.PollingSourceDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.service.converter.TdengineDialect;
 
 /**
- * Read-only dialects for the six analytic / search engines that take part in real-time sync as
+ * Read-only dialects for the seven analytic / search engines that take part in real-time sync as
  * polling sources.
  *
  * <p>These beans extend {@code GenericSqlDialect} so they inherit its whole ANSI implementation.
@@ -43,6 +44,11 @@ public class SourceReadDialectConfig {
     @Bean
     public SqlDialect impalaReadDialect() {
         return new PollingSourceDialect(DatabaseType.IMPALA, '`', false);
+    }
+
+    @Bean
+    public SqlDialect tdengineReadDialect() {
+        return new TdengineDialect();
     }
 
     @Bean

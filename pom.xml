@@ -417,6 +417,16 @@
             <version>0.11.0</version>
             <scope>test</scope>
         </dependency>
+        <!-- TDengine's official WebSocket driver, test-scoped: the matrix IT connects with
+             it, but the distribution never ships it (users supply the -dist jar). The thin
+             Maven artifact pulls Netty, Guava and HttpClient transitively; those stay on the
+             test classpath only. tdengineDriverStaysTestScoped guards the scope. -->
+        <dependency>
+            <groupId>com.taosdata.jdbc</groupId>
+            <artifactId>taos-jdbcdriver</artifactId>
+            <version>3.10.0</version>
+            <scope>test</scope>
+        </dependency>
         <!-- clickhouse-jdbc 0.11.0 is built against HttpClient 5.6, while Spring Boot's BOM
              pins 5.1.4 — which lacks ConnectionConfig and fails on the first connect. The
              driver is a test fixture only, so the fix is scoped to test dependencies: a

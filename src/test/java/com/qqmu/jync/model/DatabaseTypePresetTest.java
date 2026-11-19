@@ -150,4 +150,24 @@ class DatabaseTypePresetTest {
         assertThat(type.supportsSyncTarget()).isFalse();
         assertThat(type.supportsFullSync()).isTrue();
     }
+
+    @Test
+    void tdengineUsesTheWebSocketDriverOnTheRestPort() {
+        DatabaseType type = DatabaseType.TDENGINE;
+
+        assertThat(type.getDriverClassName()).isEqualTo("com.taosdata.jdbc.ws.WebSocketDriver");
+        assertThat(type.getDefaultPort()).isEqualTo(6041);
+        assertThat(url(type)).isEqualTo("jdbc:TAOS-WS://localhost:6041/db");
+        assertThat(type.getFamily()).isEqualTo(DatabaseType.DialectFamily.GENERIC);
+        assertThat(type.supportsSyncSource()).isTrue();
+        assertThat(type.supportsSyncTarget()).isFalse();
+        assertThat(type.pollingOnlySource()).isTrue();
+        assertThat(type.supportsEtlTarget()).isTrue();
+        assertThat(DatabaseCategory.of(type)).isEqualTo(DatabaseCategory.ANALYTICS);
+    }
+
+    @Test
+    void tdengineIsSelectableByItsName() {
+        assertThat(DatabaseType.fromName("TDENGINE")).isSameAs(DatabaseType.TDENGINE);
+    }
 }
