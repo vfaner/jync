@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.util.LinkedHashMap;
@@ -86,7 +87,7 @@ class TdengineSourceIT {
     @Test
     void aTdengineTableLoadsWithItsCompositeKeyIntoPostgres() throws Exception {
         createSource();
-        Project project = savedProject();
+        Project project = savedProject("tdengine-source-it", TABLE, "ts");
 
         SyncResult first = syncEngine.runCycle(contextFactory.build(project, "it-lock", null));
 
@@ -112,6 +113,42 @@ class TdengineSourceIT {
             assertThat(reader.listTableNames(conn, SOURCE_DB))
                     .contains(TABLE, "meters").doesNotContain("m1");
         }
+
+        numericCursorAdvancesByMax();
+    }
+
+    /**
+     * A numeric cursor takes {@code MAX}, not {@code LAST}: with rows (t1,1), (t2,3),
+     * (t3,2) the two disagree, and a late row whose id is the largest but whose timestamp
+     * is the smallest is only reachable through {@code MAX(id)}.
+     */
+    private void numericCursorAdvancesByMax() throws Exception {
+        try (Connection conn = sourceConnection(); Statement st = conn.createStatement()) {
+            st.execute("CREATE TABLE " + SOURCE_DB + ".unsorted"
+                    + " (ts TIMESTAMP, id INT PRIMARY KEY, name VARCHAR(32))");
+            st.execute("INSERT INTO " + SOURCE_DB + ".unsorted VALUES"
+                    + " ('2026-01-01 00:00:01.000', 1, 'u-1'),"
+                    + " ('2026-01-01 00:00:02.000', 2, 'u-2')");
+        }
+        Project project = savedProject("tdengine-numeric-it", "unsorted", "id");
+
+        SyncResult first = syncEngine.runCycle(contextFactory.build(project, "it-lock", null));
+        assertThat(first.isSuccess()).as("首轮错误: %s", first.getErrors()).isTrue();
+        assertThat(first.getRowsInserted()).isEqualTo(2);
+
+        // An id larger than every synced one, on a timestamp older than every row: LAST(id)
+        // would answer 2 and the window (2, 2] would never see it.
+        try (Connection conn = sourceConnection(); Statement st = conn.createStatement()) {
+            st.execute("INSERT INTO " + SOURCE_DB + ".unsorted"
+                    + " VALUES ('2026-01-01 00:00:00.000', 3, 'u-3')");
+        }
+
+        SyncResult third = syncEngine.runCycle(contextFactory.build(project, "it-lock", null));
+        assertThat(third.isSuccess()).as("迟推行错误: %s", third.getErrors()).isTrue();
+        // The PostgreSQL upsert does not report insert vs update per row, so a windowed row
+        // arrives unclassified; what matters is that the row was read and written at all.
+        assertThat(third.totalRows()).isEqualTo(1);
+        assertThat(targetNames("unsorted")).containsExactly("u-1", "u-2", "u-3");
     }
 
     private void createSource() throws Exception {
@@ -135,7 +172,7 @@ class TdengineSourceIT {
         }
     }
 
-    private Project savedProject() {
+    private Project savedProject(String name, String table, String cursorColumn) {
         DatabaseConfig source = savedConfig("td-it-src", DatabaseType.TDENGINE, SOURCE_DB,
                 SOURCE_DB, TDENGINE.getHost(), TDENGINE.getMappedPort(6041),
                 ConnectionRole.SOURCE);
@@ -144,14 +181,20 @@ class TdengineSourceIT {
                 ConnectionRole.TARGET);
         SyncConfig config = new SyncConfig();
         // Explicit: TDengine has no auto-detected cursor column name.
-        config.setCursorColumns(Map.of(TABLE, "ts"));
+        config.setCursorColumns(Map.of(table, cursorColumn));
         Project project = new Project();
-        project.setName("tdengine-source-it");
+        project.setName(name);
         project.setSourceDbId(source.getId());
         project.setTargetDbId(target.getId());
         project.setSyncConfig(contextFactory.serializeConfig(config));
         project.setEnabled(false);
         return projectRepository.save(project);
+    }
+
+    private Connection sourceConnection() throws SQLException {
+        return DriverManager.getConnection(
+                "jdbc:TAOS-WS://" + TDENGINE.getHost() + ":"
+                        + TDENGINE.getMappedPort(6041) + "/" + SOURCE_DB, USER, PASSWORD);
     }
 
     private DatabaseConfig savedConfig(String name, DatabaseType type, String database,
@@ -204,6 +247,18 @@ class TdengineSourceIT {
             }
         }
         return types;
+    }
+
+    private java.util.List<String> targetNames(String table) throws Exception {
+        java.util.List<String> values = new java.util.ArrayList<>();
+        try (Connection conn = targetConnection(); Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT name FROM public." + table + " ORDER BY id")) {
+            while (rs.next()) {
+                values.add(rs.getString(1));
+            }
+        }
+        return values;
     }
 
     private java.util.List<String> targetValues() throws Exception {

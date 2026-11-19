@@ -224,9 +224,13 @@ public interface SqlDialect {
      * already-quoted column reference.
      *
      * <p>TDengine has no {@code MAX}/{@code MIN} over TIMESTAMP and answers with
-     * "Invalid parameter data type"; its dialect substitutes {@code LAST}.
+     * "Invalid parameter data type"; its dialect substitutes {@code LAST} for that type,
+     * while a numeric or string cursor keeps {@code MAX} — {@code LAST} returns the value
+     * of the newest row by timestamp, not the largest value.
+     *
+     * @param jdbcType the cursor column's {@link java.sql.Types} type
      */
-    default String highWatermarkMaxExpression(String columnRef) {
+    default String highWatermarkMaxExpression(String columnRef, int jdbcType) {
         return "MAX(" + columnRef + ")";
     }
 

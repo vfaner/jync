@@ -103,7 +103,8 @@ class ProjectDetailCursorIndexViewTest {
         // be styled. The hint is marked data-tip instead and painted by app.js as the same
         // dark bubble the performance knobs use, instantly on hover or keyboard focus.
         assertThat(page).doesNotContain("title=\"该游标列在源库没有索引");
-        assertThat(page).contains("data-tip=\"该游标列在源库没有索引：每次增量读取都会全表扫描，建议在该列上建索引。\"");
+        assertThat(page).contains("data-tip=\"该游标列在源库没有索引：每次增量读取都会全表扫描，"
+                + "建议在该列上建索引，或改用主键前导列。\"");
         assertThat(page).containsPattern("(?s)data-tip=\"[^\"]*没有索引[^\"]*\">\\s*"
                 + "<svg[^>]*>\\s*<use href=\"#exclamation-triangle-fill\"");
     }

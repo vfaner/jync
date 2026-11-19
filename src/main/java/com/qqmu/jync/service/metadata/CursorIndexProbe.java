@@ -12,6 +12,7 @@ import com.qqmu.jync.model.DatabaseType.DialectFamily;
 
 /**
  * Whether a column leads any index of a table — the only index shape a range read can use.
+ * The primary key counts as an index.
  *
  * <p>Asked in two places: the sync engine (whether the bookkeeping {@code COUNT(*)} probes
  * still run, and whether the run advises creating an index on the cursor column) and the
@@ -21,6 +22,13 @@ import com.qqmu.jync.model.DatabaseType.DialectFamily;
  * <p>The MySQL family keeps the database name in the JDBC catalog and reports no schema, so
  * the two arguments swap — the same convention {@code DataSyncService} uses for the target
  * side's scale probe.
+ *
+ * <p>Some drivers do not list the primary key in {@link DatabaseMetaData#getIndexInfo}:
+ * TDengine 3.3.6 returns no rows at all, even for the {@code ts} key every table has. When
+ * the index dictionary reports nothing for the table, {@link DatabaseMetaData#getPrimaryKeys}
+ * is asked instead, under the caller's catalog/schema convention and then under the swapped
+ * one — the TDengine driver keys the key lookup on the catalog while its index lookup
+ * answers nothing either way.
  */
 public final class CursorIndexProbe {
 
@@ -51,10 +59,12 @@ public final class CursorIndexProbe {
                 && (family == DialectFamily.ORACLE || family == DialectFamily.DB2)
                 && schema != null && !schema.isBlank()
                         ? schema.toUpperCase(java.util.Locale.ROOT) : schema;
+        String catalog = mysqlFamily ? schema : null;
+        String indexSchema = mysqlFamily ? null : dictionarySchema;
         try {
             DatabaseMetaData md = conn.getMetaData();
-            try (ResultSet rs = md.getIndexInfo(mysqlFamily ? schema : null,
-                    mysqlFamily ? null : dictionarySchema, table, false, true)) {
+            boolean sawRowForTable = false;
+            try (ResultSet rs = md.getIndexInfo(catalog, indexSchema, table, false, true)) {
                 while (rs.next()) {
                     String indexedColumn = rs.getString("COLUMN_NAME");
                     if (indexedColumn == null) {
@@ -67,16 +77,46 @@ public final class CursorIndexProbe {
                     if (indexedTable != null && !indexedTable.equalsIgnoreCase(table)) {
                         continue;
                     }
+                    sawRowForTable = true;
                     if (rs.getInt("ORDINAL_POSITION") == 1
                             && indexedColumn.equalsIgnoreCase(column)) {
                         return Boolean.TRUE;
                     }
                 }
             }
-            return Boolean.FALSE;
+            if (sawRowForTable) {
+                return Boolean.FALSE;
+            }
+            // An empty index dictionary does not mean "no index": the primary key is one,
+            // and some drivers list it only through getPrimaryKeys.
+            if (primaryKeyLeads(md, catalog, indexSchema, table, column)) {
+                return Boolean.TRUE;
+            }
+            return primaryKeyLeads(md, indexSchema, catalog, table, column)
+                    ? Boolean.TRUE : Boolean.FALSE;
         } catch (SQLException | RuntimeException e) {
             log.debug("Cannot read the indexes of {}: {}", table, e.toString());
             return null;
         }
+    }
+
+    /**
+     * Whether {@code column} is the first column of the table's primary key, under one
+     * catalog/schema convention. A throw propagates: an unreadable key dictionary is an
+     * unknown answer, not an unindexed table.
+     */
+    private static boolean primaryKeyLeads(DatabaseMetaData md, String catalog,
+                                           String schema, String table,
+                                           String column) throws SQLException {
+        try (ResultSet rs = md.getPrimaryKeys(catalog, schema, table)) {
+            while (rs.next()) {
+                String keyColumn = rs.getString("COLUMN_NAME");
+                if (keyColumn != null && rs.getShort("KEY_SEQ") == 1
+                        && keyColumn.equalsIgnoreCase(column)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 }

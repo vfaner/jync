@@ -395,8 +395,13 @@ Redis 是**实时同步的目标端**，不是数据库连接的一种：它只�
   或在「前置 SQL」里自行建表；Jync 不会自动建表。
 - 没有 CDC；删除不传播。轮询间隔内被覆盖的行只表现为新值。
 - 游标列必须手工指定（通常是 `ts`），自动发现不识别该列名。TDengine 拒绝 TIMESTAMP 列的
-  `MAX`/`MIN`（`0x2802 Invalid parameter data type`），水位上限改用 `LAST(列)`，即最大时间戳
-  那一行的值；主键范围仍用 `MIN`/`MAX`（只对整型前导键启用，INT/BIGINT 支持）。
+  `MAX`/`MIN`（`0x2802 Invalid parameter data type`），时间戳游标的水位上限改用 `LAST(列)`，
+  即最大时间戳那一行的值；整型/字符游标仍用 `MAX`（`LAST(id)` 是最大时间戳那一行的 id，
+  不是最大 id，会把迟到的行漏在窗口外）。主键范围仍用 `MIN`/`MAX`（只对整型前导键启用，
+  INT/BIGINT 支持）。
+- 没有二级索引：`CREATE INDEX` 只能建在 TAG 上，普通列会报 `Invalid tag name`。游标列若不是
+  主键前导列，每次增量读取都是全表扫描；索引探测对 TDengine 以 `getPrimaryKeys` 为准
+  （驱动的 `getIndexInfo` 不返回任何行，包括 `ts` 主键）。
 - 唯一键来自 TDengine 自身：无声明主键时 `ts` 唯一；超级表按 `ts + 主键 + TAG` 定位，
   子表不单独列举。
 - 超级表不能作 ETL 目标；ETL 不支持 UPSERT 模式；没有事务，失败重跑可能留下部分数据。

@@ -759,7 +759,8 @@ public class DataSyncService {
 
     /**
      * Reads the dialect's upper-bound aggregate over the cursor column — {@code MAX} for
-     * most products, {@code LAST} where a TIMESTAMP has no {@code MAX} (TDengine). It is
+     * most products and cursor types, {@code LAST} where a TIMESTAMP has no {@code MAX}
+     * (TDengine, and only there: on a numeric cursor {@code LAST} is not a maximum). It is
      * the upper bound of this cycle's window, captured before any data is read.
      */
     private String readHighWatermark(Connection sourceConn, TableMeta table,
@@ -769,7 +770,8 @@ public class DataSyncService {
         }
         SqlDialect dialect = ctx.getSourceDialect();
         String sql = "SELECT " + dialect.highWatermarkMaxExpression(
-                        KeysetChunker.sqlRef(dialect, strategy)) + " FROM "
+                        KeysetChunker.sqlRef(dialect, strategy), strategy.getJdbcType())
+                + " FROM "
                 + dialect.qualify(ctx.getSourceSchema(), table.getName());
         try (Statement st = sourceConn.createStatement()) {
             // A MAX over an unindexed cursor column is a full scan: it belongs to the copy's
@@ -1470,7 +1472,8 @@ public class DataSyncService {
         log.warn("Table {} reads by cursor column {}, which has no index at the source: every"
                         + " incremental read scans the whole table (about {} row(s)) instead of a"
                         + " key range, and a large enough read reaches the statement timeout."
-                        + " Add an index on {} at the source.",
+                        + " Add an index on {} at the source, or use a column that leads the"
+                        + " primary key.",
                 table.getName(), column, rows == null ? "an unknown number of" : rows, column);
     }
 
