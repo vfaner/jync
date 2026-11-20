@@ -19,6 +19,10 @@
     busy: root.getAttribute('data-label-busy') || 'Still answering',
     used: root.getAttribute('data-label-used') || 'Opened',
     openForm: root.getAttribute('data-label-open') || 'Open form',
+    confirm: root.getAttribute('data-label-confirm') || 'Confirm',
+    cancel: root.getAttribute('data-label-cancel') || 'Cancel',
+    cancelled: root.getAttribute('data-label-cancelled') || 'Cancelled',
+    target: root.getAttribute('data-label-target') || 'Target',
     restore: root.getAttribute('data-label-restore') || 'Restore',
     greeting: root.getAttribute('data-label-greeting') || '',
     network: root.getAttribute('data-label-network') || 'Network error'
@@ -331,6 +335,86 @@
     }
   }
 
+  function t(key) {
+    return window.JyncUI ? window.JyncUI.t(key) : (key || '');
+  }
+
+  // 确认卡：助手只准备了动作，真正执行发生在用户点「确认执行」之后。令牌一次性、
+  // 绑当前账号、5 分钟过期；服务端在点击时按当前角色与归属再校验一次。
+  function showAction(data) {
+    var card = document.createElement('div');
+    card.className = 'support-draft support-action';
+    var title = document.createElement('strong');
+    title.textContent = t(data.titleKey);
+    card.appendChild(title);
+
+    var row = document.createElement('div');
+    row.className = 'support-draft-field';
+    var label = document.createElement('span');
+    label.className = 'support-draft-label';
+    label.textContent = labels.target;
+    var value = document.createElement('span');
+    value.textContent = t(data.resourceKindKey) + ' · ' + (data.resourceName || '');
+    row.appendChild(label);
+    row.appendChild(value);
+    card.appendChild(row);
+
+    var buttons = document.createElement('div');
+    buttons.className = 'support-action-buttons';
+    var confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'btn btn-primary btn-sm';
+    confirmBtn.textContent = labels.confirm;
+    var cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn btn-sm';
+    cancelBtn.textContent = labels.cancel;
+    buttons.appendChild(confirmBtn);
+    buttons.appendChild(cancelBtn);
+    card.appendChild(buttons);
+
+    function finish(body) {
+      buttons.parentNode && buttons.parentNode.removeChild(buttons);
+      var result = document.createElement('div');
+      result.className = 'support-action-result '
+        + (body && body.success ? 'is-ok' : 'is-bad');
+      result.textContent = t(body && body.message ? body.message : 'support.action.failed');
+      card.appendChild(result);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    confirmBtn.addEventListener('click', function () {
+      // 先禁用再发请求：双击不能换来两次执行（令牌也只允许一次）。
+      confirmBtn.disabled = true;
+      cancelBtn.disabled = true;
+      var csrf = document.querySelector('meta[name="_csrf"]');
+      var csrfHeader = document.querySelector('meta[name="_csrf_header"]');
+      var headers = { 'Accept': 'application/json' };
+      if (csrf && csrfHeader) headers[csrfHeader.content] = csrf.content;
+      var url = (root.getAttribute('data-action-url') || '/api/support/action')
+        + '/' + encodeURIComponent(data.token || '');
+      fetch(url, { method: 'POST', headers: headers, credentials: 'same-origin' })
+        .then(function (response) {
+          return response.json().catch(function () {
+            return { success: false, message: 'support.action.failed' };
+          });
+        })
+        .then(finish)
+        .catch(function () { finish({ success: false, message: 'error.network' }); });
+    });
+
+    cancelBtn.addEventListener('click', function () {
+      buttons.parentNode && buttons.parentNode.removeChild(buttons);
+      var note = document.createElement('div');
+      note.className = 'support-action-result';
+      note.textContent = labels.cancelled;
+      card.appendChild(note);
+    });
+
+    log.appendChild(card);
+    log.scrollTop = log.scrollHeight;
+  }
+
   // SSE 解析：按空行分帧，event: 与 data: 各一行；坏数据静默跳过。
   function consume(response, onEvent) {
     var reader = response.body.getReader();
@@ -441,6 +525,8 @@
           log.scrollTop = log.scrollHeight;
         } else if (name === 'draft') {
           showDraft(data);
+        } else if (name === 'action') {
+          showAction(data);
         } else if (name === 'error') {
           showError(data.messageKey || 'error.unexpected', data.detail);
         }

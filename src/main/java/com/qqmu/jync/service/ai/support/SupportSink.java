@@ -2,7 +2,7 @@ package com.qqmu.jync.service.ai.support;
 
 import java.util.List;
 
-/** The five things an answer may emit; the controller maps them to SSE events. */
+/** The events an answer may emit; the controller maps them to SSE events. */
 public interface SupportSink {
 
     void delta(String text);
@@ -10,6 +10,13 @@ public interface SupportSink {
     void tool(String name, String labelKey);
 
     void draft(DraftView draft);
+
+    /**
+     * A prepared write waiting for the human to click. The token is single-use and bound to
+     * the asking account; {@code titleKey} and {@code resourceKindKey} are i18n keys the
+     * browser resolves.
+     */
+    void action(ActionView action);
 
     void error(String messageKey);
 
@@ -25,6 +32,10 @@ public interface SupportSink {
     void done();
 
     record DraftView(String token, String title, String summary, List<Field> fields) {
+    }
+
+    record ActionView(String token, String titleKey, String resourceKindKey,
+                      String resourceName) {
     }
 
     record Field(String labelKey, String value) {

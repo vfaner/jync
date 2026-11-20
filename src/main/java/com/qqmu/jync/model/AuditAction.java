@@ -67,6 +67,11 @@ public enum AuditAction {
      */
     AI_SUPPORT_ASK,
     /**
+     * The support assistant prepared a write (start/stop/run) and the user confirmed it. The
+     * detail carries the action, the resource name and the outcome — never SQL or credentials.
+     */
+    AI_SUPPORT_ACTION,
+    /**
      * Legacy: the 系统配置 metadata-database connection tester wrote this before it was
      * removed. Kept so the append-only rows still load ({@code @Enumerated(STRING)} is
      * strict); nothing records it any more.

@@ -2223,6 +2223,10 @@ a.type-card:focus-visible {
 .support-draft-field { display: flex; gap: 8px; font-size: 13px; line-height: 1.7; }
 .support-draft-label { flex: 0 0 auto; min-width: 2.5em; color: var(--ink-mute); }
 .support-draft-field span + span { color: var(--ink); word-break: break-word; }
+.support-action-buttons { display: flex; gap: 8px; margin-top: 10px; }
+.support-action-result { margin-top: 8px; font-size: 13px; color: var(--ink-soft); }
+.support-action-result.is-ok { color: var(--ok); }
+.support-action-result.is-bad { color: var(--danger); }
 
 .support-form { display: flex; align-items: flex-end; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: var(--bg); }
 .support-input {

@@ -6,7 +6,12 @@
 <th:block th:fragment="widget">
 <div id="support-widget" class="support-widget"
      th:data-action="@{/api/support/chat}"
+     th:data-action-url="@{/api/support/action}"
      th:data-draft-url="@{/projects/new}"
+     th:data-label-confirm="#{support.action.confirm}"
+     th:data-label-cancel="#{support.action.cancel}"
+     th:data-label-cancelled="#{support.action.cancelled}"
+     th:data-label-target="#{support.action.field.target}"
      th:data-label-thinking="#{support.thinking}"
      th:data-label-timeout="#{support.timeout}"
      th:data-label-disabled="#{support.disabled}"
@@ -22,6 +27,12 @@
      th:data-tool-database_metrics="#{support.tool.database_metrics}"
      th:data-tool-list_connections="#{support.tool.list_connections}"
      th:data-tool-search_docs="#{support.tool.search_docs}"
+     th:data-tool-cdc_status="#{support.tool.cdc_status}"
+     th:data-tool-cdc_probe="#{support.tool.cdc_probe}"
+     th:data-tool-alerts="#{support.tool.alerts}"
+     th:data-tool-etl_status="#{support.tool.etl_status}"
+     th:data-tool-control_project="#{support.tool.control_project}"
+     th:data-tool-control_etl_task="#{support.tool.control_etl_task}"
      th:data-tool-draft_project="#{support.tool.draft_project}">
 
   <button type="button" class="support-fab" data-role="support-toggle"

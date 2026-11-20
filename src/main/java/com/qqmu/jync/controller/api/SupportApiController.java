@@ -1,6 +1,7 @@
 package com.qqmu.jync.controller.api;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -9,9 +10,11 @@ import java.util.concurrent.RejectedExecutionException;
 import jakarta.annotation.PreDestroy;
 
 import org.springframework.context.i18n.LocaleContextHolder;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -19,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.qqmu.jync.service.ai.AiProviderService;
+import com.qqmu.jync.service.ai.support.SupportActionService;
 import com.qqmu.jync.service.ai.support.SupportAssistantService;
 import com.qqmu.jync.service.ai.support.SupportChatRequest;
 import com.qqmu.jync.service.ai.support.SupportSink;
@@ -43,6 +47,7 @@ public class SupportApiController {
 
     private final SupportAssistantService assistant;
     private final AiProviderService providers;
+    private final SupportActionService actions;
 
     private final ExecutorService executor = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "ai-support-stream");
@@ -50,9 +55,11 @@ public class SupportApiController {
         return t;
     });
 
-    public SupportApiController(SupportAssistantService assistant, AiProviderService providers) {
+    public SupportApiController(SupportAssistantService assistant, AiProviderService providers,
+                                SupportActionService actions) {
         this.assistant = assistant;
         this.providers = providers;
+        this.actions = actions;
     }
 
     @PreDestroy
@@ -111,6 +118,30 @@ public class SupportApiController {
         return emitter;
     }
 
+    /**
+     * Redeems an assistant-prepared action after the human clicked its confirmation card.
+     *
+     * <p>The filter chain already admits only administrators and operators on a POST, and
+     * {@link SupportActionService} re-applies the ownership rule through the ordinary service
+     * methods. The status code tells the card what happened: 410 means the token expired or
+     * was already used, 403 means the caller may not touch that resource now, and 409 means
+     * the resource is in a state that refuses the action.
+     */
+    @PostMapping("/action/{token}")
+    public ResponseEntity<Map<String, Object>> confirmAction(@PathVariable String token) {
+        SupportActionService.Result result = actions.execute(token, AccessGuard.current());
+        HttpStatus status = switch (result.outcome()) {
+            case OK -> HttpStatus.OK;
+            case EXPIRED -> HttpStatus.GONE;
+            case DENIED -> HttpStatus.FORBIDDEN;
+            case FAILED -> HttpStatus.CONFLICT;
+        };
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", result.ok());
+        body.put("message", result.messageKey());
+        return ResponseEntity.status(status).body(body);
+    }
+
     @ExceptionHandler(SupportBusyException.class)
     public ResponseEntity<Map<String, String>> busy() {
         return ResponseEntity.status(409).body(Map.of("messageKey", "error.support.busy"));
@@ -139,6 +170,13 @@ public class SupportApiController {
         public void draft(DraftView draft) {
             send("draft", Map.of("token", draft.token(), "title", draft.title(),
                     "summary", draft.summary(), "fields", draft.fields()));
+        }
+
+        public void action(ActionView action) {
+            send("action", Map.of("token", action.token(),
+                    "titleKey", action.titleKey(),
+                    "resourceKindKey", action.resourceKindKey(),
+                    "resourceName", action.resourceName()));
         }
 
         public void error(String messageKey) {
