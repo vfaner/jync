@@ -57,7 +57,7 @@ public class LegacyStoreMigration implements EnvironmentPostProcessor {
      * must not touch: non-file URLs (in-memory, classpath), home-relative paths that only H2
      * itself can expand, or malformed values — H2 rejects those later with a better error.
      */
-    static Path configuredStoreBase(String jdbcUrl) {
+    public static Path configuredStoreBase(String jdbcUrl) {
         if (jdbcUrl == null || !jdbcUrl.startsWith(H2_FILE_PREFIX)) {
             return null;
         }

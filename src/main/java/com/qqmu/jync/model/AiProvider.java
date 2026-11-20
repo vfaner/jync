@@ -14,6 +14,9 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -43,6 +46,7 @@ public class AiProvider {
     private String name;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(nullable = false, length = 32)
     private AiProtocol protocol = AiProtocol.OPENAI;
 
@@ -72,6 +76,7 @@ public class AiProvider {
      * 一字不差 —— 新功能不该悄悄改变任何一个已有端点的请求。
      */
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "reasoning_effort", length = 16)
     private AiReasoningEffort reasoningEffort = AiReasoningEffort.DEFAULT;
 

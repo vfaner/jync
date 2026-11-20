@@ -886,6 +886,43 @@ class UpgradeServiceTest {
     }
 
     @Test
+    void shellScriptWaitsForTheKilledNewProcessBeforeRollingBack() {
+        RestartSpec spec = new RestartSpec(12345L, "/usr/bin/java",
+                "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", 8081,
+                "/opt/jync/jync.jar.failed-x");
+        String script = UpgradeService.buildShellScript(spec);
+
+        // kill only delivers the signal. Relaunching the backup jar immediately lets the old
+        // and the new process overlap on the same ./data H2 store, and the loser fails to
+        // start with "Unable to determine Dialect without JDBC metadata". The script has to
+        // watch the killed pid to its exit (bounded) before the rollback relaunch.
+        int kill = script.indexOf("kill \"$NEW_PID\" 2>/dev/null");
+        int rollback = script.indexOf("rollback \"new process never became ready");
+        assertThat(kill).isNotNegative();
+        assertThat(rollback).isGreaterThan(kill);
+        String between = script.substring(kill, rollback);
+        assertThat(between).contains("kill -0 \"$NEW_PID\"");
+        assertThat(between).contains("seq 1 15");
+        assertThat(between).contains("sleep 1");
+    }
+
+    @Test
+    void powerShellWaitsForTheStoppedProcessBeforeRollingBack() {
+        RestartSpec spec = new RestartSpec(999L, "C:\\Java\\bin\\java.exe",
+                "C:\\app\\jync.jar", "C:\\app\\jync.jar.bak", "C:\\app", 8080,
+                "C:\\app\\jync.jar.failed-x");
+        String script = UpgradeService.buildPowerShellScript(spec);
+
+        // Same overlap window as the bash helper: Stop-Process is asynchronous, so the
+        // rollback must wait for the process it stopped before relaunching the backup jar.
+        int stop = script.indexOf("Stop-Process -Id $proc.Id -Force");
+        int rollback = script.indexOf("Rollback 'new process never became ready'");
+        assertThat(stop).isNotNegative();
+        assertThat(rollback).isGreaterThan(stop);
+        assertThat(script.substring(stop, rollback)).contains("$proc.WaitForExit(15000)");
+    }
+
+    @Test
     void theRollbackRelaunchRecordsTheJavaPidNotASubshells() {
         RestartSpec spec = new RestartSpec(12345L, "/usr/bin/java",
                 "/opt/jync/jync.jar", "/opt/jync/jync.jar.bak", "/opt/jync", 8081,

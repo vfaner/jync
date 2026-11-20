@@ -14,6 +14,9 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -45,6 +48,7 @@ public class Project {
      * written with an explicit value, and the startup backfill fills the old ones in.
      */
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "target_kind", length = 16)
     private SyncTargetKind targetKind;
 

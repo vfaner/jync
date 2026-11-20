@@ -949,6 +949,12 @@ public class UpgradeService {
             sb.append("  log \"new process is up (pid $NEW_PID)\"\n");
             sb.append("else\n");
             sb.append("  kill \"$NEW_PID\" 2>/dev/null\n");
+            // kill only sends the signal. Relaunching the backup before the new process is
+            // gone lets both instances open the same ./data H2 store; the one that loses the
+            // race dies with "Unable to determine Dialect without JDBC metadata".
+            sb.append("  for i in $(seq 1 15); do\n");
+            sb.append("    if kill -0 \"$NEW_PID\" 2>/dev/null; then sleep 1; else break; fi\n");
+            sb.append("  done\n");
             sb.append("  rollback \"new process never became ready on port ")
                     .append(spec.port()).append("\" || true\n");
             sb.append("fi\n");
@@ -1014,6 +1020,9 @@ public class UpgradeService {
             sb.append("if ($ready) { Log \"new process is up (pid $($proc.Id))\" }\n");
             sb.append("else {\n");
             sb.append("  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }\n");
+            // Stop-Process returns before the process is actually gone; the rollback relaunch
+            // must wait or both instances race for the same ./data H2 store.
+            sb.append("  $proc.WaitForExit(15000) | Out-Null\n");
             sb.append("  Rollback 'new process never became ready'\n");
             sb.append("}\n");
         } else {

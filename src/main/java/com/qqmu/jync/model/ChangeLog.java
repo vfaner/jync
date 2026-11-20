@@ -13,6 +13,9 @@ import jakarta.persistence.Index;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -36,6 +39,7 @@ public class ChangeLog {
     private Long projectId;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "object_type", nullable = false, length = 32)
     private ObjectType objectType;
 
@@ -43,6 +47,7 @@ public class ChangeLog {
     private String objectName;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "change_type", nullable = false, length = 16)
     private ChangeType changeType;
 

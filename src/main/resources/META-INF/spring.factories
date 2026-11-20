@@ -3,3 +3,13 @@
 org.springframework.boot.EnvironmentPostProcessor=\
 com.qqmu.jync.config.LegacyStoreMigration,\
 com.qqmu.jync.config.CryptoKeyBootstrap
+
+# Runs after logging is configured but before any bean (datasource included) is created, so a
+# second instance's lock file can be warned about through SLF4J.
+org.springframework.context.ApplicationListener=\
+com.qqmu.jync.config.MetadataStoreStartupCheck
+
+# Spring Boot looks up failure analyzers here; this one explains the generic Hibernate dialect
+# failure that a second Jync instance on the same metadata store produces.
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+com.qqmu.jync.diagnostics.MetadataStoreFailureAnalyzer

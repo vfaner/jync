@@ -16,6 +16,9 @@ import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import jakarta.persistence.Version;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -42,6 +45,7 @@ public class MigrationConnection {
     private String name;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(nullable = false, length = 24)
     private MigrationConnectionKind kind;
 
@@ -58,6 +62,7 @@ public class MigrationConnection {
     private String schemaName;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "auth_type", nullable = false, length = 16)
     private MigrationConnectionAuthType authType = MigrationConnectionAuthType.NONE;
 

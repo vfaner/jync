@@ -654,8 +654,8 @@ public class CdcDdlTaskService {
         touched.addAll(droppedColumns(statement, backslashEscapes));
         supersedeTasksFor(entry, touched, backslashEscapes);
         // handledBy / handledAt / targetDdlSql on this row ARE the audit trail. No
-        // AdminAuditService row: audit_event.action is a fixed H2 ENUM column and adding a
-        // new AuditAction value cannot be applied by ddl-auto=update (H2 22030 on insert).
+        // AdminAuditService row: the CDC task's own record is what an operator looks at,
+        // and one audit row per mark would bury it without adding a fact.
         return new DdlTaskOutcome(needsReplay(entry), entry.getAffectedTables());
     }
 

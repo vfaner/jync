@@ -13,6 +13,9 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -46,6 +49,7 @@ public class AlertConfig {
     private String webhookUrl;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "webhook_format", nullable = false, length = 16)
     private AlertWebhookFormat format = AlertWebhookFormat.GENERIC;
 

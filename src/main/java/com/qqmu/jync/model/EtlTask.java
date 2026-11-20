@@ -15,6 +15,9 @@ import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -96,6 +99,7 @@ public class EtlTask {
     private String targetTable;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "write_mode", nullable = false, length = 24)
     private EtlWriteMode writeMode = EtlWriteMode.OVERWRITE;
 

@@ -10,6 +10,9 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -63,6 +66,7 @@ public class OaAuthConfig {
      * storage name differs.
      */
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "auth_mode", length = 16)
     private Mode mode = Mode.PASSWORD;
 
@@ -110,6 +114,7 @@ public class OaAuthConfig {
     private String validateUrl;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "validate_method", length = 8)
     private ValidateMethod validateMethod = ValidateMethod.GET;
 
@@ -121,6 +126,7 @@ public class OaAuthConfig {
     private String loginUrl;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "request_format", nullable = false, length = 8)
     private RequestFormat requestFormat = RequestFormat.FORM;
 

@@ -13,6 +13,9 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -46,7 +49,13 @@ public class AppUser {
     @Column(name = "password_hash", nullable = false, length = 100)
     private String passwordHash;
 
+    /**
+     * Stored as text, never as the database's native ENUM: Hibernate pins a native ENUM to the
+     * constants of the release that created it, so a later release's new role would be rejected
+     * by a store created by an earlier one.
+     */
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(nullable = false, length = 16)
     private UserRole role = UserRole.VIEWER;
 

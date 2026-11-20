@@ -14,6 +14,9 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -32,6 +35,7 @@ public class DatabaseConfig {
     private String name;
 
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(nullable = false, length = 32)
     private DatabaseType type = DatabaseType.MYSQL;
 
@@ -41,6 +45,7 @@ public class DatabaseConfig {
      * and cleared on save — for every preset, which already declares its own family.
      */
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(name = "dialect_family", length = 16)
     private DatabaseType.DialectFamily dialectFamily;
 
@@ -132,6 +137,7 @@ public class DatabaseConfig {
      * to a non-empty table. Application-level validation in DatabaseConfigService requires it.
      */
     @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.VARCHAR)
     @Column(length = 16)
     private ConnectionRole role = ConnectionRole.SOURCE;
 
