@@ -33,7 +33,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: jync:2.4.1
+    image: jync:2.4.2
     container_name: jync-oracle
     restart: unless-stopped
     depends_on:
