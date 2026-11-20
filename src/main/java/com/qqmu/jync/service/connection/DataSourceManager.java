@@ -329,7 +329,8 @@ public class DataSourceManager {
     public String buildJdbcUrl(DatabaseConfig config) {
         rejectNativeMongo(config);
         if (StringUtils.hasText(config.getCustomUrl())) {
-            return appendExtraParams(config.getCustomUrl().trim(), config);
+            return disableTinyIntBooleanCollapse(
+                    appendExtraParams(config.getCustomUrl().trim(), config));
         }
         DatabaseType type = config.getType();
         if (type == DatabaseType.CUSTOM) {
@@ -344,11 +345,65 @@ public class DataSourceManager {
         // SQL Browser. Emitting the default-instance port 1433 there guarantees a timeout,
         // so a blank port is honored for products that declare a portless template.
         if (config.getPort() == null && type.allowsBlankPort()) {
-            return appendExtraParams(
-                    String.format(type.getPortlessUrlTemplate(), host, dbName), config);
+            return disableTinyIntBooleanCollapse(appendExtraParams(
+                    String.format(type.getPortlessUrlTemplate(), host, dbName), config));
         }
         int port = config.getPort() != null ? config.getPort() : type.getDefaultPort();
-        return appendExtraParams(String.format(type.getUrlTemplate(), host, port, dbName), config);
+        return disableTinyIntBooleanCollapse(
+                appendExtraParams(String.format(type.getUrlTemplate(), host, port, dbName), config));
+    }
+
+    /** Matches an existing {@code tinyInt1isBit} pair and nothing else in the query. */
+    private static final java.util.regex.Pattern TINY_INT_BIT_PARAM =
+            java.util.regex.Pattern.compile("(?i)([?&;])tinyInt1isBit=[^&;]*");
+
+    /**
+     * Forces {@code tinyInt1isBit=false} on MySQL-protocol URLs.
+     *
+     * <p>Connector/J's default makes the driver report a {@code TINYINT(1)} column as JDBC
+     * BOOLEAN: {@code getObject} answers {@code Boolean}, so a status holding 5 is copied as
+     * 1 into the target and never matches the source again. Turning the option off at the
+     * connection level keeps the value numeric before any Jync code sees it, which covers
+     * baseline, CDC, ETL, preview and structure metadata at once.
+     *
+     * <p>Only {@code jdbc:mysql:} (its DNS-SRV form {@code jdbc:mysql+srv:} included) and
+     * {@code jdbc:mariadb:} are touched — the drivers that define the option. Vendor
+     * drivers that merely speak the protocol (OceanBase, GBase)
+     * keep their URLs untouched; their values are already guarded on the read path. An
+     * existing {@code tinyInt1isBit} (from a custom URL or extra params) is rewritten in
+     * place so an old {@code true} cannot win — matching the source column is not optional —
+     * while every other parameter keeps its exact text. The query string is never
+     * re-tokenized: a semicolon inside a value (a {@code sql_mode} list, for instance) is
+     * data, not a separator.
+     */
+    private String disableTinyIntBooleanCollapse(String url) {
+        if (url == null) {
+            return null;
+        }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        if (!lower.startsWith("jdbc:mysql:") && !lower.startsWith("jdbc:mysql+srv:")
+                && !lower.startsWith("jdbc:mariadb:")) {
+            return url;
+        }
+        java.util.regex.Matcher existing = TINY_INT_BIT_PARAM.matcher(url);
+        if (existing.find()) {
+            return existing.replaceAll("$1tinyInt1isBit=false");
+        }
+        // Same separator rule as appendExtraParams: SQL Server-style URLs that use ';'
+        // without a '?' keep using ';', everything else uses '?'/'&'.
+        String sep;
+        if (url.indexOf('?') >= 0) {
+            sep = endsWithParamSeparator(url) ? "" : "&";
+        } else if (url.indexOf(';') >= 0) {
+            sep = url.endsWith(";") ? "" : ";";
+        } else {
+            sep = "?";
+        }
+        return url + sep + "tinyInt1isBit=false";
+    }
+
+    private static boolean endsWithParamSeparator(String url) {
+        return url.endsWith("?") || url.endsWith("&") || url.endsWith(";");
     }
 
     /**

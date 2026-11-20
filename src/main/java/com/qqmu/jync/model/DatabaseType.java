@@ -572,6 +572,13 @@ public enum DatabaseType {
      * and so does Doris — it speaks the protocol through the bundled Connector/J while
      * carrying {@link DialectFamily#GENERIC} because its DDL and upsert are its own.
      *
+     * <p>{@code DataSourceManager.buildJdbcUrl} already forces {@code tinyInt1isBit=false}
+     * on {@code jdbc:mysql:} / {@code jdbc:mariadb:} URLs, so the read and bind paths no
+     * longer meet the collapsed value on those drivers. This predicate stays as the
+     * fallback for the URLs the option cannot cover: vendor drivers that speak the protocol
+     * but do not define the property (OceanBase, GBase), and connections opened outside the
+     * manager.
+     *
      * <p>Products whose own {@code BIT}/{@code BOOLEAN} really is 0/1 (PostgreSQL,
      * SQL Server, H2, Oracle 23c, HANA) answer false: their boolean values must stay
      * booleans.

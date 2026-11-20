@@ -176,6 +176,7 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 ### 4.8 MySQL 的 TINYINT(1) 按数值同步，不折叠成布尔
 
 - MySQL 驱动默认把 `TINYINT(1)` 报成 BIT / 布尔：基线读取时 `5` 会变成 `true`，写入目标后成了 `1`；旧版本的 CDC 绑定也把非零值写成 `1`。结果是 `status` 这类「一位数但取值不止 0/1」的列在基线与 CDC 两条路径上都被压成 1，重建基线也纠正不回来。Jync 现在对 MySQL / MariaDB 源把这类列按整数读取、按整数写入，`5` 原样到达目标。真正的 `BIT(1)` 仍是 0/1，语义不变。数据预览里这类单元格同样显示数值（`5`），不再显示 `true`，便于对照两端。
+- **连接串层面就关掉折叠。** 凡是 `jdbc:mysql://` 与 `jdbc:mariadb://` 的连接（内置 MySQL 系预设、MariaDB、Doris，以及用户自填的同协议 URL），Jync 都会在 URL 上强制写入 `tinyInt1isBit=false`，驱动从一开始就按数值返回，不再依赖读路径逐处纠正。若旧配置的附加参数或自定义 URL 里写了 `tinyInt1isBit=true`，会被替换为 `false`——同步后两端字段内容一致优先于该开关。OceanBase、GBase 等厂商自有驱动的 URL 不加这个参数（驱动未必认识），由上面的读写路径兜底。因此结构同步从 MySQL 系源建目标表时，`TINYINT(1)` 会按普通 `TINYINT` 建立（MySQL 8.0.17 起显示宽度本身也已弃用），取值域与内容不受影响。
 - **存量数据不会自动回改**：升级后重建一次基线即可全量纠正，或等每行下一次 UPDATE 覆盖。
 - 该判断依赖驱动把值折叠成布尔这一运行时事实，不读列精度——MySQL 元数据里 `TINYINT(1)` 与真 `BIT(1)` 无法区分（两者都是 jdbc=BIT、typeName=BIT、precision=1）。因此跨库族建表时，MySQL 协议的 `TINYINT(1)` 在非 MySQL 协议目标上一律按整数宽一档建立（PostgreSQL 系 `SMALLINT`、Oracle `NUMBER(5)`），数值 2..127 可以原样落库；只有用户**自建**的 `BOOLEAN` 目标列仍存不了 2 及以上，这是目标列类型本身的限制。ETL 的占位符类型跟随同一套映射，不会出现建了 `SMALLINT` 却按布尔绑定。
 - 其余数据库不存在同样的折叠：PostgreSQL 的 `bool`、`bit(1)`，SQL Server 的 `bit`，H2 的 `BOOLEAN`，Oracle 23c 的 `BOOLEAN`，HANA、达梦、崖山等的布尔类型本身只容纳 0/1，驱动也按布尔返回；它们的 `TINYINT`/`NUMBER(1)` 等数值列不会被驱动转成布尔。MariaDB 驱动（默认 `tinyInt1isBit`）与 Doris（经 Connector/J 访问，方言族为 GENERIC）同样会折叠 `TINYINT(1)`，已按 MySQL 协议一并处理。
