@@ -95,8 +95,8 @@ public class DashboardController {
 
     /**
      * The process resources this JVM shares with every task on the server, for the dashboard
-     * card. Admin-only in {@code SecurityConfig}: these figures describe every account that
-     * shares the machine, which is why they are not attached to any one project.
+     * card. Readable by every authenticated role: these figures describe the whole machine
+     * rather than any one account, which is why they are not attached to any one project.
      */
     @GetMapping("/dashboard/process-metrics")
     @ResponseBody
