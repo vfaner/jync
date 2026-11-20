@@ -561,6 +561,25 @@ public enum DatabaseType {
         return this != MARIADB && getFamily() == DialectFamily.MYSQL;
     }
 
+    /**
+     * Whether this product's driver reports a {@code TINYINT(1)} column as a boolean even
+     * though the column is an ordinary 1-byte integer holding 0..127.
+     *
+     * <p>Connector/J's {@code tinyInt1isBit} default does this; Docker 实测 (mysql 8.4.11 +
+     * Connector/J 8.0.33) shows {@code getObject} answering {@code Boolean} while
+     * {@code getInt} answers the stored 5, and mariadb-java-client 3.5.10 reports the same
+     * column as jdbc {@code BOOLEAN}. Every MySQL-protocol preset therefore answers true,
+     * and so does Doris — it speaks the protocol through the bundled Connector/J while
+     * carrying {@link DialectFamily#GENERIC} because its DDL and upsert are its own.
+     *
+     * <p>Products whose own {@code BIT}/{@code BOOLEAN} really is 0/1 (PostgreSQL,
+     * SQL Server, H2, Oracle 23c, HANA) answer false: their boolean values must stay
+     * booleans.
+     */
+    public boolean tinyIntOneIsNumeric() {
+        return this == DORIS || getFamily() == DialectFamily.MYSQL;
+    }
+
     public static DatabaseType fromName(String name) {
         if (name == null || name.isBlank()) {
             return CUSTOM;

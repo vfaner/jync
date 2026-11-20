@@ -454,4 +454,48 @@ class TablePreviewServiceTest {
 
         assertThat(preview.rows()).containsExactly(List.of("hello"));
     }
+
+    @Test
+    void aMysqlTinyIntOneCellIsPreviewedAsItsNumberNotAsBoolean() throws Exception {
+        // Connector/J reports MySQL TINYINT(1) as BIT and answers getObject with Boolean,
+        // so a status column holding 5 would render as "true" in the preview — the user
+        // cannot tell a correct target row from one the sync collapsed, and reads false
+        // precision from the modal.
+        source.setType(DatabaseType.MYSQL);
+        source.setSchemaName("shop");
+        Connection conn = mock(Connection.class);
+        PreparedStatement ps = mock(PreparedStatement.class);
+        ResultSet rs = mock(ResultSet.class);
+        ResultSetMetaData md = mock(ResultSetMetaData.class);
+        when(conn.prepareStatement("SELECT * FROM `shop`.`SHOP_ORDER`")).thenReturn(ps);
+        when(ps.executeQuery()).thenReturn(rs);
+        when(rs.getMetaData()).thenReturn(md);
+        when(md.getColumnCount()).thenReturn(1);
+        when(md.getColumnLabel(1)).thenReturn("STATUS");
+        when(md.getColumnType(1)).thenReturn(Types.BIT);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getObject(1)).thenReturn(Boolean.TRUE);
+        when(rs.getInt(1)).thenReturn(5);
+        when(dataSourceManager.getConnection(source)).thenReturn(conn);
+
+        MetadataReader mysqlReader = mock(MetadataReader.class);
+        when(mysqlReader.supports(DatabaseType.MYSQL)).thenReturn(true);
+        when(mysqlReader.listTableNames(conn, "shop")).thenReturn(List.of("SHOP_ORDER"));
+        when(mysqlReader.listViewNames(conn, "shop")).thenReturn(List.of());
+        SqlDialect dialect = mock(SqlDialect.class);
+        when(dialect.explicitType()).thenReturn(DatabaseType.MYSQL);
+        when(dialect.family()).thenReturn(DatabaseType.DialectFamily.MYSQL);
+        when(dialect.withServerMajorVersion(null)).thenReturn(dialect);
+        when(dialect.forProduct(any())).thenReturn(dialect);
+        when(dialect.qualify("shop", "SHOP_ORDER")).thenReturn("`shop`.`SHOP_ORDER`");
+        service = new TablePreviewService(projectRepository, databaseConfigRepository,
+                dataSourceManager, new MetadataReaderFactory(List.of(mysqlReader)),
+                new SqlDialectFactory(List.of(dialect), new GenericSqlDialect()),
+                new ObjectMapper());
+
+        TablePreview preview = service.preview(1L, "shop_order",
+                TablePreviewService.Side.SOURCE);
+
+        assertThat(preview.rows()).containsExactly(List.of("5"));
+    }
 }

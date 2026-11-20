@@ -304,7 +304,9 @@ public class OracleDialect extends AbstractSqlDialect {
                 return java.sql.Types.BLOB;
             }
         }
-        return effectiveType;
+        // The shared rule keeps a MySQL-protocol TINYINT(1) numeric (SMALLINT bind); here
+        // its target column is NUMBER(5), whose range holds 0..127 unlike NUMBER(1).
+        return super.bindJdbcType(column, sourceType, effectiveType);
     }
 
     /** The declared-width categories whose target type depends on the width. */

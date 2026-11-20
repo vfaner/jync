@@ -307,8 +307,12 @@ public final class JdbcRowMapper {
                 // 8.0.33): TINYINT(1) and a genuine BIT(1) are indistinguishable in the
                 // metadata (both jdbc=BIT, typeName=BIT, precision=1), and getInt on a real
                 // BIT(1) returns the identical 0/1 — so every boolean-collapsed MySQL cell
-                // is re-read numerically. BIT(n>1) arrives as byte[] and keeps that form.
-                if (value instanceof Boolean && isMysqlFamily(sourceType)) {
+                // is re-read numerically. The same collapse exists on every MySQL-protocol
+                // product (MariaDB's driver reports it as jdbc BOOLEAN; Doris goes through
+                // Connector/J), which is what DatabaseType#tinyIntOneIsNumeric names.
+                // BIT(n>1) arrives as byte[] and keeps that form.
+                if (value instanceof Boolean && sourceType != null
+                        && sourceType.tinyIntOneIsNumeric()) {
                     value = rs.getInt(idx);
                 }
                 break;
@@ -410,12 +414,6 @@ public final class JdbcRowMapper {
     private static boolean isPostgresFamily(com.qqmu.jync.model.DatabaseType sourceType) {
         return sourceType != null
                 && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType.DialectFamily.POSTGRES;
-    }
-
-    /** MySQL-protocol sources (MySQL, MariaDB and the compatible presets). */
-    private static boolean isMysqlFamily(com.qqmu.jync.model.DatabaseType sourceType) {
-        return sourceType != null
-                && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
     }
 
     /** MySQL-protocol targets, where {@code BOOLEAN} is really {@code TINYINT(1)}. */

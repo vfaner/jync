@@ -10,11 +10,17 @@ import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.model.DatabaseType;
 
 /**
- * MySQL BIT is width-sensitive: BIT(1) is a boolean, but BIT(n&gt;1) is an n-bit unsigned
- * integer that Connector/J hands back as a byte array. Mapping every BIT to BOOLEAN (the
- * old behaviour) built BIT(8) columns as boolean and parked the baseline in the docker
- * matrix. Width bands follow the value range: 2-8 SMALLINT, 9-16 INT, 17-63 BIGINT,
- * BIT(64) needs an exact (20,0)-capable decimal since 2^64-1 overflows signed BIGINT.
+ * MySQL BIT is width-sensitive: BIT(n&gt;1) is an n-bit unsigned integer that Connector/J
+ * hands back as a byte array. Mapping every BIT to BOOLEAN (the old behaviour) built
+ * BIT(8) columns as boolean and parked the baseline in the docker matrix. Width bands
+ * follow the value range: 2-8 SMALLINT, 9-16 INT, 17-63 BIGINT, BIT(64) needs an exact
+ * (20,0)-capable decimal since 2^64-1 overflows signed BIGINT.
+ *
+ * <p>Width 1 also stays numeric on non-MySQL targets: Connector/J with tinyInt1isBit
+ * reports a MySQL {@code TINYINT(1)} and a real {@code BIT(1)} with the same metadata
+ * (jdbc BIT, type name BIT, precision 1) — verified against the real driver — so a
+ * target BOOLEAN column would silently fold 2..127 back to 1. A source that is
+ * genuinely boolean (SQL Server BIT) still maps to BOOLEAN.
  */
 class MySqlBitTypeMappingTest {
 
@@ -33,9 +39,12 @@ class MySqlBitTypeMappingTest {
     }
 
     @Test
-    void singleBitStaysBoolean() {
+    void singleBitStaysNumericOnNonMysqlTargets() {
+        // Indistinguishable from TINYINT(1) at the driver level, and either value fits.
         assertThat(postgres.mapType(bit(1), DatabaseType.MYSQL).toUpperCase())
-                .isEqualTo("BOOLEAN");
+                .isEqualTo("SMALLINT");
+        assertThat(openGauss.mapType(bit(1), DatabaseType.MYSQL).toUpperCase())
+                .isEqualTo("SMALLINT");
     }
 
     @Test

@@ -207,9 +207,14 @@ class CdcVolumeAndTypesIT extends CdcMySqlContainerHarnessIT {
      * bind turned any number into a flag. A status stored as 5 reached the target as 1 and
      * no rebaseline could repair it (2.4.3 现场反馈). Both columns here are TINYINT(1), so
      * the target metadata reports BIT and the buggy bind path is the one exercised.
+     *
+     * <p>Both legs use a value above 1 on purpose: the insert of {@code 5} is read by the
+     * baseline, and the stream update to {@code 127} is bound by CDC. Updating to {@code 0}
+     * would have passed even with the old {@code setBoolean(value != 0)} bind, because a
+     * flag write of 0 and a numeric write of 0 land the same value.
      */
     @Test void tinyint1BooleanWidthRoundTrip() {
-        roundTrip("tinyint1", "TINYINT(1)", "5", "v + 0", 5, "0", 0);
+        roundTrip("tinyint1", "TINYINT(1)", "5", "v + 0", 5, "127", 127);
     }
 
     @Test void smallintRoundTrip() {

@@ -165,11 +165,48 @@ class SqlDialectTest {
 
     @Test
     void booleanMapsToEachProductsRepresentation() {
+        // A genuine boolean source: PostgreSQL reports bool as JDBC BIT, SQL Server bit as
+        // BIT, H2 as BOOLEAN. MySQL has no boolean column type of its own — see
+        // mysqlTinyIntOneStaysNumericOnNonMysqlTargets for what its driver reports.
         ColumnMeta flag = column("active", "BOOLEAN", Types.BOOLEAN, 1);
-        assertThat(postgres.mapType(flag, DatabaseType.MYSQL)).isEqualTo("BOOLEAN");
+        assertThat(postgres.mapType(flag, DatabaseType.POSTGRESQL)).isEqualTo("BOOLEAN");
         // Oracle had no BOOLEAN column type before 23c.
-        assertThat(oracle.mapType(flag, DatabaseType.MYSQL)).isEqualTo("NUMBER(1)");
-        assertThat(sqlServer.mapType(flag, DatabaseType.MYSQL)).isEqualTo("BIT");
+        assertThat(oracle.mapType(flag, DatabaseType.POSTGRESQL)).isEqualTo("NUMBER(1)");
+        assertThat(sqlServer.mapType(flag, DatabaseType.POSTGRESQL)).isEqualTo("BIT");
+    }
+
+    /**
+     * Connector/J with {@code tinyInt1isBit} (the default) reports MySQL {@code TINYINT(1)}
+     * as BIT, but the column is an ordinary 1-byte integer holding 0..127. Docker 实测
+     * (mysql 8.4.11 + Connector/J 8.0.33, and mariadb-java-client 3.5.10 which reports it
+     * as jdbc BOOLEAN): {@code getObject} answers Boolean while {@code getInt} answers 5.
+     * Creating a genuine BOOLEAN — or Oracle's NUMBER(1), whose range is -9..9 — makes the
+     * sync write {@code true} → {@code 1} for a status of 5 (2.4.3 现场反馈). Keep the
+     * number in a one-band-wider integer unless the target is MySQL-protocol, where the
+     * boolean spelling IS TINYINT(1) and already stores the number.
+     *
+     * <p>Other products' BIT/BOOLEAN really is 0/1 (PostgreSQL bit(1), SQL Server bit, H2
+     * BOOLEAN), so their sources keep mapping to a boolean target.
+     */
+    @Test
+    void mysqlTinyIntOneStaysNumericOnNonMysqlTargets() {
+        ColumnMeta bit = column("status", "BIT", Types.BIT, 1);
+        assertThat(postgres.mapType(bit, DatabaseType.MYSQL)).isEqualTo("SMALLINT");
+        assertThat(oracle.mapType(bit, DatabaseType.MYSQL)).isEqualTo("NUMBER(5)");
+        // MySQL→MySQL keeps TINYINT(1): the same 1-byte integer, just spelled as boolean.
+        assertThat(mysql.mapType(bit, DatabaseType.MYSQL)).isEqualTo("TINYINT(1)");
+
+        // MariaDB Connector/J reports TINYINT(1) as jdbc BOOLEAN, not BIT.
+        ColumnMeta asBoolean = column("status", "BOOLEAN", Types.BOOLEAN, 1);
+        assertThat(postgres.mapType(asBoolean, DatabaseType.MARIADB)).isEqualTo("SMALLINT");
+        assertThat(mysql.mapType(asBoolean, DatabaseType.MARIADB)).isEqualTo("TINYINT(1)");
+
+        // Doris is MySQL-protocol through Connector/J but carries GENERIC as its family.
+        assertThat(postgres.mapType(bit, DatabaseType.DORIS)).isEqualTo("SMALLINT");
+
+        // Genuine 0/1 sources are untouched.
+        assertThat(postgres.mapType(bit, DatabaseType.POSTGRESQL)).isEqualTo("BOOLEAN");
+        assertThat(postgres.mapType(bit, DatabaseType.SQLSERVER)).isEqualTo("BOOLEAN");
     }
 
     @Test
@@ -750,10 +787,10 @@ class SqlDialectTest {
     // --- Defaults on mapped types -------------------------------------------------------
 
     /**
-     * Connector/J reports MySQL {@code TINYINT(1)} as a boolean, so the column becomes
-     * PostgreSQL {@code BOOLEAN} — but the MySQL default arrives as the literal {@code 0}.
-     * PostgreSQL refuses {@code BOOLEAN ... DEFAULT 0} ("default expression is of type
-     * integer"), so a numeric boolean default has to be re-rendered as a boolean literal.
+     * A genuine boolean source (SQL Server bit) becomes PostgreSQL {@code BOOLEAN} — but its
+     * default arrives as the literal {@code 0}. PostgreSQL refuses
+     * {@code BOOLEAN ... DEFAULT 0} ("default expression is of type integer"), so a numeric
+     * boolean default has to be re-rendered as a boolean literal.
      */
     @Test
     void postgresRendersIntegerDefaultsOnBooleanColumnsAsBooleanLiterals() {
@@ -771,7 +808,8 @@ class SqlDialectTest {
         table.setColumns(List.of(id, deleted, enabled));
         table.setPrimaryKeys(List.of("id"));
 
-        String ddl = postgres.getCreateTableSql(table, "s", "wcs_dev_conn_s7", DatabaseType.MYSQL);
+        String ddl = postgres.getCreateTableSql(table, "s", "wcs_dev_conn_s7",
+                DatabaseType.SQLSERVER);
 
         assertThat(ddl).contains("\"deleted\" BOOLEAN NOT NULL DEFAULT FALSE");
         assertThat(ddl).contains("\"enabled\" BOOLEAN NOT NULL DEFAULT TRUE");
@@ -793,7 +831,7 @@ class SqlDialectTest {
         flag.setDefaultValue("2");
         table.setColumns(List.of(flag));
 
-        String ddl = postgres.getCreateTableSql(table, "s", "flags", DatabaseType.MYSQL);
+        String ddl = postgres.getCreateTableSql(table, "s", "flags", DatabaseType.SQLSERVER);
 
         assertThat(ddl).contains("\"flag\" BOOLEAN NOT NULL");
         assertThat(ddl).doesNotContain("DEFAULT");
@@ -835,7 +873,10 @@ class SqlDialectTest {
         table.setColumns(List.of(flag));
 
         for (SqlDialect dialect : List.of(new OpenGaussDialect(), new GaussDbDialect())) {
-            String ddl = dialect.getCreateTableSql(table, "s", "flags", DatabaseType.MYSQL);
+            // SQL Server bit (a genuine 0/1 boolean) so the target column is BOOLEAN; a
+            // MySQL TINYINT(1) source now maps to SMALLINT and keeps DEFAULT 0.
+            String ddl = dialect.getCreateTableSql(table, "s", "flags",
+                    DatabaseType.SQLSERVER);
             assertThat(ddl).as(dialect.getClass().getSimpleName())
                     .contains("BOOLEAN NOT NULL DEFAULT FALSE");
         }

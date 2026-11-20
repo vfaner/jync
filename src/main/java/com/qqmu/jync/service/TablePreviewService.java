@@ -226,6 +226,16 @@ public class TablePreviewService {
             Object value = sourceType == DatabaseType.TDENGINE
                     && meta.getColumnType(i) == java.sql.Types.VARCHAR
                     ? rs.getString(i) : rs.getObject(i);
+            // Connector/J with tinyInt1isBit (the default) reports MySQL TINYINT(1) as BIT
+            // and answers getObject with Boolean, so a status cell holding 5 renders as
+            // "true" — the modal would hide whether the sync wrote the right value at all.
+            // Re-read it numerically, exactly like JdbcRowMapper does for the sync paths.
+            // DatabaseType#tinyIntOneIsNumeric also covers the MySQL-protocol presets
+            // whose driver reports the column as BOOLEAN (MariaDB) and Doris.
+            if (value instanceof Boolean && sourceType != null
+                    && sourceType.tinyIntOneIsNumeric()) {
+                value = rs.getInt(i);
+            }
             row.add(format(value));
         }
         return row;

@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.converter.OracleDialect;
+import com.qqmu.jync.service.converter.PostgresDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.lob.LobBinder;
 
@@ -162,6 +163,27 @@ class EtlRunnerLobBindTest {
 
         assertThat(bindTypes(columns, DatabaseType.MYSQL, new MySqlDialect()))
                 .containsExactly(Types.LONGVARCHAR);
+    }
+
+    /**
+     * ETL types its placeholders from the SOURCE column, so a MySQL TINYINT(1) — reported as
+     * BIT — would reach the binder as boolean even after structure sync created a numeric
+     * target column, and the binder would turn a status of 5 into {@code true}. The bind
+     * type has to follow the same mapping the target DDL used.
+     */
+    @Test
+    void aMysqlTinyIntOneSourceColumnBindsNumericallyOnANonMysqlTarget() {
+        List<EtlSourceColumn> columns = List.of(
+                new EtlSourceColumn("status", Types.BIT, "BIT", 1, null, true));
+
+        assertThat(bindTypes(columns, DatabaseType.MYSQL, new PostgresDialect()))
+                .containsExactly(Types.SMALLINT);
+        assertThat(bindTypes(columns, DatabaseType.MYSQL, new OracleDialect()))
+                .containsExactly(Types.SMALLINT);
+        // A MySQL-protocol target keeps TINYINT(1); the binder already sends the number
+        // through unchanged for that family.
+        assertThat(bindTypes(columns, DatabaseType.MYSQL, new MySqlDialect()))
+                .containsExactly(Types.BIT);
     }
 
     private static List<Integer> bindTypes(List<EtlSourceColumn> columns,

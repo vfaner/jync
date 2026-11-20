@@ -183,8 +183,10 @@ class MysqlToOpenGaussIT extends CdcMySqlContainerHarnessIT {
                     + " 18446744073709551615)");
         }
         try (Connection tgt = targetJdbc(); Statement st = tgt.createStatement()) {
-            // 预期映射:YEAR→INT,JSON/ENUM/SET→TEXT,BIT→SMALLINT,TINYINT(1)→BOOLEAN
-            // (Connector/J tinyInt1isBit 默认),UNSIGNED BIGINT→NUMERIC(20)。
+            // 目标表由测试手工建立,刻意把 TINYINT(1) 建成严格的 BOOLEAN(用户自建表的
+            // 场景);Jync 自己的结构同步现在会把它建成 SMALLINT,保留 2..127。这里值
+            // 只取 1,所以布尔目标能原样收下。其余映射:YEAR→INT,JSON/ENUM/SET→TEXT,
+            // BIT→SMALLINT,UNSIGNED BIGINT→NUMERIC(20)。
             st.execute("DROP TABLE IF EXISTS og_mytypes");
             st.execute("CREATE TABLE og_mytypes (id INT PRIMARY KEY,"
                     + " c_year INT, c_json TEXT, c_enum VARCHAR(8),"

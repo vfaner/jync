@@ -137,6 +137,36 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                 || n.contains("geometry") || n.contains("geography") || n.contains("bytea");
     }
 
+    /**
+     * Whether a source column that arrives as BIT/BOOLEAN is really a MySQL-protocol
+     * {@code TINYINT(1)} that has to be created and bound numerically. A MySQL-protocol
+     * target is excluded: its boolean spelling already is {@code TINYINT(1)}.
+     *
+     * <p>Shared by the DDL mapping and {@link #bindJdbcType}: ETL types its placeholders
+     * from the source column, so the two drifting apart would create a SMALLINT column and
+     * then hand it a boolean parameter.
+     */
+    protected final boolean keepsTinyIntOneNumeric(DatabaseType sourceType) {
+        return sourceType != null && sourceType.tinyIntOneIsNumeric()
+                && family() != DatabaseType.DialectFamily.MYSQL;
+    }
+
+    /**
+     * The bind type for a column the target DDL created through {@link #mapType}. Dialects
+     * whose placeholders carry no extra typing keep the caller's effective type, except for
+     * the MySQL-protocol {@code TINYINT(1)} source, whose column is numeric even though its
+     * source metadata says BIT/BOOLEAN.
+     */
+    @Override
+    public int bindJdbcType(ColumnMeta column, DatabaseType sourceType, int effectiveType) {
+        if ((effectiveType == Types.BIT || effectiveType == Types.BOOLEAN)
+                && column != null && column.getSize() != null && column.getSize() <= 1
+                && keepsTinyIntOneNumeric(sourceType)) {
+            return Types.SMALLINT;
+        }
+        return effectiveType;
+    }
+
     /** Maps by {@link Types} category; returns null when the category is unknown. */
     protected String mapByJdbcType(ColumnMeta c, DatabaseType sourceType) {
         // A vendor type name or code canonicalizes first: the switch below only knows the
@@ -190,9 +220,21 @@ public abstract class AbstractSqlDialect implements SqlDialect {
                     }
                     return decimalType(c, sourceType);
                 }
+                // MySQL-protocol TINYINT(1) arrives here as BIT(1) but is a 1-byte integer
+                // (see DatabaseType#tinyIntOneIsNumeric). A genuine BOOLEAN — or Oracle's
+                // NUMBER(1), whose range is -9..9 — would discard 2..127 and land a status
+                // of 5 as true/1 (2.4.3 现场反馈). Keep the number on targets that are not
+                // MySQL-protocol; there booleanType() already IS TINYINT(1).
+                if (keepsTinyIntOneNumeric(sourceType)) {
+                    return smallIntType();
+                }
                 return booleanType();
             }
             case Types.BOOLEAN:
+                // MariaDB Connector/J reports TINYINT(1) as jdbc BOOLEAN rather than BIT.
+                if (keepsTinyIntOneNumeric(sourceType)) {
+                    return smallIntType();
+                }
                 return booleanType();
             case Types.TINYINT:
                 return tinyIntType();

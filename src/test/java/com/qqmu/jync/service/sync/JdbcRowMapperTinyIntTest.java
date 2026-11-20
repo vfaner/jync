@@ -75,6 +75,22 @@ class JdbcRowMapperTinyIntTest {
         verify(rs, never()).getInt(anyInt());
     }
 
+    /**
+     * Doris speaks the MySQL wire protocol through Connector/J but carries GENERIC as its
+     * dialect family (its DDL/upsert differ from MySQL's). Its TINYINT(1) is the same
+     * 1-byte integer, so the write-side family rule must not lose it on the read.
+     */
+    @Test
+    void dorisTinyIntOneReadsTheNumberNotTheBoolean() throws Exception {
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.getObject(1)).thenReturn(Boolean.TRUE);
+        when(rs.getInt(1)).thenReturn(5);
+
+        Object value = JdbcRowMapper.readValue(rs, 1, Types.BIT, "BIT", DatabaseType.DORIS);
+
+        assertEquals(5, value);
+    }
+
     @Test
     void numberBindsVerbatimToMysqlTinyIntOneTarget() throws Exception {
         PreparedStatement ps = mock(PreparedStatement.class);
