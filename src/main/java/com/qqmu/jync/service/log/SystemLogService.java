@@ -10,7 +10,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -339,12 +338,7 @@ public class SystemLogService {
     }
 
     private static LogFile toLogFile(Path path) {
-        try {
-            return new LogFile(path.getFileName().toString(), Files.size(path),
-                    Instant.ofEpochMilli(Files.getLastModifiedTime(path).toMillis()));
-        } catch (IOException ex) {
-            return new LogFile(path.getFileName().toString(), -1L, Instant.EPOCH);
-        }
+        return new LogFile(path.getFileName().toString());
     }
 
     private Path logDir() {
@@ -361,25 +355,13 @@ public class SystemLogService {
     /** One readable log file, as the page's selector shows it. */
     public static final class LogFile {
         private final String name;
-        private final long size;
-        private final Instant modified;
 
-        public LogFile(String name, long size, Instant modified) {
+        public LogFile(String name) {
             this.name = name;
-            this.size = size;
-            this.modified = modified;
         }
 
         public String getName() {
             return name;
-        }
-
-        public long getSize() {
-            return size;
-        }
-
-        public Instant getModified() {
-            return modified;
         }
     }
 

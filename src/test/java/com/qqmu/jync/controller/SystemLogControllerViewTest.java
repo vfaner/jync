@@ -6,7 +6,6 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
@@ -45,9 +44,8 @@ class SystemLogControllerViewTest {
     @BeforeEach
     void setUp() {
         List<SystemLogService.LogFile> files = List.of(
-                new SystemLogService.LogFile("jync.log", 1024, Instant.parse("2026-10-23T10:00:00Z")),
-                new SystemLogService.LogFile("jync.log.2026-10-01.0.gz", 2048,
-                        Instant.parse("2026-10-01T10:00:00Z")));
+                new SystemLogService.LogFile("jync.log"),
+                new SystemLogService.LogFile("jync.log.2026-10-01.0.gz"));
         when(logService.listFiles()).thenReturn(files);
         when(logService.query(any(), any(), any())).thenReturn(
                 new SystemLogService.LogQueryResult(
