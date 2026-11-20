@@ -90,9 +90,72 @@ class SupportAssistantServiceTest {
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("订单同步在跑吗"), sink);
 
-        assertThat(sink.events).containsExactly("delta:我先查",
+        // 模型在调用工具的同一轮里写的过程旁白是废话（界面已有工具进度行），不给用户看。
+        assertThat(sink.events).containsExactly(
                 "tool:QUEUED:project_status", "tool:RUNNING:project_status",
                 "tool:DONE:project_status", "delta:它在跑");
+    }
+
+    /**
+     * 流式返回的过程旁白同样不能漏出去：它在工具调用之前就到达浏览器，用户先看到一句
+     * 「我先核对任务，再取证据。」，随后才出现工具进度行，正是现场反馈的废话。
+     */
+    @Test
+    void streamedToolRoundNarrationIsHeldBackToo() {
+        AiChatClient.ToolCall call =
+                new AiChatClient.ToolCall("call_1", "project_status", "{\"projectId\":7}");
+        java.util.concurrent.atomic.AtomicInteger rounds =
+                new java.util.concurrent.atomic.AtomicInteger();
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(inv -> {
+                    java.util.function.Consumer<String> stream = inv.getArgument(6);
+                    if (rounds.getAndIncrement() == 0) {
+                        stream.accept("我先核对");
+                        stream.accept("任务，再取证据。");
+                        return new AiChatClient.ToolChatResult(
+                                true, "OK", "", List.of(call), "", 1, false);
+                    }
+                    stream.accept("订单同步");
+                    stream.accept("正在运行。");
+                    return new AiChatClient.ToolChatResult(
+                            true, "OK", "", List.of(), "", 1, false);
+                });
+        when(registry.execute(any(), any(), any())).thenReturn("{\"running\":true}");
+        when(registry.isError(any())).thenReturn(false);
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("订单同步在跑吗"), sink);
+
+        assertThat(sink.events).noneMatch(e -> e.contains("我先核对"));
+        assertThat(sink.events).contains("delta:订单同步正在运行。");
+    }
+
+    /**
+     * 抑制旁白不能把长回答也一起吞掉：超过一小段后照常流式下发，用户不必等整段生成完。
+     */
+    @Test
+    void aLongAnswerStillStreamsThroughInFull() {
+        String first = "一".repeat(200);
+        String second = "二".repeat(200);
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(inv -> {
+                    java.util.function.Consumer<String> stream = inv.getArgument(6);
+                    stream.accept(first);
+                    stream.accept(second);
+                    return new AiChatClient.ToolChatResult(
+                            true, "OK", "", List.of(), "", 1, false);
+                });
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("帮我总结一下"), sink);
+
+        List<String> deltas = sink.events.stream()
+                .filter(e -> e.startsWith("delta:"))
+                .map(e -> e.substring("delta:".length()))
+                .toList();
+        assertThat(String.join("", deltas)).isEqualTo(first + second);
+        // 超过阈值后边生成边下发，而不是攒到最后一次性给出。
+        assertThat(deltas).hasSizeGreaterThan(1);
     }
 
     /**
@@ -209,6 +272,50 @@ class SupportAssistantServiceTest {
     }
 
     /**
+     * 用户常整段粘贴报错日志，异常行在末尾。旧逻辑只保留前 4000 字，把异常无声截掉
+     * （前端 maxlength 也一样）；现在超长消息保留开头与结尾、标注省略，并提示用户，
+     * 模型才有机会看到真正的报错行。
+     */
+    @Test
+    void aPastedLogKeepsItsHeadAndTailAndSaysWhatWasOmitted() {
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(new AiChatClient.ToolChatResult(
+                        true, "OK", "已分析", List.of(), "", 1, false));
+        String log = "H".repeat(6_000) + "M".repeat(3_000) + "T".repeat(2_000);
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask(log), sink);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
+        verify(chat).converseStream(any(), any(), any(), turns.capture(), any(), anyInt(), any());
+        String sent = turns.getValue().get(0).content();
+        assertThat(sent).startsWith("HHHH").endsWith("TTTT")
+                .contains("已省略")
+                .doesNotContain("MMMM");
+        assertThat(sink.events).anyMatch(e -> e.startsWith("delta:")
+                && e.contains("已保留开头与结尾"));
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    @Test
+    void theSystemPromptExplainsHowToUseAPastedLog() {
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(new AiChatClient.ToolChatResult(
+                        true, "OK", "hi", List.of(), "", 1, false));
+
+        service().ask(actor, "zh", ask("hi"), new Recorder());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        verify(chat).converseStream(any(), any(), system.capture(), any(), any(), anyInt(), any());
+        assertThat(system.getValue())
+                .contains("粘贴")
+                .contains("已省略")
+                .contains("不要复述");
+    }
+
+    /**
      * The assistant may prepare a write but never perform it: the control tool's token becomes
      * a card the human must click, exactly like the project draft.
      */
@@ -231,7 +338,8 @@ class SupportAssistantServiceTest {
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("把订单同步停掉"), sink);
 
-        assertThat(sink.events).containsExactly("delta:我来准备",
+        // 「我来准备」是工具轮的过程旁白，不发给用户；卡片之后的说明才是可见正文。
+        assertThat(sink.events).containsExactly(
                 "tool:QUEUED:control_project", "tool:RUNNING:control_project",
                 "tool:DONE:control_project", "delta:请在卡片上确认", "action:tok");
     }
@@ -319,7 +427,97 @@ class SupportAssistantServiceTest {
                 .contains("我先核对任务，再取证据。")
                 .anyMatch(text -> text.contains("不要只说明计划"));
         assertThat(sink.events).contains("delta:当前没有告警。");
+        // 被纠偏的计划句只进历史，用户不该看到它——否则还是先看到一句空话。
+        assertThat(sink.events).noneMatch(e -> e.contains("我先核对任务"));
         assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    /**
+     * 工具已经用过一轮后，模型仍可能回一句「稍等，我再查一下。」就结束本轮。旧逻辑只在
+     * 从未用过工具时纠偏，这种句子会被当成最终答案——用户只看到过渡句。纠偏同样要生效。
+     */
+    @Test
+    void aPlanOnlySentenceAfterAToolRoundIsNudgedInsteadOfEnding() {
+        AiChatClient.ToolCall call = new AiChatClient.ToolCall("c1", "search_docs", "{}");
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(true, "OK", "", List.of(call),
+                                "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "稍等，我再查一下。",
+                                List.of(), "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "结论：没有异常。",
+                                List.of(), "", 1, false));
+        when(registry.execute(any(), any(), any())).thenReturn("{}");
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("订单同步有没有异常"), sink);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
+        verify(chat, times(3)).converseStream(any(), any(), any(), turns.capture(), any(),
+                anyInt(), any());
+        assertThat(turns.getAllValues().get(2))
+                .extracting(AiChatClient.Turn::content)
+                .anyMatch(text -> text != null && text.contains("不要只说明计划"));
+        assertThat(sink.events).contains("delta:结论：没有异常。");
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    /**
+     * 模型偶尔返回空正文：旧逻辑直接当成成功结束，用户拿到一个空气泡。现在先纠偏一次；
+     * 仍然为空就明确告知，而不是静默。
+     */
+    @Test
+    void anEmptyReplyIsNudgedOnceAndThenReported() {
+        AiChatClient.ToolChatResult blank = new AiChatClient.ToolChatResult(
+                true, "OK", "", List.of(), "", 1, false);
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(blank, blank);
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("hi"), sink);
+
+        verify(chat, times(2)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+        assertThat(sink.events).contains("error:error.support.noAnswer");
+    }
+
+    @Test
+    void anEmptyReplyFollowedByAnAnswerSucceeds() {
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(
+                                true, "OK", "", List.of(), "", 1, false),
+                        new AiChatClient.ToolChatResult(
+                                true, "OK", "当前没有告警。", List.of(), "", 1, false));
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("现在有告警吗"), sink);
+
+        assertThat(sink.events).contains("delta:当前没有告警。");
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    /**
+     * 收束轮也可能空手而归（模型只返回工具调用或空正文）。此时不能静默结束。
+     */
+    @Test
+    void anEmptySynthesisIsReportedInsteadOfEndingSilently() {
+        AiChatClient.ToolCall call = new AiChatClient.ToolCall("c", "search_docs", "{}");
+        AiChatClient.ToolChatResult toolRound = new AiChatClient.ToolChatResult(
+                true, "OK", "", List.of(call), "", 1, false);
+        java.util.concurrent.atomic.AtomicInteger calls =
+                new java.util.concurrent.atomic.AtomicInteger();
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(inv -> calls.getAndIncrement() < SupportAssistantService.MAX_ROUNDS
+                        ? toolRound
+                        : new AiChatClient.ToolChatResult(
+                                true, "OK", "", List.of(), "", 1, false));
+        when(registry.execute(any(), any(), any())).thenReturn("{}");
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("hi"), sink);
+
+        assertThat(sink.events).contains("error:error.support.noAnswer");
     }
 
     @Test
@@ -357,6 +555,9 @@ class SupportAssistantServiceTest {
         assertThat(SupportAssistantService.isPlanOnly("让我看一下位点")).isTrue();
         assertThat(SupportAssistantService.isPlanOnly("稍等，我查一下")).isTrue();
         assertThat(SupportAssistantService.isPlanOnly("接下来调用诊断工具")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("我这就查一下")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("我马上核对位点")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("请稍候，正在取数")).isTrue();
         assertThat(SupportAssistantService.isPlanOnly("Let me check the project status.")).isTrue();
         assertThat(SupportAssistantService.isPlanOnly("任务正在运行。")).isFalse();
         assertThat(SupportAssistantService.isPlanOnly("任务准备完成。")).isFalse();
@@ -480,6 +681,50 @@ class SupportAssistantServiceTest {
                 .contains("查询那一刻的快照")
                 .contains("error.support.tooManyQuestions")
                 .contains("batchId");
+    }
+
+    /**
+     * 现场反馈「不会说废话」：开场白、复述问题、过程旁白、结尾客套都要在提示词里禁掉，
+     * 否则模型即使结论正确也会先铺陈三句。简单问题必须允许一两句答完。
+     */
+    @Test
+    void theSystemPromptBansFillerOpenersClosersAndProcessNarration() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("不写「好的」「当然」「没问题」")
+                .contains("不复述用户的问题")
+                .contains("不写过程旁白")
+                .contains("不写结尾客套")
+                .contains("一句话能答完就只写一句");
+    }
+
+    /**
+     * 工具轮次用尽后的收束轮是最容易说废话的地方（「根据以上查询结果」「轮次已达上限」），
+     * 这一次调用要额外带上收束要求。
+     */
+    @Test
+    void theSynthesisRoundAsksForAFinalAnswerWithoutProcessTalk() {
+        AiChatClient.ToolCall call = new AiChatClient.ToolCall("c", "search_docs", "{}");
+        AiChatClient.ToolChatResult toolRound = new AiChatClient.ToolChatResult(
+                true, "OK", "", List.of(call), "", 1, false);
+        AiChatClient.ToolChatResult summary = new AiChatClient.ToolChatResult(
+                true, "OK", "汇总", List.of(), "", 1, false);
+        int budget = SupportAssistantService.MAX_ROUNDS;
+        java.util.concurrent.atomic.AtomicInteger calls =
+                new java.util.concurrent.atomic.AtomicInteger();
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenAnswer(inv -> calls.getAndIncrement() < budget ? toolRound : summary);
+        when(registry.execute(any(), any(), any())).thenReturn("{}");
+
+        service().ask(actor, "zh", ask("hi"), new Recorder());
+
+        ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
+        verify(chat, times(budget + 1)).converseStream(any(), any(), system.capture(), any(),
+                any(), anyInt(), any());
+        assertThat(system.getAllValues().get(budget))
+                .startsWith(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("本轮请直接给出最终回答");
+        assertThat(system.getAllValues().get(0))
+                .isEqualTo(SupportAssistantService.SYSTEM_PROMPT);
     }
 
     @Test

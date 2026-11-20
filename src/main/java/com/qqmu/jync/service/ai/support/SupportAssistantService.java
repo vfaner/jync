@@ -41,7 +41,14 @@ public class SupportAssistantService {
     static final int MAX_ROUNDS = 8;
     static final int MAX_TOOLS_PER_ROUND = 4;
     static final int MAX_HISTORY = 12;
-    static final int MAX_MESSAGE_CHARS = 4_000;
+    /**
+     * A pasted error log frequently has the exception on its last lines, so an over-long
+     * message keeps both ends instead of only its head (旧行为是 substring(0, 4000)，异常
+     * 行被无声截掉). The omitted middle is replaced by a marker the model can see.
+     */
+    static final int MAX_MESSAGE_CHARS = 8_000;
+    static final int MESSAGE_HEAD_CHARS = 6_000;
+    static final int MESSAGE_TAIL_CHARS = MAX_MESSAGE_CHARS - MESSAGE_HEAD_CHARS;
     static final int MAX_HISTORY_CHARS = 12_000;
     /** Must stay below the controller's emitter timeout, which is the last-resort net. */
     static final long TOTAL_BUDGET_MS = 150_000L;
@@ -54,6 +61,24 @@ public class SupportAssistantService {
     static final String NUDGE_EN =
             "Do not reply with a plan only. Call the appropriate tool now, then answer from "
                     + "the evidence; if no tool is needed, answer directly.";
+
+    /**
+     * 收束轮的额外要求。工具轮次用尽时最容易冒出的废话是「根据以上查询结果」「已达轮次
+     * 上限」这类过程说明，最终回答要直接从结论开始。
+     */
+    static final String SYNTHESIS_ZH =
+            "本轮请直接给出最终回答：基于上面已经取到的结果，第一句就是结论；"
+                    + "不要再调用工具，也不要说明查询过程、轮次或预算。信息不足就明确说缺什么。";
+    static final String SYNTHESIS_EN =
+            "Give the final answer now: start with the conclusion, using the results already "
+                    + "gathered. Do not call tools or talk about the lookup process, rounds or "
+                    + "budget. If evidence is missing, say exactly what is missing.";
+
+    /**
+     * 一轮正文在用户端延迟下发的阈值：短正文先攒着，本轮结束时再决定发不发；超过这个
+     * 长度就边生成边发，长回答不必等整段生成完。
+     */
+    static final int STREAM_RELEASE_CHARS = 160;
 
     static final String SYSTEM_PROMPT = """
             你是 Jync（捷同，数据库实时同步工具）的运维助手，面向管理员与运维人员。
@@ -157,7 +182,19 @@ public class SupportAssistantService {
                   一次）。
                5. 证据不足时只问一个最具体的问题（哪张表、源端是否删过数据、报表是否外部生成），
                   不要罗列可能性让用户自己挑。
+               6. 用户粘贴的报错或运行日志按用户提供的证据分析：引用其中的异常类名、错误码或
+                  关键行，不编造日志里没有的内容；出现「已省略」标记说明日志被截断，指出缺少
+                  的部分并请用户单独粘贴关键行；日志里出现密码、连接串或用户名时不要复述；
+                  日志点名的任务再用对应诊断工具核对一次。
             五、回答格式
+               - 第一句直接给答案：结论或直接回复。不写「好的」「当然」「没问题」「让我看看」
+                 「这是您要的答案」这类开场白，不复述用户的问题，不介绍自己接下来要做什么。
+               - 不写过程旁白：界面已经在显示调用了哪些工具，不要再说「我先查一下」「正在
+                 查询」「已经查完」，也不要用「根据以上查询结果」起头。
+               - 不写结尾客套：不写「希望有帮助」「如有其他问题随时问我」「如需进一步帮助，
+                 请告诉我」。
+               - 一句话能答完就只写一句；简单查询 1–3 句，只有诊断类问题才用「结论 → 依据 →
+                 建议 → 可执行项」。不重复上一轮已经说过的事实，不把工具结果再抄一遍。
                - 先给结论、再列依据（结论只能来自本轮工具结果），用短段落与要点；两项以上
                  对比用表格。通常不超过 300 字，用户要求细节时再展开。
                - 工具返回空列表：明确说「没有查到 / 当前没有」，不要猜。
@@ -227,10 +264,14 @@ public class SupportAssistantService {
                 sink.error("error.ai.disabled");
                 return;
             }
-            String message = normalize(request == null ? null : request.message());
-            if (message == null) {
+            NormalizedMessage normalized = normalize(request == null ? null : request.message());
+            if (normalized == null) {
                 sink.error("error.support.empty");
                 return;
+            }
+            String message = normalized.text();
+            if (normalized.truncated()) {
+                sink.delta(truncationNote(language));
             }
             List<AiChatClient.Turn> turns = history(request.history());
             turns.add(AiChatClient.Turn.user(message));
@@ -249,13 +290,10 @@ public class SupportAssistantService {
                     sink.error("error.support.timeout");
                     return;
                 }
-                boolean[] streamed = new boolean[1];
+                RoundText answer = new RoundText(sink);
                 AiChatClient.ToolChatResult result = chat.converseStream(provider,
                         providers.decryptKey(provider), SYSTEM_PROMPT, turns, tools, 1_024,
-                        text -> {
-                            streamed[0] = true;
-                            sink.delta(text);
-                        });
+                        answer::onDelta);
                 if (!result.success() && result.toolUnsupported() && toolMode) {
                     // Degrade: retry once without tools. Tool-shaped turns from an earlier
                     // round cannot be sent to a model that has no concept of tools, but the
@@ -280,26 +318,42 @@ public class SupportAssistantService {
                     sink.error("error.ai.requestFailed", result.message());
                     return;
                 }
-                if (!streamed[0] && result.text() != null && !result.text().isEmpty()) {
+                if (!answer.seen() && result.text() != null && !result.text().isEmpty()) {
                     // A provider that answered in one buffered body never called the consumer;
                     // the text must still reach the browser.
-                    sink.delta(result.text());
+                    answer.onDelta(result.text());
                 }
                 if (result.toolCalls().isEmpty()) {
-                    if (toolMode && !nudged && usedTools.isEmpty()
-                            && isPlanOnly(result.text())) {
+                    boolean blank = answer.isBlank();
+                    if (toolMode && !nudged && (blank || isPlanOnly(answer.text()))) {
                         // 现场反馈：模型只回「我先核对任务，再取证据。」就结束本轮，用户
                         // 看到的是空话。纠偏一次，并把这一轮还给模型——重试不占工具轮次。
+                        // 用过工具后同样纠偏：工具轮之后回一句「稍等，我再查一下」也是
+                        // 过渡句，不能当成最终答案；空正文也要纠偏，否则用户拿到空气泡。
+                        // 这句计划句只进历史，不发给用户：纠偏之后还会有真正的结论。
                         nudged = true;
-                        turns.add(AiChatClient.Turn.assistant(result.text(), List.of()));
+                        if (!blank) {
+                            turns.add(AiChatClient.Turn.assistant(answer.text(), List.of()));
+                        }
                         turns.add(AiChatClient.Turn.user(nudgeInstruction(language)));
                         round--;
                         continue;
                     }
+                    if (blank) {
+                        // 纠偏也只回了空内容：明确告知，不要让一次提问静默结束。
+                        sink.error("error.support.noAnswer");
+                        return;
+                    }
+                    // 这是给用户看的回答：整轮攒下的正文在这里一次下发（长正文已提前下发）。
+                    answer.release();
                     ok = true;
                     break;
                 }
-                turns.add(AiChatClient.Turn.assistant(result.text(), result.toolCalls()));
+                // 工具轮的正文只是过程旁白（「我先核对任务」），界面已有工具进度行，
+                // 不再发给用户；保留进历史，模型后续轮次仍能看到自己说过什么。
+                String narration = result.text() == null || result.text().isBlank()
+                        ? answer.text() : result.text();
+                turns.add(AiChatClient.Turn.assistant(narration, result.toolCalls()));
                 // 先把这一轮真正会执行的调用全部报成「等待进行」，浏览器才有队列可看；
                 // 超出单轮上限的调用不执行，也不占进度行。
                 for (int i = 0; i < Math.min(result.toolCalls().size(), MAX_TOOLS_PER_ROUND); i++) {
@@ -348,8 +402,9 @@ public class SupportAssistantService {
                     }
                     boolean[] finalStreamed = new boolean[1];
                     AiChatClient.ToolChatResult summary = chat.converseStream(provider,
-                            providers.decryptKey(provider), SYSTEM_PROMPT, turns, List.of(),
-                            1_024, text -> {
+                            providers.decryptKey(provider),
+                            SYSTEM_PROMPT + "\n" + synthesisInstruction(language),
+                            turns, List.of(), 1_024, text -> {
                                 finalStreamed[0] = true;
                                 sink.delta(text);
                             });
@@ -358,8 +413,12 @@ public class SupportAssistantService {
                         sink.error("error.ai.requestFailed", summary.message());
                         return;
                     }
-                    if (!finalStreamed[0] && summary.text() != null
-                            && !summary.text().isEmpty()) {
+                    if (!finalStreamed[0]) {
+                        if (summary.text() == null || summary.text().isBlank()) {
+                            // 收束轮空手而归：静默结束会让用户看到空气泡。
+                            sink.error("error.support.noAnswer");
+                            return;
+                        }
                         sink.delta(summary.text());
                     }
                     ok = true;
@@ -408,7 +467,7 @@ public class SupportAssistantService {
             }
         }
         for (String marker : new String[] {"我先", "让我", "稍等", "待我", "接下来",
-                "我现在"}) {
+                "我现在", "我这就", "我马上", "请稍候"}) {
             if (trimmed.startsWith(marker)) {
                 return true;
             }
@@ -425,6 +484,70 @@ public class SupportAssistantService {
 
     private static String nudgeInstruction(String language) {
         return language != null && language.startsWith("en") ? NUDGE_EN : NUDGE_ZH;
+    }
+
+    private static String synthesisInstruction(String language) {
+        return language != null && language.startsWith("en") ? SYNTHESIS_EN : SYNTHESIS_ZH;
+    }
+
+    /**
+     * 一轮回答的正文，先攒后发。
+     *
+     * <p>模型常在同一轮里先说一句「我先核对任务，再取证据。」再发起工具调用；这句话在
+     * 流式模式下已经到达浏览器，用户看到的就是废话。本轮结束时才知道它是不是最终回答：
+     * 有工具调用或需要纠偏就整段丢弃，只有真正的回答才 {@link #release()}。超过
+     * {@link #STREAM_RELEASE_CHARS} 的正文边生成边下发，长回答不会因此变慢。
+     */
+    private static final class RoundText {
+        private final SupportSink sink;
+        private final StringBuilder all = new StringBuilder();
+        private final StringBuilder pending = new StringBuilder();
+        private boolean released;
+
+        RoundText(SupportSink sink) {
+            this.sink = sink;
+        }
+
+        void onDelta(String text) {
+            if (text == null || text.isEmpty()) {
+                return;
+            }
+            all.append(text);
+            if (released) {
+                sink.delta(text);
+                return;
+            }
+            pending.append(text);
+            if (pending.length() > STREAM_RELEASE_CHARS) {
+                released = true;
+                sink.delta(pending.toString());
+                pending.setLength(0);
+            }
+        }
+
+        boolean seen() {
+            return all.length() > 0;
+        }
+
+        /** 以整轮累计的正文判断，不能只看还没下发的部分。 */
+        boolean isBlank() {
+            return all.toString().isBlank();
+        }
+
+        String text() {
+            return all.toString();
+        }
+
+        void release() {
+            if (released) {
+                return;
+            }
+            released = true;
+            if (!pending.isEmpty()) {
+                sink.delta(pending.toString());
+                pending.setLength(0);
+            }
+        }
     }
 
     /** 个别兼容端点不回调用 id；浏览器按 id 找进度行，缺了就用「名字#序号」兜底。 */
@@ -471,7 +594,7 @@ public class SupportAssistantService {
         return turns;
     }
 
-    private String normalize(String message) {
+    private NormalizedMessage normalize(String message) {
         if (message == null) {
             return null;
         }
@@ -479,8 +602,26 @@ public class SupportAssistantService {
         if (text.isEmpty()) {
             return null;
         }
-        return text.length() > MAX_MESSAGE_CHARS
-                ? text.substring(0, MAX_MESSAGE_CHARS) : text;
+        if (text.length() <= MAX_MESSAGE_CHARS) {
+            return new NormalizedMessage(text, false);
+        }
+        // 保留首尾：报错日志的异常行通常在末尾，整段头部会让模型看不到真正的错误。
+        int omitted = text.length() - MESSAGE_HEAD_CHARS - MESSAGE_TAIL_CHARS;
+        String kept = text.substring(0, MESSAGE_HEAD_CHARS)
+                + "\n…[中间 " + omitted + " 字符已省略]…\n"
+                + text.substring(text.length() - MESSAGE_TAIL_CHARS);
+        return new NormalizedMessage(kept, true);
+    }
+
+    private static String truncationNote(String language) {
+        return language != null && language.startsWith("en")
+                ? "(The log was long, so its beginning and end were kept; paste the failing "
+                        + "lines separately if the middle is missing.)\n\n"
+                : "（日志较长，已保留开头与结尾；如缺少关键行，请单独粘贴报错行。）\n\n";
+    }
+
+    /** A user message after trimming, plus whether an over-long log lost its middle. */
+    private record NormalizedMessage(String text, boolean truncated) {
     }
 
     private void emitDraft(String resultJson, SupportSink sink) {
