@@ -955,6 +955,14 @@ public class UpgradeService {
             sb.append("  for i in $(seq 1 15); do\n");
             sb.append("    if kill -0 \"$NEW_PID\" 2>/dev/null; then sleep 1; else break; fi\n");
             sb.append("  done\n");
+            // A JVM parked in a shutdown hook can outlast the bounded wait. Escalate rather than
+            // roll back around a live process: SIGKILL cannot be deferred, and H2 recovers from
+            // a hard stop the same way it recovers from power loss.
+            sb.append("  if kill -0 \"$NEW_PID\" 2>/dev/null; then\n");
+            sb.append("    log \"new process $NEW_PID ignored SIGTERM for 15s; killing -9\"\n");
+            sb.append("    kill -9 \"$NEW_PID\" 2>/dev/null\n");
+            sb.append("    sleep 1\n");
+            sb.append("  fi\n");
             sb.append("  rollback \"new process never became ready on port ")
                     .append(spec.port()).append("\" || true\n");
             sb.append("fi\n");
@@ -1023,6 +1031,9 @@ public class UpgradeService {
             // Stop-Process returns before the process is actually gone; the rollback relaunch
             // must wait or both instances race for the same ./data H2 store.
             sb.append("  $proc.WaitForExit(15000) | Out-Null\n");
+            // The bounded wait can time out with the process still up; kill it outright so the
+            // rollback never relaunches the backup jar beside a live new instance.
+            sb.append("  if (-not $proc.HasExited) { $proc.Kill(); $proc.WaitForExit(5000) | Out-Null }\n");
             sb.append("  Rollback 'new process never became ready'\n");
             sb.append("}\n");
         } else {

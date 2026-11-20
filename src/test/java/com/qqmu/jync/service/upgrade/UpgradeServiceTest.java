@@ -904,6 +904,10 @@ class UpgradeServiceTest {
         assertThat(between).contains("kill -0 \"$NEW_PID\"");
         assertThat(between).contains("seq 1 15");
         assertThat(between).contains("sleep 1");
+        // A JVM stuck in a shutdown hook ignores SIGTERM for longer than the bounded wait. The
+        // rollback relaunch must not assume the process is gone by then: SIGKILL it first, or
+        // the backup jar ends up beside a live new instance on the same H2 store.
+        assertThat(between).contains("kill -9 \"$NEW_PID\"");
     }
 
     @Test
@@ -920,6 +924,9 @@ class UpgradeServiceTest {
         assertThat(stop).isNotNegative();
         assertThat(rollback).isGreaterThan(stop);
         assertThat(script.substring(stop, rollback)).contains("$proc.WaitForExit(15000)");
+        // Same gap as the bash helper: the bounded wait can time out with the process still
+        // alive, so the rollback path escalates to an unignorable kill before relaunching.
+        assertThat(script.substring(stop, rollback)).contains("$proc.Kill()");
     }
 
     @Test
