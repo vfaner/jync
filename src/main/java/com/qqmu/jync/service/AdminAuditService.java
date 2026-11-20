@@ -3,14 +3,13 @@ package com.qqmu.jync.service;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.AuditEvent;
 import com.qqmu.jync.repository.AuditEventRepository;
+import com.qqmu.jync.util.CurrentActor;
 
 /**
  * Writes to — and reads from — the append-only admin audit trail.
@@ -76,9 +75,7 @@ public class AdminAuditService {
         return cleaned.length() <= max ? cleaned : cleaned.substring(0, max);
     }
 
-    /** The signed-in username, or "system" for startup/background work with no request. */
     private static String currentUsername() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth == null || !auth.isAuthenticated() ? "system" : auth.getName();
+        return CurrentActor.username();
     }
 }

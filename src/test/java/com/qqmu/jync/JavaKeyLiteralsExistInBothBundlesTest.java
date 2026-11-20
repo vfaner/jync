@@ -46,6 +46,16 @@ class JavaKeyLiteralsExistInBothBundlesTest {
      */
     private static final Set<String> STORAGE_KEYS = Set.of("ai.enabled");
 
+    /**
+     * Spring configuration property names, not message keys: the shared boolean-switch parse
+     * names the offending property in its error sentence. {@code app.*} shares its first
+     * segment with the {@code app.*} UI namespace by coincidence — the same collision
+     * {@link #STORAGE_KEYS} documents for {@code ai.enabled}.
+     */
+    private static final Set<String> CONFIG_PROPERTIES = Set.of(
+            "app.update-check.enabled",
+            "app.security.require-https");
+
     private static final Pattern STRING_LITERAL =
             Pattern.compile("\"([a-z][A-Za-z0-9]*(?:\\.[a-z0-9][A-Za-z0-9_-]*)+)\"");
 
@@ -63,7 +73,8 @@ class JavaKeyLiteralsExistInBothBundlesTest {
             for (Path file : files.filter(p -> p.toString().endsWith(".java")).toList()) {
                 String source = stripComments(Files.readString(file, StandardCharsets.UTF_8));
                 for (String key : keyLiteralsIn(source, namespaces)) {
-                    if (BROWSER_RESOLVED.contains(key) || STORAGE_KEYS.contains(key)) {
+                    if (BROWSER_RESOLVED.contains(key) || STORAGE_KEYS.contains(key)
+                            || CONFIG_PROPERTIES.contains(key)) {
                         continue;
                     }
                     if (!en.contains(key)) {

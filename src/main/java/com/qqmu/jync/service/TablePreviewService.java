@@ -25,6 +25,7 @@ import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
+import com.qqmu.jync.service.task.SyncContextFactory;
 import com.qqmu.jync.util.JdbcUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -269,19 +270,9 @@ public class TablePreviewService {
         return "<binary " + length + " bytes>";
     }
 
-    /** Mirrors SyncContextFactory: a corrupt config means defaults, never a dead page. */
+    /** A corrupt config means defaults, never a dead page — same rule as the sync cycle. */
     private SyncConfig parseConfig(Project project) {
-        String json = project.getSyncConfig();
-        if (json == null || json.isBlank()) {
-            return new SyncConfig();
-        }
-        try {
-            return objectMapper.readValue(json, SyncConfig.class);
-        } catch (Exception e) {
-            log.error("Could not parse sync config for project '{}'; using defaults: {}",
-                    project.getName(), e.getMessage());
-            return new SyncConfig();
-        }
+        return SyncContextFactory.parseConfig(project, objectMapper);
     }
 
     /**

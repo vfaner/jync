@@ -80,11 +80,6 @@ public class RequireHttpsResolver {
     }
 
     private static Boolean parseExplicit(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return null;
-        }
-        return SystemSettingService.parseBoolean(raw).orElseThrow(() -> new IllegalArgumentException(
-                "app.security.require-https must be one of true/false/on/off/yes/no/1/0, was '"
-                        + raw.trim() + "'"));
+        return SystemSettingService.parseExplicit(raw, "app.security.require-https");
     }
 }

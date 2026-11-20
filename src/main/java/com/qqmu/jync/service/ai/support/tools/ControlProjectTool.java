@@ -70,7 +70,8 @@ public class ControlProjectTool implements SupportTool {
             return error("error.accessDenied");
         }
         long projectId = SupportArgs.requireLong(args, "projectId");
-        SupportActionStore.Action action = parse(SupportArgs.requireText(args, "action", 16));
+        SupportActionStore.Action action =
+                SupportArgs.action(SupportArgs.requireText(args, "action", 16), ALLOWED);
 
         Project project = projects.findById(projectId).orElse(null);
         if (project == null) {
@@ -90,19 +91,6 @@ public class ControlProjectTool implements SupportTool {
         out.put("resourceName", project.getName());
         out.put("needsConfirmation", true);
         return out;
-    }
-
-    private SupportActionStore.Action parse(String raw) {
-        try {
-            SupportActionStore.Action action = SupportActionStore.Action.valueOf(raw);
-            if (!ALLOWED.contains(action)) {
-                throw new IllegalArgumentException(SupportArgs.BAD_ARGS);
-            }
-            return action;
-        } catch (IllegalArgumentException e) {
-            // Only the three project actions exist; anything else is the model's mistake.
-            throw new IllegalArgumentException(SupportArgs.BAD_ARGS);
-        }
     }
 
     private Map<String, Object> error(String key) {

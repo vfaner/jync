@@ -37,9 +37,9 @@ public final class AiEndpointValidator {
      * @return The resolved InetAddress, to avoid duplicate DNS lookups for SSRF protection.
      */
     public static InetAddress validateBaseUrl(String baseUrl) {
-        // A blank URL has no scheme either, but URI(null) throws NPE, and both callers treat
-        // IllegalArgumentException as the only failure channel — an NPE would escape the
-        // "never throws" contract of isPermitted and surface as a 500.
+        // A blank URL has no scheme either, but URI(null) throws NPE, and callers treat
+        // IllegalArgumentException as the only failure channel — an NPE would surface as a
+        // 500 instead of the dialog's own "invalid URL" message.
         if (baseUrl == null || baseUrl.isBlank()) {
             throw new IllegalArgumentException("error.ai.baseUrl.invalid");
         }
@@ -77,16 +77,6 @@ public final class AiEndpointValidator {
         } catch (UnknownHostException e) {
             // Unresolvable host: the HTTP call will handle DNS failure
             return null;
-        }
-    }
-
-    /** Non-throwing check used at request time. */
-    public static boolean isPermitted(String baseUrl) {
-        try {
-            validateBaseUrl(baseUrl);
-            return true;
-        } catch (IllegalArgumentException e) {
-            return false;
         }
     }
 

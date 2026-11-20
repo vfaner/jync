@@ -18,6 +18,7 @@ import com.qqmu.jync.service.cdc.LogMinerCdcProbe;
 import com.qqmu.jync.service.cdc.PgLogicalReplicationCdcProbe;
 import com.qqmu.jync.service.cdc.SqlServerCdcProbe;
 import com.qqmu.jync.service.cdc.YStreamCdcProbe;
+import com.qqmu.jync.util.JdbcUtil;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.Getter;
@@ -91,7 +92,7 @@ public class ConnectionTestService {
             }
         } catch (SQLException e) {
             log.warn("Connection test failed for '{}': {}", config.getName(), e.getMessage());
-            return TestResult.failure(sqlMessage(e), System.currentTimeMillis() - start);
+            return TestResult.failure(JdbcUtil.sqlMessage(e), System.currentTimeMillis() - start);
         } catch (Exception e) {
             log.warn("Connection test failed for '{}': {}", config.getName(), e.getMessage());
             return TestResult.failure(e.getMessage() == null ? e.toString() : e.getMessage(),
@@ -167,20 +168,6 @@ public class ConnectionTestService {
                 conn.getSchema(), System.currentTimeMillis() - start, cdcChecks);
         log.info("Connection test OK for '{}': {}", config.getName(), product);
         return result;
-    }
-
-    private String sqlMessage(SQLException e) {
-        StringBuilder sb = new StringBuilder();
-        if (e.getSQLState() != null) {
-            sb.append("[SQLState ").append(e.getSQLState()).append("] ");
-        }
-        sb.append(e.getMessage());
-        // The root cause usually names the actual network or auth problem.
-        Throwable cause = e.getCause();
-        if (cause != null && cause.getMessage() != null && !cause.getMessage().equals(e.getMessage())) {
-            sb.append(" (cause: ").append(cause.getMessage()).append(')');
-        }
-        return sb.toString();
     }
 
     /** Outcome of a connection test. */

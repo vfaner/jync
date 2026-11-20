@@ -1,5 +1,10 @@
 package com.qqmu.jync.service.migration.mongo;
 
+import static com.qqmu.jync.service.migration.OptionsJson.bool;
+import static com.qqmu.jync.service.migration.OptionsJson.enumValue;
+import static com.qqmu.jync.service.migration.OptionsJson.integer;
+import static com.qqmu.jync.service.migration.OptionsJson.text;
+
 import java.util.List;
 import java.util.Locale;
 
@@ -131,28 +136,5 @@ public final class MongoToKingbaseOptions {
         node.put("verifySampleSize", verifySampleSize);
         node.put("maxCollections", maxCollections);
         return node;
-    }
-
-    private static String text(JsonNode node, String field, String fallback) {
-        JsonNode value = node == null ? null : node.get(field);
-        return value == null || value.isNull() ? fallback : value.asString();
-    }
-
-    private static boolean bool(JsonNode node, String field, boolean fallback) {
-        JsonNode value = node == null ? null : node.get(field);
-        return value == null || value.isNull() ? fallback : value.asBoolean(fallback);
-    }
-
-    private static int integer(JsonNode node, String field, int fallback) {
-        JsonNode value = node == null ? null : node.get(field);
-        return value == null || value.isNull() ? fallback : value.asInt(fallback);
-    }
-
-    private static <E extends Enum<E>> E enumValue(Class<E> type, String raw, String errorKey) {
-        try {
-            return Enum.valueOf(type, raw.trim().toUpperCase(Locale.ROOT));
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException(errorKey);
-        }
     }
 }

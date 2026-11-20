@@ -132,4 +132,22 @@ public final class JdbcUtil {
             // Ignore close errors during cleanup
         }
     }
+
+    /**
+     * One driver error reads the same in the test button and the health poll: SQLState,
+     * message, and the root cause when it names a different problem.
+     */
+    public static String sqlMessage(SQLException e) {
+        StringBuilder sb = new StringBuilder();
+        if (e.getSQLState() != null) {
+            sb.append("[SQLState ").append(e.getSQLState()).append("] ");
+        }
+        sb.append(e.getMessage());
+        // The root cause usually names the actual network or auth problem.
+        Throwable cause = e.getCause();
+        if (cause != null && cause.getMessage() != null && !cause.getMessage().equals(e.getMessage())) {
+            sb.append(" (cause: ").append(cause.getMessage()).append(')');
+        }
+        return sb.toString();
+    }
 }

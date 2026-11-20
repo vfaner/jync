@@ -52,4 +52,18 @@ public final class SupportArgs {
         JsonNode node = args.path(field);
         return node.isNumber() ? node.asLong() : null;
     }
+
+    /** Parses a control action, refusing anything outside the tool's allowed set. */
+    public static SupportActionStore.Action action(String raw,
+                                                   Set<SupportActionStore.Action> allowed) {
+        try {
+            SupportActionStore.Action action = SupportActionStore.Action.valueOf(raw);
+            if (!allowed.contains(action)) {
+                throw new IllegalArgumentException(BAD_ARGS);
+            }
+            return action;
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(BAD_ARGS);
+        }
+    }
 }

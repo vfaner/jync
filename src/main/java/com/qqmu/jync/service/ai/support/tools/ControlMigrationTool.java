@@ -72,7 +72,8 @@ public class ControlMigrationTool implements SupportTool {
             return error("error.accessDenied");
         }
         long taskId = SupportArgs.requireLong(args, "taskId");
-        SupportActionStore.Action action = parse(SupportArgs.requireText(args, "action", 16));
+        SupportActionStore.Action action =
+                SupportArgs.action(SupportArgs.requireText(args, "action", 16), ALLOWED);
 
         MigrationTask task = tasks.findById(taskId).orElse(null);
         if (task == null) {
@@ -117,18 +118,6 @@ public class ControlMigrationTool implements SupportTool {
         out.put("resourceName", task.getName());
         out.put("needsConfirmation", true);
         return out;
-    }
-
-    private SupportActionStore.Action parse(String raw) {
-        try {
-            SupportActionStore.Action action = SupportActionStore.Action.valueOf(raw);
-            if (!ALLOWED.contains(action)) {
-                throw new IllegalArgumentException(SupportArgs.BAD_ARGS);
-            }
-            return action;
-        } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException(SupportArgs.BAD_ARGS);
-        }
     }
 
     private Map<String, Object> error(String key) {

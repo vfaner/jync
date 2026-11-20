@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.util.JdbcUtil;
 import com.zaxxer.hikari.HikariDataSource;
 
 import lombok.extern.slf4j.Slf4j;
@@ -227,7 +228,7 @@ public class DatabaseHealthService {
             }
         } catch (SQLException e) {
             log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
-            return new Health(config.getId(), false, elapsed(start), sqlMessage(e));
+            return new Health(config.getId(), false, elapsed(start), JdbcUtil.sqlMessage(e));
         } catch (RuntimeException e) {
             log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
             return new Health(config.getId(), false, elapsed(start), messageOf(e));
@@ -277,21 +278,6 @@ public class DatabaseHealthService {
 
     private static long elapsed(long start) {
         return System.currentTimeMillis() - start;
-    }
-
-    /** Same shape as the test button's message, so one driver error reads the same in both. */
-    private static String sqlMessage(SQLException e) {
-        StringBuilder sb = new StringBuilder();
-        if (e.getSQLState() != null) {
-            sb.append("[SQLState ").append(e.getSQLState()).append("] ");
-        }
-        sb.append(e.getMessage());
-        Throwable cause = e.getCause();
-        if (cause != null && cause.getMessage() != null
-                && !cause.getMessage().equals(e.getMessage())) {
-            sb.append(" (cause: ").append(cause.getMessage()).append(')');
-        }
-        return sb.toString();
     }
 
     private static String messageOf(Exception e) {

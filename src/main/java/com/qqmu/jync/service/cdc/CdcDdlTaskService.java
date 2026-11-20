@@ -12,8 +12,6 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.dto.SyncConfig;
@@ -37,6 +35,7 @@ import com.qqmu.jync.service.sync.DdlExecutor;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.util.CurrentActor;
 import com.qqmu.jync.util.TargetTableVerifier;
 
 import lombok.extern.slf4j.Slf4j;
@@ -934,8 +933,7 @@ public class CdcDdlTaskService {
     }
 
     private static String currentActor() {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth == null || !auth.isAuthenticated() ? "system" : auth.getName();
+        return CurrentActor.username();
     }
 
     /**

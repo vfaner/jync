@@ -96,4 +96,17 @@ public class SystemSettingService {
             }
         }
     }
+
+    /**
+     * An explicit switch value, or null when unset. A value that is present but not a boolean
+     * fails naming the property, so the operator sees which setting to fix.
+     */
+    static Boolean parseExplicit(String raw, String propertyName) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return parseBoolean(raw).orElseThrow(() -> new IllegalArgumentException(
+                propertyName + " must be one of true/false/on/off/yes/no/1/0, was '"
+                        + raw.trim() + "'"));
+    }
 }

@@ -328,6 +328,11 @@ public class SyncContextFactory {
 
     /** Deserializes the project's stored settings, falling back to defaults when absent. */
     public SyncConfig parseConfig(Project project) {
+        return parseConfig(project, objectMapper);
+    }
+
+    /** Shared with the preview page: a corrupt config means defaults, never a dead page. */
+    public static SyncConfig parseConfig(Project project, ObjectMapper objectMapper) {
         String json = project.getSyncConfig();
         if (json == null || json.isBlank()) {
             return new SyncConfig();

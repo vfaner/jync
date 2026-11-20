@@ -23,14 +23,18 @@ class AiEndpointValidatorTest {
     @Test
     void acceptsLoopbackLocalModelServers() {
         // Ollama and LM Studio serve on loopback; blocking that would kill a core use case.
-        assertThat(AiEndpointValidator.isPermitted("http://127.0.0.1:11434/v1")).isTrue();
-        assertThat(AiEndpointValidator.isPermitted("http://localhost:1234/v1")).isTrue();
+        assertThatCode(() -> AiEndpointValidator.validateBaseUrl("http://127.0.0.1:11434/v1"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> AiEndpointValidator.validateBaseUrl("http://localhost:1234/v1"))
+                .doesNotThrowAnyException();
     }
 
     @Test
     void acceptsPrivateIntranetEndpoints() {
-        assertThat(AiEndpointValidator.isPermitted("http://10.20.30.40:8080/v1")).isTrue();
-        assertThat(AiEndpointValidator.isPermitted("https://192.168.1.5/v1")).isTrue();
+        assertThatCode(() -> AiEndpointValidator.validateBaseUrl("http://10.20.30.40:8080/v1"))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> AiEndpointValidator.validateBaseUrl("https://192.168.1.5/v1"))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -58,17 +62,15 @@ class AiEndpointValidatorTest {
 
     @Test
     void rejectsAMissingBaseUrlInsteadOfThrowingAnNpe() {
-        // A partial POST (/api/ai/test without a baseUrl field) hands null straight here, and
-        // isPermitted's contract is "never throws". An NPE would escape both and surface as a
-        // 500 instead of the dialog's own "invalid URL" message.
+        // A partial POST (/api/ai/test without a baseUrl field) hands null straight here.
+        // An NPE would escape the IllegalArgumentException channel and surface as a 500
+        // instead of the dialog's own "invalid URL" message.
         assertThatThrownBy(() -> AiEndpointValidator.validateBaseUrl(null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.ai.baseUrl.invalid");
         assertThatThrownBy(() -> AiEndpointValidator.validateBaseUrl("   "))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.ai.baseUrl.invalid");
-        assertThat(AiEndpointValidator.isPermitted(null)).isFalse();
-        assertThat(AiEndpointValidator.isPermitted("   ")).isFalse();
     }
 
     @Test
