@@ -102,13 +102,13 @@ AI is an **assistant** in Jync, never part of the sync path: with no provider en
 
 <table>
   <tr>
-    <td align="center"><a href="docs/images/jync_ai_kefu.png" target="_blank" rel="noopener"><img src="docs/images/jync_ai_kefu.png" alt="AI operations assistant" width="100%"></a><br><sub><b>AI operations assistant</b> · ask about task state, database health and alerts in plain language; self-check the change log</sub></td>
+    <td align="center"><a href="docs/images/jync_ai_kefu.png" target="_blank" rel="noopener"><img src="docs/images/jync_ai_kefu.png" alt="AI operations assistant" width="100%"></a><br><sub><b>AI operations assistant</b> · ask about task state, database health and alerts in plain language; start / stop and other changes come as a confirmation card you approve</sub></td>
   </tr>
 </table>
 
 - **Ask instead of hunting**: task state, progress and throughput, source/target row counts, database metrics (sessions, QPS, cache hit, locks), current alerts and the latest ETL result each have a **read-only tool**; ids come from list tools, never guessed.
 - **A fixed diagnosis order**: for a stalled change log it self-checks the prerequisites item by item (connectivity, privileges, position, skipped events; this one opens the source, so it is capped per conversation). Alerts → task → log stream → self-check → docs, and every answer names the tool it relied on.
-- **Read-only with budgets**: the assistant cannot run SQL, change configuration, start, stop or delete a task. Creating a task stops at a **draft** for a person to review and save. Tool results are capped and each conversation has round and time budgets.
+- **Changes need a human, with budgets**: start / stop / sync-now / CDC baseline rebuild, enabling or running ETL, and enabling, running or cancelling a dedicated migration are offered only as **confirmation cards**; nothing runs until a person clicks confirm, and the server re-checks the account's role and resource ownership at that moment. The assistant cannot run SQL, change configuration or delete a task. Creating a task stops at a **draft** for a person to review and save. Tool results are capped and each conversation has round and time budgets.
 - **Bundled knowledge**: usage, prerequisites and limitations come from the bundled documentation, not a web search; when the docs do not cover a question it says so instead of inventing an answer.
 - **AI-drafted structure conversion**: the model drafts candidate SQL for procedures and functions; a person reviews and edits before anything is stored.
 - **Any model**: OpenAI-compatible endpoints (self-hosted and most Chinese providers included), Anthropic, and Ollama (native or compatibility layer); keys are encrypted at rest and never shown back.
