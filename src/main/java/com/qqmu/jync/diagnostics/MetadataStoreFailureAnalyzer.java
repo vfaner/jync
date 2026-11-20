@@ -33,12 +33,20 @@ import com.qqmu.jync.config.LegacyStoreMigration;
  * an H2 file has a lock file to look at, while the MySQL / PostgreSQL / Oracle stores Jync
  * documents have a connection to test and no lock file at all.
  *
+ * <p>H2 error 90030 ("File corrupted while reading record") is a different failure: no lock,
+ * permission or restart advice applies, and the store cannot be opened at all. That case is
+ * detected on its own message and receives the backup-and-{@code Recover} procedure instead.
+ *
  * <p>Registered in {@code META-INF/spring.factories}; Spring Boot resolves the
  * {@link Environment} constructor argument when it instantiates the analyzer.
  */
 public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
 
     static final String DIALECT_FALLBACK = "Unable to determine Dialect without JDBC metadata";
+    /** H2 90030: "File corrupted while reading record". */
+    static final String CORRUPTED_STORE = "File corrupted while reading record";
+    private static final Pattern CORRUPTED_FILE = Pattern.compile(
+            "File corrupted while reading record: \"([^\"]+)\"");
 
     private final Environment environment;
     private final Path workingDirectory;
@@ -58,7 +66,10 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
 
     @Override
     public FailureAnalysis analyze(Throwable failure) {
-        if (!matches(failure)) {
+        if (matches(failure, CORRUPTED_STORE)) {
+            return corruptedStore(failure);
+        }
+        if (!matches(failure, DIALECT_FALLBACK)) {
             return null;
         }
         String url = environment == null ? null : environment.getProperty("spring.datasource.url");
@@ -77,18 +88,89 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
                 action(target, true), failure);
     }
 
-    private static boolean matches(Throwable failure) {
+    private static boolean matches(Throwable failure, String marker) {
         Throwable current = failure;
         // A cause chain can loop (proxies wrapping themselves); bound the walk.
         for (int depth = 0; current != null && depth < 64; depth++) {
             String message = current.getMessage();
-            if (message != null && message.contains(DIALECT_FALLBACK)) {
+            if (message != null && message.contains(marker)) {
                 return true;
             }
             Throwable cause = current.getCause();
             current = cause == current ? null : cause;
         }
         return false;
+    }
+
+    /**
+     * Corruption is not a connectivity problem: no lock file, permission or restart helps, and
+     * H2's own hint ("use the recovery tool") is the only actionable one. This returns the
+     * backup-and-Recover procedure, naming the file H2 complained about (which is more accurate
+     * than the configured URL when the two differ).
+     */
+    private FailureAnalysis corruptedStore(Throwable failure) {
+        String target = corruptedStorePath(failure);
+        Path store = Path.of(target);
+        String url = environment == null ? null : environment.getProperty("spring.datasource.url");
+        return new FailureAnalysis(
+                corruptedDescription(target) + logQuote() + traceQuote(store)
+                        + storeChecks(store, url),
+                corruptedAction(target), failure);
+    }
+
+    private String corruptedStorePath(Throwable failure) {
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < 64; depth++) {
+            String message = current.getMessage();
+            if (message != null && message.contains(CORRUPTED_STORE)) {
+                Matcher matcher = CORRUPTED_FILE.matcher(message);
+                if (matcher.find()) {
+                    String file = matcher.group(1);
+                    return file.endsWith(".mv.db")
+                            ? file.substring(0, file.length() - ".mv.db".length()) : file;
+                }
+            }
+            Throwable cause = current.getCause();
+            current = cause == current ? null : cause;
+        }
+        return storeBase();
+    }
+
+    private static String corruptedDescription(String target) {
+        return "Jync 的元数据库文件 " + target + ".mv.db 已损坏：H2 读取记录时发现坏块"
+                + "（错误码 90030「" + CORRUPTED_STORE + "」），拿不到连接，启动在初始化"
+                + "Hibernate 元数据时失败。这不是升级或配置问题；常见诱因是进程被强制结束、"
+                + "OOM、掉电，两个实例同时写一个数据目录，磁盘写满或存储异常，或把运行中的库"
+                + "拷贝出来当备份。";
+    }
+
+    private static String corruptedAction(String target) {
+        Path file = Path.of(target + ".mv.db");
+        Path dir = file.toAbsolutePath().getParent();
+        String dirText = dir == null ? "." : dir.toString();
+        Path traced = Path.of(target + ".trace.db");
+        Path locked = Path.of(target + ".lock.db");
+        Path name = Path.of(target).getFileName();
+        String db = name == null ? "jync" : name.toString();
+        String script = db + ".h2.sql";
+        String recovered = db + "-new.mv.db";
+        return "1. 停止 Jync，不要反复重启：损坏文件不会被重启修复，重试只会继续写诊断文件。\n"
+                + "2. 先备份整个数据目录 " + dirText + "（至少包含 " + file.getFileName()
+                + "、" + traced.getFileName() + " 与 " + locked.getFileName()
+                + "），下面的操作全部在副本上进行。\n"
+                + "3. 在 jync.jar 所在目录用本版本内置的 H2 2.1.214 恢复（Linux/macOS 示例，"
+                + "Windows 换成对应路径写法；H2 账号口令默认 sa / 空，改过就用实际值）：\n"
+                + "   unzip -p jync.jar BOOT-INF/lib/h2-2.1.214.jar > h2.jar\n"
+                + "   mkdir -p /tmp/jync-recover && cp \"" + file + "\" /tmp/jync-recover/\n"
+                + "   cd /tmp/jync-recover && java -cp h2.jar org.h2.tools.Recover -dir . -db "
+                + db + "\n"
+                + "   java -cp h2.jar org.h2.tools.RunScript -url \"jdbc:h2:file:./"
+                + db + "-new;MODE=MySQL\" -user sa -password \"\" -script " + script + "\n"
+                + "4. 停止 Jync 后，用 " + recovered + " 替换 " + file + "，删除陈旧的 "
+                + traced + " 与 " + locked + "，并把文件属主改为运行 Jync 的用户。\n"
+                + "5. 重新启动。若 " + script + " 缺表或缺数据，只能回退到停机状态下做的"
+                + "备份；元数据库损坏不影响目标库里的业务数据，但连接、任务与配置会丢失，"
+                + "需要重建。";
     }
 
     private String storeBase() {

@@ -332,6 +332,67 @@ class MetadataStoreFailureAnalyzerTest {
         assertThat(analysis.getDescription()).contains("损坏");
     }
 
+    /**
+     * A corrupt store is not a connection or lock problem: restarting, deleting the lock file
+     * or fixing permissions never helps. H2's own hint ("use the recovery tool") is the only
+     * actionable one, so the page must give the backup-and-Recover procedure instead of the
+     * lock-file checklist.
+     */
+    @Test
+    void aCorruptedStoreGetsTheRecoveryProcedureInsteadOfTheLockFileChecklist() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.writeString(Path.of(store + ".mv.db"),
+                "H:2,block:3,blockSize:1000,chunk:2,clean:1,created:1a1f80f8406,format:2,"
+                        + "version:2,fletcher:a4cb6be4\n");
+        Throwable failure = new IllegalStateException(
+                "Failed to initialize JPA EntityManagerFactory",
+                new IllegalStateException("Unable to obtain isolated JDBC connection "
+                        + "[File corrupted while reading record: \"" + store + ".mv.db\". "
+                        + "Possible solution: use the recovery tool [90030-214]]"));
+
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL;AUTO_SERVER=TRUE");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(failure);
+
+        assertThat(analysis).isNotNull();
+        assertThat(analysis.getDescription())
+                .contains("损坏")
+                .contains("90030")
+                .contains(store + ".mv.db")
+                .doesNotContain("Unable to determine Dialect");
+        assertThat(analysis.getAction())
+                .contains("备份")
+                .contains("不要反复重启")
+                .contains("org.h2.tools.Recover")
+                .contains("org.h2.tools.RunScript")
+                .contains("jync-new.mv.db")
+                .doesNotContain("检查是否有另一个 Jync 进程");
+    }
+
+    /**
+     * The configured URL can point elsewhere (or be absent); the corrupt file named in the H2
+     * message is the one the operator actually has to recover, so it wins.
+     */
+    @Test
+    void theCorruptedPathComesFromTheErrorMessageWhenTheConfiguredUrlDiffers() {
+        Throwable failure = new IllegalStateException(
+                "Unable to obtain isolated JDBC connection [File corrupted while reading record: "
+                        + "\"/srv/jync/data/jync.mv.db\". Possible solution: use the recovery tool "
+                        + "[90030-214]]");
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + tempDir.resolve("data/jync") + ";MODE=MySQL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(failure);
+
+        assertThat(analysis).isNotNull();
+        assertThat(analysis.getDescription()).contains("/srv/jync/data/jync.mv.db");
+        assertThat(analysis.getAction()).contains("/srv/jync/data").contains("jync-new.mv.db");
+    }
+
     private static Throwable wrappedFailure() {
         return new IllegalStateException(
                 "Failed to initialize dependency 'EntityManagerFactory' of bean 'entityManagerFactory'",
