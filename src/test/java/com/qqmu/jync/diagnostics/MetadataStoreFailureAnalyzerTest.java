@@ -318,6 +318,27 @@ class MetadataStoreFailureAnalyzerTest {
                 .doesNotContain("H2 2.2");
     }
 
+    /**
+     * 被部分改写的文件头可能带着一段 int 装不下的数字。这个分析器正是为损坏的库而存在的:
+     * 它必须把损坏说出来,而不是自己死在解析上,让操作者只剩 Hibernate 的通用方言错误。
+     */
+    @Test
+    void anUnparseableWriteFormatIsNamedAsCorruptionInsteadOfCrashingTheAnalyzer() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.writeString(Path.of(store + ".mv.db"),
+                "H:2,block:3,blockSize:1000,chunk:2,clean:1,created:1a1f80f45a3,"
+                        + "format:99999999999999999999,version:2,fletcher:95b899e2\n");
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis).isNotNull();
+        assertThat(analysis.getDescription()).contains("写格式").contains("损坏");
+    }
+
     @Test
     void aStoreFileThatIsNotAMvStoreIsCalledOutAsDamaged() throws Exception {
         Path store = tempDir.resolve("data/jync");

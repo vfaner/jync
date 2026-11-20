@@ -176,28 +176,31 @@ public class SyncConfig {
      */
     private static final class SelectionIndex {
 
-        private Set<String> source;
-        private int sourceSize = -1;
-        private Set<String> lower;
+        /** Guard fields and the built set travel together, so a reader sees one state. */
+        private record Snapshot(Set<String> source, int sourceSize, Set<String> lower) {
+        }
+
+        private volatile Snapshot snapshot;
 
         boolean contains(Set<String> selection, String name) {
             if (name == null) {
                 return false;
             }
-            Set<String> current = lower;
-            if (source != selection || sourceSize != selection.size()) {
+            Snapshot current = snapshot;
+            if (current == null || current.source() != selection
+                    || current.sourceSize() != selection.size()) {
                 Set<String> built = new HashSet<>(Math.max(4, selection.size() * 2));
                 for (String value : selection) {
                     if (value != null) {
                         built.add(value.toLowerCase(Locale.ROOT));
                     }
                 }
-                lower = built;      // publish before the guard fields: a racing reader
-                source = selection; // either sees the old pair or the completed one
-                sourceSize = selection.size();
-                current = built;
+                // One volatile write publishes the whole index. Racing builders may both
+                // build, but every reader answers from the consistent snapshot it holds.
+                current = new Snapshot(selection, selection.size(), built);
+                snapshot = current;
             }
-            return current.contains(name.toLowerCase(Locale.ROOT));
+            return current.lower().contains(name.toLowerCase(Locale.ROOT));
         }
     }
 

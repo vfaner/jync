@@ -12,6 +12,9 @@ import static org.mockito.Mockito.when;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -548,5 +551,54 @@ class CdcPositionStoreTest {
 
         verify(repository, times(2)).save(any());
         assertThat(position.getBinlogPos()).isEqualTo(400L);
+    }
+
+    /**
+     * 重置锚点(换源端点/重跑基线)不能被一个已经拿着缓冲区的 flush 撤销:discard() 必须
+     * 等正在进行的 persist 结束,且被丢弃的缓冲区此后绝不能再写。否则旧源的 file:pos 会
+     * 覆盖回已清空的锚点,下次启动从旧水位对着新源续传 —— 静默跳过整段数据。
+     */
+    @Test
+    void aResetWaitsForAnInFlightFlushSoTheOldWatermarkCannotResurrect() throws Exception {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+        throttled.advance(1L, "mysql-bin.000007", 200L, null);   // 只进缓冲,窗口未到
+
+        CountDownLatch insidePersist = new CountDownLatch(1);
+        CountDownLatch letFlushFinish = new CountDownLatch(1);
+        AtomicBoolean parkOnce = new AtomicBoolean(true);
+        when(repository.findByProjectId(1L)).thenAnswer(inv -> {
+            if (parkOnce.compareAndSet(true, false)) {
+                insidePersist.countDown();
+                if (!letFlushFinish.await(5, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("the parked flush was never released");
+                }
+            }
+            return Optional.of(position);
+        });
+
+        Thread flusher = new Thread(() -> throttled.flush(1L), "cdc-flush");
+        flusher.start();
+        assertThat(insidePersist.await(5, TimeUnit.SECONDS)).isTrue();
+
+        AtomicBoolean resetDone = new AtomicBoolean();
+        Thread resetter = new Thread(() -> {
+            throttled.resetAnchorKeepingProjectionSignature(1L);
+            resetDone.set(true);
+        }, "cdc-reset");
+        resetter.start();
+        // flush 还持有缓冲区监视器时,reset 不得越过 discard() 直接完成。
+        Thread.sleep(200);
+        assertThat(resetDone).isFalse();
+
+        letFlushFinish.countDown();
+        flusher.join(5_000);
+        resetter.join(5_000);
+
+        assertThat(resetDone).isTrue();
+        assertThat(position.getBinlogFile()).isNull();
+        assertThat(position.getBinlogPos()).isNull();
     }
 }

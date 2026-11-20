@@ -257,18 +257,28 @@ public class AlertConfigService {
             // webhook may be unreachable from this node (or DNS may be down), and the POST
             // will report the failure anyway.
             try {
-                InetAddress address = InetAddress.getByName(uri.getHost());
-                if (isNeverAPublicWebhookTarget(address)) {
-                    throw new IllegalArgumentException("error.alert.url.invalid");
-                }
-                if (!allowPrivateWebhook && isPrivateOrReserved(address)) {
-                    throw new IllegalArgumentException("error.alert.url.private");
-                }
+                checkResolvedAddresses(InetAddress.getAllByName(uri.getHost()));
             } catch (UnknownHostException e) {
                 // Accepted; see above.
             }
         } catch (URISyntaxException e) {
             throw new IllegalArgumentException("error.alert.url.invalid");
+        }
+    }
+
+    /**
+     * Every resolved address must pass the policy: a hostname may answer with several A
+     * records and the actual fetch can connect to any of them, so one public answer must
+     * not vouch for a private or never-public sibling.
+     */
+    void checkResolvedAddresses(InetAddress[] addresses) {
+        for (InetAddress address : addresses) {
+            if (isNeverAPublicWebhookTarget(address)) {
+                throw new IllegalArgumentException("error.alert.url.invalid");
+            }
+            if (!allowPrivateWebhook && isPrivateOrReserved(address)) {
+                throw new IllegalArgumentException("error.alert.url.private");
+            }
         }
     }
 

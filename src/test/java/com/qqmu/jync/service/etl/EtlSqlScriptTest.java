@@ -159,6 +159,38 @@ class EtlSqlScriptTest {
     }
 
     @Test
+    void db2ReadOnlyAndOptimizeClausesDoNotKeepARedundantOrderBy() {
+        // FOR FETCH ONLY / OPTIMIZE FOR n ROWS 不限制行数:ORDER BY 在派生表里依旧是冗余的,
+        // 而 DB2 没有 FETCH FIRST 时照样拒绝派生表内的 ORDER BY —— 留着它任务永远跑不起来。
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT id FROM src ORDER BY id FOR FETCH ONLY", DialectFamily.DB2))
+                .isEqualTo("SELECT id FROM src");
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT id FROM src ORDER BY id OPTIMIZE FOR 10 ROWS", DialectFamily.DB2))
+                .isEqualTo("SELECT id FROM src");
+    }
+
+    @Test
+    void anUnquotedLimitOrOffsetAliasIsNotALimitingClause() {
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT x AS limit FROM src ORDER BY x", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT x AS limit FROM src");
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT x AS offset FROM src ORDER BY x", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT x AS offset FROM src");
+    }
+
+    @Test
+    void forXmlAndForJsonKeepTheTopLevelOrderBy() {
+        for (String sql : List.of(
+                "SELECT id FROM src ORDER BY id FOR XML PATH",
+                "SELECT id FROM src ORDER BY id FOR JSON AUTO")) {
+            assertThat(EtlSqlScript.stripTopLevelOrderBy(sql, DialectFamily.SQLSERVER))
+                    .isEqualTo(sql);
+        }
+    }
+
+    @Test
     void orderByInsideAStringOrCommentDoesNotCount() {
         String sql = "SELECT 'ORDER BY x' AS note, \"ORDER BY\" FROM src -- ORDER BY y";
         assertThat(EtlSqlScript.stripTopLevelOrderBy(sql)).isEqualTo(sql);

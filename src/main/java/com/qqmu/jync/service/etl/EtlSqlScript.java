@@ -108,15 +108,46 @@ final class EtlSqlScript {
         return start;
     }
 
+    /**
+     * Whether a real row-limiting clause is present. Bare keywords are not enough: DB2's
+     * {@code FOR FETCH ONLY} / {@code OPTIMIZE FOR n ROWS} and an unquoted alias such as
+     * {@code AS limit} limit nothing, yet keeping their ORDER BY would make the derived-table
+     * wrapper fail on every run. TOP, FETCH FIRST/NEXT, LIMIT/OFFSET with a count, and
+     * FOR UPDATE / FOR XML / FOR JSON (cursor or document semantics) do keep the order.
+     */
     private static boolean hasLimitingClause(List<Token> tokens) {
-        for (Token token : tokens) {
-            String word = token.word();
-            if (isWord(word, "TOP") || isWord(word, "LIMIT") || isWord(word, "FETCH")
-                    || isWord(word, "OFFSET") || isWord(word, "FOR")) {
+        for (int i = 0; i < tokens.size(); i++) {
+            String word = tokens.get(i).word();
+            String next = i + 1 < tokens.size() ? tokens.get(i + 1).word() : null;
+            if (isWord(word, "TOP")) {
+                return true;
+            }
+            if (isWord(word, "FETCH") && (isWord(next, "FIRST") || isWord(next, "NEXT"))) {
+                return true;
+            }
+            if (isWord(word, "FOR")
+                    && (isWord(next, "UPDATE") || isWord(next, "XML") || isWord(next, "JSON"))) {
+                return true;
+            }
+            if ((isWord(word, "LIMIT") || isWord(word, "OFFSET"))
+                    && (next == null || isAllDigits(next)
+                        || isWord(next, "ALL") || isWord(next, "ROWS"))) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean isAllDigits(String word) {
+        if (word == null || word.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < word.length(); i++) {
+            if (!Character.isDigit(word.charAt(i))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean isWord(String token, String keyword) {

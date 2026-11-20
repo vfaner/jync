@@ -383,7 +383,15 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
         if (!format.find()) {
             return "文件头里没有写格式，可能已损坏";
         }
-        int value = Integer.parseInt(format.group(1));
+        int value;
+        try {
+            value = Integer.parseInt(format.group(1));
+        } catch (NumberFormatException e) {
+            // A digit run no int can hold is corruption, not a version. The analyzer must
+            // still answer: Spring swallows an analyzer exception into the generic error,
+            // which is exactly what this page exists to replace.
+            return "文件头里的写格式数字无法解析，可能已损坏";
+        }
         if (value == 2) {
             return "写格式 2";
         }

@@ -372,6 +372,9 @@ public class CdcPositionStore {
      * writer moved ahead" protection.
      */
     private void persist(Long projectId, Pending pending, long now) {
+        if (pending.discarded) {
+            return; // a reset/baseline/delete superseded this buffer — never resurrect it
+        }
         Optional<CdcPosition> existing = repository.findByProjectId(projectId);
         if (!existing.isPresent()) {
             log.warn("CDC position for project {} not advanced to {}: no position row"
@@ -482,7 +485,18 @@ public class CdcPositionStore {
      * flush must never resurrect it.
      */
     private void discard(Long projectId) {
-        pendingByProject.remove(projectId);
+        Pending pending = pendingByProject.remove(projectId);
+        if (pending != null) {
+            // A flush/advance that already checked this buffer out holds its monitor across
+            // the whole read+write. Waiting for the monitor here makes the reset commit
+            // strictly after that write, and the flag makes a buffer still queued on the
+            // monitor skip its write — the old watermark can never resurrect. Callers must
+            // (and do) discard before taking any row lock, so this wait cannot deadlock
+            // against the in-flight persist.
+            synchronized (pending) {
+                pending.discarded = true;
+            }
+        }
     }
 
     /**
@@ -740,6 +754,7 @@ public class CdcPositionStore {
         private boolean replaceLayouts;
         private boolean dirty;
         private boolean seeded;
+        private boolean discarded;
         private long persistedAt;
 
         private Pending(long now) {

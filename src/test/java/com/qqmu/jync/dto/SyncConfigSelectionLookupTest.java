@@ -7,6 +7,8 @@ import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.Test;
 
@@ -107,6 +109,41 @@ class SyncConfigSelectionLookupTest {
         String json = new ObjectMapper().writeValueAsString(config);
 
         assertThat(json).doesNotContain("Lookup").doesNotContain("lookup");
+    }
+
+    /**
+     * 同一个配置会被多个线程共享(CDC 每事件路径)。索引的发布对读者必须原子:旧实现用
+     * 三个非 volatile 字段先发布 lower 再发布守卫,读者可能拿着 null 的 lower 却看到已完成
+     * 的守卫字段,跳过重建直接 NPE。每一轮都从全新配置开始,反复打开「首次发布」的竞态窗口。
+     */
+    @Test
+    void racingLookupsNeverSeeAHalfPublishedIndex() throws Exception {
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        for (int round = 0; round < 500 && failure.get() == null; round++) {
+            SyncConfig config = new SyncConfig();
+            config.setTables(new LinkedHashSet<>(List.of("orders")));
+            // 四个读者同时做第一次查询:谁先建好索引,其余三个就可能读到「守卫已发布、
+            // lower 还是 null」的半完成状态 —— 每一轮都是一次全新的竞态窗口。
+            CyclicBarrier start = new CyclicBarrier(4);
+            Thread[] readers = new Thread[4];
+            for (int t = 0; t < readers.length; t++) {
+                readers[t] = new Thread(() -> {
+                    try {
+                        start.await();
+                        for (int i = 0; i < 5_000 && failure.get() == null; i++) {
+                            config.includesTable("orders");
+                        }
+                    } catch (Throwable e) {
+                        failure.compareAndSet(null, e);
+                    }
+                });
+                readers[t].start();
+            }
+            for (Thread reader : readers) {
+                reader.join(10_000);
+            }
+        }
+        assertThat(failure.get()).isNull();
     }
 
     /** Sequence whose traversal is observable, so the test can count full scans. */

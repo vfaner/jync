@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.net.InetAddress;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -303,6 +304,34 @@ class AlertConfigServiceTest {
         form.setWebhookUrl("http://100.100.100.200/latest/meta-data");
 
         assertThatThrownBy(() -> permissive.save(form))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.url.invalid");
+    }
+
+    /**
+     * A hostname can answer with several A records. Checking only the first lets a public
+     * answer vouch for a private one the actual fetch may connect to instead — every
+     * resolved address must pass the policy, not just the one lookup happened to return.
+     */
+    @Test
+    void everyResolvedAddressMustPassThePolicyNotJustTheFirst() throws Exception {
+        InetAddress[] mixed = {
+                InetAddress.getByName("93.184.216.34"),
+                InetAddress.getByName("127.0.0.1")};
+
+        assertThatThrownBy(() -> service.checkResolvedAddresses(mixed))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.alert.url.private");
+    }
+
+    @Test
+    void aNeverPublicAddressCannotHideBehindAPublicOne() throws Exception {
+        AlertConfigService permissive = new AlertConfigService(repository, crypto, true);
+        InetAddress[] mixed = {
+                InetAddress.getByName("93.184.216.34"),
+                InetAddress.getByName("100.100.100.200")};
+
+        assertThatThrownBy(() -> permissive.checkResolvedAddresses(mixed))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.alert.url.invalid");
     }
