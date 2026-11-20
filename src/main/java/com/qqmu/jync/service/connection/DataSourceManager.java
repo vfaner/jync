@@ -48,6 +48,10 @@ public class DataSourceManager {
     private final CryptoUtil cryptoUtil;
     private final SyncProperties properties;
 
+    /** This instance's own metadata-store URL; a sync connection may not point back at it. */
+    @org.springframework.beans.factory.annotation.Value("${spring.datasource.url:}")
+    private String metadataUrl;
+
     private final Map<Long, CachedDataSource> cache = new ConcurrentHashMap<>();
 
     public DataSourceManager(DriverLoader driverLoader, CryptoUtil cryptoUtil,
@@ -328,29 +332,40 @@ public class DataSourceManager {
     /** Builds the JDBC URL from the template for the type, or uses the custom URL verbatim. */
     public String buildJdbcUrl(DatabaseConfig config) {
         rejectNativeMongo(config);
+        String url;
         if (StringUtils.hasText(config.getCustomUrl())) {
-            return disableTinyIntBooleanCollapse(
-                    appendExtraParams(config.getCustomUrl().trim(), config));
+            url = config.getCustomUrl().trim();
+        } else {
+            DatabaseType type = config.getType();
+            if (type == DatabaseType.CUSTOM) {
+                throw new IllegalArgumentException("error.custom.url.required");
+            }
+            if (type == null) {
+                throw new IllegalArgumentException("error.connection.type.required");
+            }
+            String host = StringUtils.hasText(config.getHost()) ? config.getHost() : "localhost";
+            String dbName = config.getDatabaseName() == null ? "" : config.getDatabaseName();
+            // host/dbName are interpolated into the template; a separator in either would
+            // smuggle driver properties past the per-key extraParams validation.
+            rejectIdentifierSmuggling(host, config.getName());
+            rejectIdentifierSmuggling(dbName, config.getName());
+            // A named SQL Server instance has no fixed port; the driver resolves it via the
+            // SQL Browser. Emitting the default-instance port 1433 there guarantees a timeout,
+            // so a blank port is honored for products that declare a portless template.
+            if (config.getPort() == null && type.allowsBlankPort()) {
+                url = String.format(type.getPortlessUrlTemplate(), host, dbName);
+            } else {
+                int port = config.getPort() != null ? config.getPort() : type.getDefaultPort();
+                url = String.format(type.getUrlTemplate(), host, port, dbName);
+            }
         }
-        DatabaseType type = config.getType();
-        if (type == DatabaseType.CUSTOM) {
-            throw new IllegalArgumentException("error.custom.url.required");
-        }
-        if (type == null) {
-            throw new IllegalArgumentException("error.connection.type.required");
-        }
-        String host = StringUtils.hasText(config.getHost()) ? config.getHost() : "localhost";
-        String dbName = config.getDatabaseName() == null ? "" : config.getDatabaseName();
-        // A named SQL Server instance has no fixed port; the driver resolves it via the
-        // SQL Browser. Emitting the default-instance port 1433 there guarantees a timeout,
-        // so a blank port is honored for products that declare a portless template.
-        if (config.getPort() == null && type.allowsBlankPort()) {
-            return disableTinyIntBooleanCollapse(appendExtraParams(
-                    String.format(type.getPortlessUrlTemplate(), host, dbName), config));
-        }
-        int port = config.getPort() != null ? config.getPort() : type.getDefaultPort();
-        return disableTinyIntBooleanCollapse(
-                appendExtraParams(String.format(type.getUrlTemplate(), host, port, dbName), config));
+        url = disableTinyIntBooleanCollapse(appendExtraParams(url, config));
+        url = appendSocketTimeout(url);
+        // The extraParams blacklist alone is not enough: a custom URL or an interpolated
+        // host/dbName can carry dangerous properties directly. Validate the assembled URL.
+        rejectDangerousUrlProperties(url, config.getName());
+        rejectSelfMetadataStore(url, config.getName());
+        return url;
     }
 
     /** Matches an existing {@code tinyInt1isBit} pair and nothing else in the query. */
@@ -407,6 +422,36 @@ public class DataSourceManager {
     }
 
     /**
+     * Adds a driver-specific socket read timeout when {@code sync.jdbc-socket-timeout-ms} is set,
+     * so a half-dead connection fails in bounded time instead of hanging on the OS TCP timeout.
+     * 0 (the default) leaves every URL untouched. An explicit setting already in the URL wins.
+     */
+    private String appendSocketTimeout(String url) {
+        if (url == null || properties == null || properties.getJdbcSocketTimeoutMs() <= 0) {
+            return url;
+        }
+        long ms = properties.getJdbcSocketTimeoutMs();
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        if (lower.contains("sockettimeout=") || lower.contains("oracle.jdbc.readtimeout=")) {
+            return url;   // respect an explicit operator setting
+        }
+        String param;
+        if (lower.startsWith("jdbc:mysql:") || lower.startsWith("jdbc:mysql+srv:")
+                || lower.startsWith("jdbc:mariadb:")) {
+            param = "socketTimeout=" + ms;                  // Connector/J: milliseconds
+        } else if (lower.startsWith("jdbc:postgresql:")) {
+            param = "socketTimeout=" + ((ms + 999) / 1000); // pgjdbc: seconds, rounded up
+        } else if (lower.startsWith("jdbc:oracle:")) {
+            param = "oracle.jdbc.ReadTimeout=" + ms;        // Oracle thin: milliseconds
+        } else {
+            return url;   // no universal socket-timeout property for other drivers
+        }
+        String sep = endsWithParamSeparator(url) ? ""
+                : (url.indexOf('?') >= 0 ? "&" : (url.indexOf(';') >= 0 ? ";" : "?"));
+        return url + sep + param;
+    }
+
+    /**
      * JDBC properties the URL cannot carry for a given product. MongoDB's Atlas SQL driver
      * takes the database as a property ({@code database=...}) and rejects a database path in
      * the URL, so the form's database field is translated here instead of being templated into
@@ -434,7 +479,8 @@ public class DataSourceManager {
             "ALLOWLOADLOCALINFILEINPATH", "QUERYINTERCEPTORS", "STATEMENTINTERCEPTORS",
             "EXCEPTIONINTERCEPTORS", "ALLOWMULTIQUERIES", "CONNECTIONATTRIBUTES",
             "AUTHENTICATIONPLUGINS", "SOCKETFACTORY", "SSLSOCKETFACTORY",
-            "LOADBALANCESTRATEGY", "HA.LOADBALANCESTRATEGY");
+            "LOADBALANCESTRATEGY", "HA.LOADBALANCESTRATEGY", "PROPERTIESTRANSFORM",
+            "JAVA_OBJECT_SERIALIZER", "DEFAULT_TABLE_ENGINE");
 
     private String appendExtraParams(String url, DatabaseConfig config) {
         String extra = config.getExtraParams();
@@ -501,6 +547,141 @@ public class DataSourceManager {
             }
         }
         return value.isEmpty() ? key : key + "=" + value;
+    }
+
+    /** Dangerous keys checked against the whole assembled URL, including H2 INIT/RUNSCRIPT. */
+    private static final Set<String> BLOCKED_URL_KEYS;
+    private static final java.util.regex.Pattern DANGEROUS_URL_PARAM;
+    static {
+        Set<String> keys = new java.util.HashSet<>(BLOCKED_PARAM_KEYS);
+        keys.add("INIT");
+        keys.add("RUNSCRIPT");
+        BLOCKED_URL_KEYS = Set.copyOf(keys);
+        String alternation = BLOCKED_URL_KEYS.stream()
+                .map(java.util.regex.Pattern::quote)
+                .reduce((a, b) -> a + "|" + b).orElse("");
+        DANGEROUS_URL_PARAM = java.util.regex.Pattern.compile("(?i)[?&;]\\s*(" + alternation + ")\\s*=");
+    }
+
+    /** Refuses a host/database carrying URL-property separators or control characters. */
+    private void rejectIdentifierSmuggling(String value, String connectionName) {
+        if (value == null) {
+            return;
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == ';' || c == '?' || c == '&' || c == '#' || c <= 0x1f || c == 0x7f) {
+                log.warn("Refused JDBC host/database with separator or control characters on '{}'",
+                        connectionName);
+                throw new IllegalArgumentException("error.connection.url.unsafe");
+            }
+        }
+    }
+
+    /** Refuses dangerous driver properties anywhere in the assembled URL (custom or preset). */
+    private void rejectDangerousUrlProperties(String url, String connectionName) {
+        if (url == null) {
+            return;
+        }
+        // MySQL-family drivers URL-decode query keys, so an encoded key (%61utoDeserialize)
+        // would slip past a raw scan; check the percent-decoded form too.
+        java.util.regex.Matcher m = DANGEROUS_URL_PARAM.matcher(url);
+        if (!m.find()) {
+            m = DANGEROUS_URL_PARAM.matcher(percentDecode(url));
+            if (!m.find()) {
+                return;
+            }
+        }
+        log.warn("Refused unsafe JDBC URL property '{}' on connection '{}'",
+                m.group(1), connectionName);
+        throw new IllegalArgumentException("error.connection.url.unsafe");
+    }
+
+    /** Decodes %XX escapes once (matching the driver) so encoded property keys cannot hide. */
+    private static String percentDecode(String s) {
+        StringBuilder out = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '%' && i + 2 < s.length()) {
+                int hi = Character.digit(s.charAt(i + 1), 16);
+                int lo = Character.digit(s.charAt(i + 2), 16);
+                if (hi >= 0 && lo >= 0) {
+                    out.append((char) ((hi << 4) + lo));
+                    i += 2;
+                    continue;
+                }
+            }
+            out.append(c);
+        }
+        return out.toString();
+    }
+
+    /** Refuses a sync connection that points back at this instance's own metadata store. */
+    private void rejectSelfMetadataStore(String url, String connectionName) {
+        String target = h2FilePath(url);
+        String self = h2FilePath(metadataUrl);
+        if (target != null && self != null && target.equals(self)) {
+            log.warn("Refused a sync connection pointing at this instance's own metadata store "
+                    + "on '{}'", connectionName);
+            throw new IllegalArgumentException("error.connection.url.selfMetadata");
+        }
+    }
+
+    /** Normalized local file path of an H2 store URL, or null when it cannot be this instance's. */
+    private static String h2FilePath(String url) {
+        if (url == null) {
+            return null;
+        }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        if (!lower.startsWith("jdbc:h2:") || lower.startsWith("jdbc:h2:mem:")) {
+            return null;   // not H2, or an in-memory store distinct from the metadata file
+        }
+        String sub = url.substring("jdbc:h2:".length());
+        if (sub.startsWith("tcp:") || sub.startsWith("ssl:")) {
+            // The product's H2 preset is tcp://host:port/path; with the metadata store's
+            // AUTO_SERVER=TRUE a loopback TCP URL reaches the very same file. Resolve the path
+            // only when the server is this host, so a remote H2 box is not mistaken for it.
+            sub = sub.substring(4);
+            if (!sub.startsWith("//")) {
+                return null;
+            }
+            sub = sub.substring(2);
+            int slash = sub.indexOf('/');
+            if (slash < 0) {
+                return null;
+            }
+            String hostPort = sub.substring(0, slash);
+            int colon = hostPort.indexOf(':');
+            String host = colon >= 0 ? hostPort.substring(0, colon) : hostPort;
+            if (!isLoopbackHost(host)) {
+                return null;
+            }
+            sub = sub.substring(slash + 1);
+        } else if (sub.startsWith("file:")) {
+            sub = sub.substring("file:".length());
+        }
+        int semi = sub.indexOf(';');
+        if (semi >= 0) {
+            sub = sub.substring(0, semi);
+        }
+        if (sub.isBlank()) {
+            return null;
+        }
+        if (sub.startsWith("~")) {
+            sub = System.getProperty("user.home") + sub.substring(1);
+        }
+        try {
+            return java.nio.file.Path.of(sub).toAbsolutePath().normalize().toString();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static boolean isLoopbackHost(String host) {
+        return "localhost".equalsIgnoreCase(host)
+                || "127.0.0.1".equals(host)
+                || "::1".equals(host)
+                || "0:0:0:0:0:0:0:1".equals(host);
     }
 
     /**

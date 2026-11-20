@@ -68,16 +68,37 @@ public final class AiEndpointValidator {
             throw new IllegalArgumentException("error.ai.baseUrl.blocked");
         }
         try {
-            InetAddress address = InetAddress.getByName(trimmed);
-            // Block link-local addresses to prevent SSRF via DNS rebinding
-            if (address.isLinkLocalAddress()) {
-                throw new IllegalArgumentException("error.ai.baseUrl.blocked");
+            // Every resolved address must pass: a hostname may answer with several records and
+            // the HTTP client re-resolves at connect time, so one public answer must not vouch
+            // for a link-local/metadata sibling (same rule as the webhook validator).
+            InetAddress[] addresses = InetAddress.getAllByName(trimmed);
+            for (InetAddress address : addresses) {
+                if (address.isLinkLocalAddress() || isMetadataAddress(address)) {
+                    throw new IllegalArgumentException("error.ai.baseUrl.blocked");
+                }
             }
-            return address;
+            return addresses[0];
         } catch (UnknownHostException e) {
             // Unresolvable host: the HTTP call will handle DNS failure
             return null;
         }
+    }
+
+    /** AWS IPv6 metadata endpoint — unique-local, not flagged as link-local by the JDK. */
+    private static final InetAddress AWS_IPV6_METADATA = metadataLiteral("fd00:ec2::254");
+
+    private static InetAddress metadataLiteral(String literal) {
+        try {
+            return InetAddress.getByName(literal);
+        } catch (UnknownHostException e) {
+            throw new ExceptionInInitializerError(e);   // a literal IP never needs DNS
+        }
+    }
+
+    /** Fixed cloud-metadata addresses that are never model providers, even though not link-local. */
+    private static boolean isMetadataAddress(InetAddress address) {
+        return address.equals(AWS_IPV6_METADATA)
+                || ALIYUN_METADATA_IP.equals(address.getHostAddress());
     }
 
 }

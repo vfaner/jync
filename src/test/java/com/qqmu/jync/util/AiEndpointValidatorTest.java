@@ -1,6 +1,5 @@
 package com.qqmu.jync.util;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -88,6 +87,15 @@ class AiEndpointValidatorTest {
                 .hasMessage("error.ai.baseUrl.blocked");
         assertThatThrownBy(() ->
                 AiEndpointValidator.validateBaseUrl("http://100.100.100.200/latest/meta-data"))
+                .hasMessage("error.ai.baseUrl.blocked");
+    }
+
+    @Test
+    void rejectsTheAwsIpv6MetadataAddress() {
+        // fd00:ec2::254 is unique-local (fc00::/7), not link-local — the JDK's
+        // isLinkLocalAddress misses it, so it needs an explicit block like the IPv4 endpoint.
+        assertThatThrownBy(() -> AiEndpointValidator.validateBaseUrl("http://[fd00:ec2::254]/v1"))
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.ai.baseUrl.blocked");
     }
 
