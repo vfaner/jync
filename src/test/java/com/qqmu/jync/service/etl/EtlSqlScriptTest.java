@@ -181,6 +181,30 @@ class EtlSqlScriptTest {
     }
 
     @Test
+    void offsetWithAVariableOrHexCountStillKeepsTheOrderBy() {
+        // SQL Server OFFSET @p ROWS / DB2 OFFSET :n ROWS / 十六进制计数：计数不是字面数字，
+        // 但 OFFSET 仍是真限流子句，剥掉 ORDER BY 会让派生表里的 OFFSET 失去排序而报错。
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT id FROM src ORDER BY id OFFSET @p ROWS", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT id FROM src ORDER BY id OFFSET @p ROWS");
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT id FROM src ORDER BY id OFFSET :n ROWS", DialectFamily.DB2))
+                .isEqualTo("SELECT id FROM src ORDER BY id OFFSET :n ROWS");
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT id FROM src ORDER BY id OFFSET 0x10 ROWS", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT id FROM src ORDER BY id OFFSET 0x10 ROWS");
+    }
+
+    @Test
+    void bareOffsetAndRowsColumnNamesAreNotALimitingClause() {
+        // offset / rows are not reserved in T-SQL or DB2; a pagination-metadata table may name
+        // its columns so. Adjacent bare identifiers must not be read as the OFFSET ... ROWS clause.
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT offset, rows FROM t ORDER BY id", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT offset, rows FROM t");
+    }
+
+    @Test
     void forXmlAndForJsonKeepTheTopLevelOrderBy() {
         for (String sql : List.of(
                 "SELECT id FROM src ORDER BY id FOR XML PATH",

@@ -488,11 +488,13 @@ public class CdcPositionStore {
         Pending pending = pendingByProject.remove(projectId);
         if (pending != null) {
             // A flush/advance that already checked this buffer out holds its monitor across
-            // the whole read+write. Waiting for the monitor here makes the reset commit
-            // strictly after that write, and the flag makes a buffer still queued on the
-            // monitor skip its write — the old watermark can never resurrect. Callers must
-            // (and do) discard before taking any row lock, so this wait cannot deadlock
-            // against the in-flight persist.
+            // the whole read+write. Waiting for the monitor serializes against that persist,
+            // and the flag makes a buffer still queued on the monitor skip its write — the
+            // old watermark can never resurrect. (A flush is REQUIRES_NEW, so its COMMIT can
+            // still land after the monitor is released; if it races the reset's own write,
+            // @Version turns that into a loud, retryable optimistic-lock conflict, never a
+            // silent rewind.) Callers must (and do) discard before taking any row lock, so
+            // this wait cannot deadlock against the in-flight persist.
             synchronized (pending) {
                 pending.discarded = true;
             }

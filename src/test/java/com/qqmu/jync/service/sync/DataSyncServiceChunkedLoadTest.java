@@ -3,6 +3,7 @@ package com.qqmu.jync.service.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -13,10 +14,13 @@ import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.time.LocalDateTime;
 import java.util.List;
 
 import ch.qos.logback.classic.Level;
@@ -565,6 +569,41 @@ class DataSyncServiceChunkedLoadTest {
                         throw e.getCause();
                     }
                 });
+    }
+
+    /**
+     * 采样分裂读桶首键必须走与 PkCursor 相同的归一化:Oracle / SQL Server 的时间主键裸
+     * getObject 返回驱动私有对象(oracle.sql.TIMESTAMP / microsoft.sql.DateTimeOffset),
+     * encodePk 无法序列化,时间主键表的并行全量会每次失败且无法续跑。用一个「getObject 返回
+     * 私有对象、typed getter 返回 LocalDateTime」的 ResultSet 钉住归一化路径。
+     */
+    @Test
+    void sampledKeysNormalizeVendorTemporalTypesLikeTheCursor() throws SQLException {
+        DataSyncService service = service(2);
+        TableMeta table = new TableMeta();
+        table.setName("T");
+        table.setPrimaryKeys(List.of("TS"));
+        CursorStrategy strategy = CursorStrategy.timestamp("TS", Types.TIMESTAMP, "ts column");
+
+        Connection conn = mock(Connection.class);
+        PreparedStatement st = mock(PreparedStatement.class);
+        ResultSet rs = mock(ResultSet.class);
+        ResultSetMetaData md = mock(ResultSetMetaData.class);
+        when(conn.prepareStatement(anyString())).thenReturn(st);
+        when(st.executeQuery()).thenReturn(rs);
+        when(rs.getMetaData()).thenReturn(md);
+        when(md.getColumnType(1)).thenReturn(Types.TIMESTAMP);
+        when(md.getColumnTypeName(1)).thenReturn("TIMESTAMP");
+        when(rs.next()).thenReturn(true, false);
+        Object vendorPrivate = new Object();   // 替身:oracle.sql.TIMESTAMP 这类驱动私有对象
+        LocalDateTime wall = LocalDateTime.of(2025, 1, 1, 0, 0, 0);
+        when(rs.getObject(1)).thenReturn(vendorPrivate);
+        when(rs.getObject(1, LocalDateTime.class)).thenReturn(wall);
+
+        List<List<Object>> boundaries = service.sampleKeys(conn, table, strategy, null, ctx, 2);
+
+        assertThat(boundaries).hasSize(1);
+        assertThat(boundaries.get(0).get(0)).isEqualTo(wall);
     }
 
     private DataSyncService service(int chunkSize) {

@@ -1363,9 +1363,10 @@ public class DataSyncService {
         }
         // Oracle and DB2 fold identifiers to upper case in their dictionaries.
         try (ResultSet rs = md.getColumns(
-                catalog == null ? null : catalog.toUpperCase(),
-                schema == null ? null : schema.toUpperCase(),
-                table.toUpperCase(), column.toUpperCase())) {
+                catalog == null ? null : catalog.toUpperCase(java.util.Locale.ROOT),
+                schema == null ? null : schema.toUpperCase(java.util.Locale.ROOT),
+                table.toUpperCase(java.util.Locale.ROOT),
+                column.toUpperCase(java.util.Locale.ROOT))) {
             return scaleOfRequestedColumn(rs, table, column);
         }
     }
@@ -3277,10 +3278,15 @@ public class DataSyncService {
                 JdbcRowMapper.bindParameter(st, i + 1, params.get(i), ctx.getSourceDialect());
             }
             try (ResultSet rs = st.executeQuery()) {
+                ResultSetMetaData md = rs.getMetaData();
                 while (rs.next()) {
                     List<Object> key = new ArrayList<>(pkColumns.size());
                     for (int i = 1; i <= pkColumns.size(); i++) {
-                        key.add(rs.getObject(i));
+                        // Same normalization as PkCursor: a vendor-private temporal object
+                        // (oracle.sql.TIMESTAMP / microsoft.sql.DateTimeOffset) cannot be
+                        // serialized into a keyset boundary, so read through the JDBC type.
+                        key.add(JdbcRowMapper.readValue(rs, i, md.getColumnType(i),
+                                md.getColumnTypeName(i), ctx.getSourceType()));
                     }
                     boundaries.add(key);
                 }

@@ -116,7 +116,7 @@ public class CandidateValidator {
             // its real name would overwrite the target's existing routine. Refuse instead.
             return ValidationResult.failure("error.validate.noHeader", null, List.of());
         }
-        String objectKind = matcher.group(2).toUpperCase();
+        String objectKind = matcher.group(2).toUpperCase(java.util.Locale.ROOT);
         String renamed = matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + tempName));
         if ("VIEW".equals(objectKind)) {
             // A view is one plain statement; a trailing semicolon is a script terminator that

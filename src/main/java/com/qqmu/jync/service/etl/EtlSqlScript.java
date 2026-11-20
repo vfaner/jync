@@ -129,9 +129,17 @@ final class EtlSqlScript {
                     && (isWord(next, "UPDATE") || isWord(next, "XML") || isWord(next, "JSON"))) {
                 return true;
             }
-            if ((isWord(word, "LIMIT") || isWord(word, "OFFSET"))
+            if (isWord(word, "LIMIT")
                     && (next == null || isAllDigits(next)
                         || isWord(next, "ALL") || isWord(next, "ROWS"))) {
+                return true;
+            }
+            // SQL Server / DB2 pagination is OFFSET <count> ROWS: the count is one token
+            // (decimal, @variable, :host variable or hex), so ROWS sits two tokens on. Keying
+            // on that pair rather than a bare OFFSET word avoids mistaking columns literally
+            // named "offset, rows" for the clause.
+            if (isWord(word, "OFFSET")
+                    && i + 2 < tokens.size() && isWord(tokens.get(i + 2).word(), "ROWS")) {
                 return true;
             }
         }

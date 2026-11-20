@@ -351,7 +351,7 @@ public class UpgradeService {
             }
             Source source;
             try {
-                source = Source.valueOf(sourceName.trim().toUpperCase());
+                source = Source.valueOf(sourceName.trim().toUpperCase(java.util.Locale.ROOT));
             } catch (IllegalArgumentException e) {
                 throw new IllegalStateException(text("error.upgrade.unknownSource", sourceName));
             }

@@ -145,6 +145,6 @@ public class LoginAttemptService {
         if (trimmed.length() > MAX_USERNAME_LENGTH) {
             trimmed = trimmed.substring(0, MAX_USERNAME_LENGTH);
         }
-        return trimmed.toUpperCase() + "|" + clientIp;
+        return trimmed.toUpperCase(java.util.Locale.ROOT) + "|" + clientIp;
     }
 }
