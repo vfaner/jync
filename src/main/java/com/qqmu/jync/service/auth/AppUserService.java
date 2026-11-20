@@ -87,6 +87,18 @@ public class AppUserService implements UserDetailsService {
             return;
         }
         if (repository.countByRole(UserRole.OPS) == 0) {
+            if (repository.findByUsername(OPS_USERNAME).isPresent()) {
+                // Some installations already have a local account called "ops" that predates the
+                // operator role. The username is unique, so inserting a second one throws from
+                // this listener and takes the process down on every restart. Leave their account
+                // and its role alone. The marker is deliberately not written: the migration has
+                // not happened, so it retries on the next boot and succeeds once that account
+                // has been renamed.
+                log.warn("Upgraded installation: a local account named '{}' already exists but is "
+                        + "not an operator, so no operator account was seeded. Rename that "
+                        + "account in the metadata store and restart to get one.", OPS_USERNAME);
+                return;
+            }
             create(OPS_USERNAME, DEFAULT_PASSWORD, UserRole.OPS);
             log.warn("Upgraded installation: created local '{}' account with the default password. "
                     + "Change it before exposing this instance.", OPS_USERNAME);

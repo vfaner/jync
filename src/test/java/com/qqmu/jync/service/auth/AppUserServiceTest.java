@@ -80,6 +80,45 @@ class AppUserServiceTest {
     }
 
     @Test
+    void anUpgradedInstallationWhoseOpsUsernameIsTakenDoesNotCrash() {
+        repository.save(user("admin", UserRole.ADMIN));
+        repository.save(user("view", UserRole.VIEWER));
+        // A customer-chosen local account that happens to be called "ops". The username is
+        // unique, so seeding a second "ops" would fail the insert and take the process down
+        // from the ApplicationReadyEvent listener.
+        AppUser existing = repository.save(user("ops", UserRole.VIEWER));
+        long before = repository.count();
+
+        service.seedIfEmpty();
+
+        assertThat(repository.count()).isEqualTo(before);
+        assertThat(repository.findByUsername("ops")).get()
+                .extracting(AppUser::getId, AppUser::getRole)
+                .containsExactly(existing.getId(), UserRole.VIEWER);
+        // The migration did not happen, so it must stay pending: the warning comes back on the
+        // next boot and the account is seeded once the name is free.
+        assertThat(systemSettings.findById(SystemSettingKey.LOCAL_OPS_SEEDED.key()))
+                .isEmpty();
+    }
+
+    @Test
+    void theOpsAccountIsSeededOnceTheTakenUsernameIsFreed() {
+        repository.save(user("admin", UserRole.ADMIN));
+        repository.save(user("view", UserRole.VIEWER));
+        repository.save(user("ops", UserRole.VIEWER));
+
+        service.seedIfEmpty();
+
+        repository.deleteById(repository.findByUsername("ops").orElseThrow().getId());
+        service.seedIfEmpty();
+
+        assertThat(repository.findByUsername("ops")).get()
+                .extracting(AppUser::getRole).isEqualTo(UserRole.OPS);
+        assertThat(systemSettings.findById(SystemSettingKey.LOCAL_OPS_SEEDED.key()))
+                .isPresent();
+    }
+
+    @Test
     void anExistingOpsRoleOnlyGetsTheMarker() {
         repository.save(user("admin", UserRole.ADMIN));
         repository.save(user("view", UserRole.VIEWER));
