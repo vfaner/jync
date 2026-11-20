@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.cdc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -15,6 +16,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.repository.CdcPositionRepository;
@@ -472,5 +475,78 @@ class CdcPositionStoreTest {
 
         assertThat(position.getScn()).isEqualTo(200L);
         verify(repository, never()).save(any());
+    }
+
+    // —— 并发写者:写位点输掉乐观锁不得掀翻 CDC 流 ——
+    //
+    // 2026-11-20 生产事故:另一条事件流(2.1.0 未断开的旧 keepalive 客户端)与主消费者
+    // 同时更新同一行,主消费者在 SELECT 与 UPDATE 之间输掉 opt_version 竞争;
+    // StaleObjectStateException 一路冒到 CdcEventStreamHandler.onEvent,被当作致命事件
+    // 断开连接,重连又撞上同 server_id 的副本 → SERVER_ID_CONFLICT 停车。位点推进本是
+    // 尽力而为:目标事务已提交,丢掉这一次写入最多重放一个幂等窗口,绝不能因此拆流。
+
+    @Test
+    void aConcurrentWriterOnThePositionRowDoesNotFailTheBinlogAdvance() {
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+        when(repository.save(any())).thenThrow(
+                new ObjectOptimisticLockingFailureException(CdcPosition.class, 1L));
+
+        assertThatCode(() -> store.advance(1L, "mysql-bin.000007", 200L, null))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aConcurrentWriterOnThePositionRowDoesNotFailTheScnAdvance() {
+        position.setScn(100L);
+        when(repository.save(any())).thenThrow(
+                new ObjectOptimisticLockingFailureException(CdcPosition.class, 1L));
+
+        assertThatCode(() -> store.advanceScn(1L, 200L)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void aConcurrentWriterOnThePositionRowDoesNotFailTheLsnAdvance() {
+        position.setLsn("0/100");
+        when(repository.save(any())).thenThrow(
+                new ObjectOptimisticLockingFailureException(CdcPosition.class, 1L));
+
+        assertThatCode(() -> store.advanceLsn(1L, "0/200")).doesNotThrowAnyException();
+    }
+
+    @Test
+    void aTransientMetadataFailureWhilePersistingDoesNotFailTheBinlogAdvance() {
+        // A lock timeout or any other metadata-store hiccup follows the same rule as
+        // flush(): the source transaction is already committed on the target, the buffer
+        // keeps the newest position, and the next window retries. Only optimistic-lock
+        // conflicts used to be absorbed, so an H2 lock timeout escaped into the event
+        // handler and dropped the stream for a lost position write.
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+        when(repository.save(any())).thenThrow(
+                new CannotAcquireLockException("Timeout trying to lock table CDC_POSITION"));
+
+        assertThatCode(() -> store.advance(1L, "mysql-bin.000007", 200L, null))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aConflictedAdvanceIsRetriedAtTheNextWindow() {
+        AtomicLong now = new AtomicLong(1_000_000L);
+        CdcPositionStore throttled = throttled(now);
+        position.setBinlogFile("mysql-bin.000007");
+        position.setBinlogPos(100L);
+        when(repository.save(any()))
+                .thenThrow(new ObjectOptimisticLockingFailureException(CdcPosition.class, 1L))
+                .thenReturn(position);
+
+        throttled.advance(1L, "mysql-bin.000007", 200L, null);   // 开缓冲,窗口尚未到
+        now.addAndGet(1_000L);
+        throttled.advance(1L, "mysql-bin.000007", 300L, null);   // 本窗口的写入输掉竞争
+        now.addAndGet(1_000L);
+        throttled.advance(1L, "mysql-bin.000007", 400L, null);   // 下一窗口带着最新位点重试
+
+        verify(repository, times(2)).save(any());
+        assertThat(position.getBinlogPos()).isEqualTo(400L);
     }
 }

@@ -11,6 +11,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -188,8 +189,18 @@ public class CdcPositionStore {
      * target's real state (replay bug or competing writer). Undecidable input passes
      * through: a wrong rejection stalls position advance (= real data loss), a wrong pass
      * costs at most one idempotent replay.
+     *
+     * <p>Conflict tolerance: a competing writer (a leaked duplicate stream, a takeover
+     * node, a manual reset) can bump {@code opt_version} between this gateway's read and
+     * write. That used to escape as an optimistic-locking failure, which the event handler
+     * treats as a fatal event and answers by tearing the connection down — a lost position
+     * update must never cost the stream. The write is therefore attempted outside an
+     * ambient transaction (each repository call commits on its own) and any write failure —
+     * a version conflict or a transient metadata-store error — is absorbed with a WARN,
+     * exactly like {@link #flush}; the dirty buffer keeps the newest position for the next
+     * advance or the cycle-boundary flush, and a skipped advance only replays an idempotent
+     * window.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advance(Long projectId, String file, long pos, String gtidSet) {
         advance(projectId, file, pos, gtidSet, null, false);
     }
@@ -204,7 +215,6 @@ public class CdcPositionStore {
      * the layout of the last transaction that touched it, which is exactly what a later
      * binding check needs.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advance(Long projectId, String file, long pos, String gtidSet,
                         Map<String, String> layoutSignatures) {
         advance(projectId, file, pos, gtidSet, layoutSignatures, false);
@@ -219,7 +229,6 @@ public class CdcPositionStore {
      * the new catalog against those obsolete entries and park a project over a DDL it already
      * streamed past.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advance(Long projectId, String file, long pos, String gtidSet,
                         Map<String, String> layoutSignatures, boolean replaceLayouts) {
         Pending pending = pending(projectId);
@@ -332,7 +341,28 @@ public class CdcPositionStore {
     private void maybePersist(Long projectId, Pending pending) {
         long now = clock.getAsLong();
         if (pending.dirty && now - pending.persistedAt >= advancePersistIntervalMs) {
-            persist(projectId, pending, now);
+            try {
+                persist(projectId, pending, now);
+            } catch (RuntimeException e) {
+                // Same policy as flush(): the source transaction is already committed on the
+                // target and the buffer keeps the newest position, so the write is retried at
+                // the next window (or the cycle-boundary flush). It must never escape — the
+                // event handler treats a listener failure as fatal and drops the stream, and a
+                // lost position update must never cost the stream. That covers both a
+                // competing writer's opt_version win and a transient metadata-store failure
+                // (H2 lock timeout, connection hiccup).
+                if (e instanceof OptimisticLockingFailureException) {
+                    log.warn("CDC position for project {} not advanced to {}: the row changed"
+                            + " under the writer (optimistic lock conflict — a competing"
+                            + " writer or a takeover node); this write is skipped and retried"
+                            + " at the next advance ({})", projectId, pending.describeTarget(),
+                            e.getMessage());
+                } else {
+                    log.warn("CDC position for project {} not advanced to {}: the position"
+                            + " write failed ({}); it is retried at the next advance",
+                            projectId, pending.describeTarget(), e.getMessage());
+                }
+            }
         }
     }
 
@@ -508,9 +538,9 @@ public class CdcPositionStore {
     /**
      * LogMiner variant of {@link #advance}: post-commit SCN advance with the same
      * "row vanished → WARN, never throw" semantics (the transaction already committed on
-     * the target; the next mining session resumes from whatever survives).
+     * the target; the next mining session resumes from whatever survives), including a
+     * concurrent writer's optimistic-lock win — see {@link #advance}.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advanceScn(Long projectId, long scn) {
         Pending pending = pending(projectId);
         synchronized (pending) {
@@ -557,9 +587,9 @@ public class CdcPositionStore {
 
     /**
      * LSN variant of {@link #advance}: post-commit LSN advance with the same
-     * "row vanished → WARN, never throw" semantics.
+     * "row vanished → WARN, never throw" semantics, including a concurrent writer's
+     * optimistic-lock win.
      */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void advanceLsn(Long projectId, String lsn) {
         Pending pending = pending(projectId);
         synchronized (pending) {
