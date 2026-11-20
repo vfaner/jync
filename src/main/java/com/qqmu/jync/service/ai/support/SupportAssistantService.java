@@ -31,12 +31,20 @@ import tools.jackson.databind.ObjectMapper;
 @Slf4j
 public class SupportAssistantService {
 
-    static final int MAX_ROUNDS = 4;
+    /**
+     * Tool rounds before the no-tools synthesis turn. One tool per round is the common
+     * shape (list → diagnose → logs → docs), so the old budget of 4 cut a normal
+     * diagnosis short after four queries — 现场反馈「没调用多少工具就报轮次过多」.
+     * The wall-clock budget below is the real bound; this number only stops a model
+     * that keeps calling tools forever.
+     */
+    static final int MAX_ROUNDS = 8;
     static final int MAX_TOOLS_PER_ROUND = 4;
     static final int MAX_HISTORY = 12;
     static final int MAX_MESSAGE_CHARS = 4_000;
     static final int MAX_HISTORY_CHARS = 12_000;
-    static final long TOTAL_BUDGET_MS = 90_000L;
+    /** Must stay below the controller's emitter timeout, which is the last-resort net. */
+    static final long TOTAL_BUDGET_MS = 150_000L;
     static final long AVAILABILITY_TTL_MS = 5_000L;
 
     /** Sent back to a model that announced a plan instead of calling a tool. */

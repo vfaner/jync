@@ -48,8 +48,8 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class SupportApiController {
 
-    /** Outlives the 90-second internal budget; only a safety net. */
-    private static final long EMITTER_TIMEOUT_MS = 120_000L;
+    /** Outlives the 150-second internal budget; only a safety net. */
+    private static final long EMITTER_TIMEOUT_MS = 180_000L;
 
     /** The page keeps this id to reattach after a navigation destroyed its fetch. */
     static final String RUN_ID_HEADER = "X-Support-Run-Id";

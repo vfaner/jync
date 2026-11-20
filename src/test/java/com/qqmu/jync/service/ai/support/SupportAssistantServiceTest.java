@@ -246,10 +246,15 @@ class SupportAssistantServiceTest {
         AiChatClient.ToolCall call = new AiChatClient.ToolCall("c", "search_docs", "{}");
         AiChatClient.ToolChatResult toolRound = new AiChatClient.ToolChatResult(
                 true, "OK", "", List.of(call), "", 1, false);
+        AiChatClient.ToolChatResult summary = new AiChatClient.ToolChatResult(
+                true, "OK", "汇总", List.of(), "", 1, false);
+        // 模型每轮都只调工具、从不作答，直到预算用完：第 MAX_ROUNDS+1 次必须是不带工具
+        // 的收束调用。按常量构造序列，调宽预算时这条测试不必跟着改数字。
+        int budget = SupportAssistantService.MAX_ROUNDS;
+        java.util.concurrent.atomic.AtomicInteger calls =
+                new java.util.concurrent.atomic.AtomicInteger();
         when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
-                .thenReturn(toolRound, toolRound, toolRound, toolRound,
-                        new AiChatClient.ToolChatResult(
-                                true, "OK", "汇总", List.of(), "", 1, false));
+                .thenAnswer(inv -> calls.getAndIncrement() < budget ? toolRound : summary);
         when(registry.execute(any(), any(), any())).thenReturn("{}");
 
         Recorder sink = new Recorder();
@@ -258,10 +263,34 @@ class SupportAssistantServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiChatClient.ToolSpec>> tools =
                 ArgumentCaptor.forClass(List.class);
-        verify(chat, times(5)).converseStream(any(), any(), any(), any(), tools.capture(),
-                anyInt(), any());
-        assertThat(tools.getAllValues().get(4)).isEmpty();
+        verify(chat, times(budget + 1)).converseStream(any(), any(), any(), any(),
+                tools.capture(), anyInt(), any());
+        assertThat(tools.getAllValues().get(budget)).isEmpty();
         assertThat(sink.events).contains("delta:汇总");
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    /**
+     * 现场反馈「没调用多少工具就报轮次过多」：一轮只调一个工具时，旧的 4 轮预算只够
+     * 4 次查询，第 5 次就被截断。放宽后一条普通排障链路（多次查询后作答）必须完整走完。
+     */
+    @Test
+    void aConversationMayUseMoreThanFourToolRounds() {
+        AiChatClient.ToolCall call = new AiChatClient.ToolCall("c", "search_docs", "{}");
+        AiChatClient.ToolChatResult toolRound = new AiChatClient.ToolChatResult(
+                true, "OK", "", List.of(call), "", 1, false);
+        AiChatClient.ToolChatResult answer = new AiChatClient.ToolChatResult(
+                true, "OK", "已确认结论", List.of(), "", 1, false);
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(toolRound, toolRound, toolRound, toolRound, toolRound, toolRound,
+                        answer);
+        when(registry.execute(any(), any(), any())).thenReturn("{}");
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("hi"), sink);
+
+        verify(registry, times(6)).execute(any(), any(), any());
+        assertThat(sink.events).contains("delta:已确认结论");
         assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
     }
 
