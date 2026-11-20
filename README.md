@@ -237,7 +237,7 @@ com.qqmu.jync
 mvn test
 ```
 
-6200+ 单元测试，覆盖方言与 SQL 改写、全量与续传、六类 CDC 前提与位点纪律、Redis 投影与专属迁移、ETL 变量与告警、角色与资源归属、AI 助手、安全（加密存储、访客 POST 全拒、CSRF）、页面国际化，以及升级双通道兜底。
+6400+ 单元测试，覆盖方言与 SQL 改写、全量与续传、六类 CDC 前提与位点纪律、Redis 投影与专属迁移、ETL 变量与告警、角色与资源归属、AI 助手、安全（加密存储、访客 POST 全拒、CSRF）、页面国际化，以及升级双通道兜底。
 
 真实库集成测试（`*IT`，默认不进套件，需 Docker）：Oracle 23ai 并行全量与 `ROWDEPENDENCIES`；MySQL 8 binlog 基线 → 流式、崩溃重跑、十万行一致与故障注入。运行加 `-Dapi.version=1.44`（Docker Engine ≥ 29）。
 
