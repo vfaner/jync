@@ -2,6 +2,7 @@ package com.qqmu.jync.service.connection;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -12,13 +13,22 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.LockSupport;
 
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.service.cdc.LogCapture;
 import com.zaxxer.hikari.HikariDataSource;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 /**
  * The connections page shows a health dot per row. Probing a production database is the riskiest
@@ -190,5 +200,87 @@ class DatabaseHealthServiceTest {
 
         verify(dataSourceManager, times(1)).createProbeDataSource(config);
         assertThat(second.get(0).ok()).isFalse();
+    }
+
+    /**
+     * Hikari's shutdown can outlive the page's budget: it waits for its own connection executor
+     * to finish. The budget must abandon that wait without interrupting the worker — an
+     * interrupt <em>inside</em> {@code close()} aborts Hikari's shutdown at the first
+     * {@code awaitTermination}, skips closing the pool's connections, and logs
+     * "Interrupted during closing" with a stack that reads like a failure.
+     */
+    @Test
+    void aProbeStillClosingWhenTheBudgetExpiresIsNotInterruptedMidShutdown() throws Exception {
+        DatabaseConfig config = config(11L, "slow-close");
+        HikariDataSource pool = mock(HikariDataSource.class);
+        Connection connection = mock(Connection.class);
+        when(connection.isValid(anyInt())).thenReturn(true);
+        when(pool.getConnection()).thenReturn(connection);
+        CountDownLatch closing = new CountDownLatch(1);
+        CountDownLatch closed = new CountDownLatch(1);
+        AtomicBoolean interruptedWhileClosing = new AtomicBoolean();
+        doAnswer(invocation -> {
+            closing.countDown();
+            // Stand in for Hikari's awaitTermination: still running when the budget expires.
+            long until = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(400);
+            while (System.nanoTime() < until) {
+                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(20));
+                if (Thread.currentThread().isInterrupted()) {
+                    interruptedWhileClosing.set(true);
+                    Thread.interrupted();
+                }
+            }
+            closed.countDown();
+            return null;
+        }).when(pool).close();
+        when(dataSourceManager.createProbeDataSource(config)).thenReturn(pool);
+        DatabaseHealthService impatient = new DatabaseHealthService(
+                dataSourceManager, mock(MongoHealthProbe.class),
+                Duration.ofMillis(150), Duration.ofSeconds(60));
+
+        long start = System.currentTimeMillis();
+        List<DatabaseHealthService.Health> health = impatient.check(List.of(config), true);
+        long took = System.currentTimeMillis() - start;
+
+        assertThat(took).as("the page returns on budget, the close keeps running").isLessThan(1_000);
+        assertThat(closing.await(2, TimeUnit.SECONDS)).isTrue();
+        assertThat(closed.await(5, TimeUnit.SECONDS)).isTrue();
+        assertThat(interruptedWhileClosing)
+                .as("the budget abandons the probe without interrupting its Hikari shutdown")
+                .isFalse();
+        assertThat(health.get(0).message()).isEqualTo(DatabaseHealthService.TIMEOUT_MESSAGE);
+    }
+
+    /**
+     * The same case against a real Hikari pool: with the flag set, HikariCP logs
+     * "Interrupted during closing" with a full stack and stops before closing the connections.
+     */
+    @Test
+    void aProbePoolFinishesClosingEvenWhenTheThreadIsInterrupted() throws SQLException {
+        HikariDataSource pool = new HikariDataSource();
+        pool.setPoolName("probe-close-test");
+        pool.setJdbcUrl("jdbc:h2:mem:probe-close-" + System.nanoTime() + ";DB_CLOSE_DELAY=-1");
+        pool.setMaximumPoolSize(1);
+        pool.setMinimumIdle(1);
+        try (Connection connection = pool.getConnection()) {
+            // start the pool and its executors
+        }
+        ListAppender<ILoggingEvent> logs = LogCapture.attach(HikariDataSource.class);
+        Thread.currentThread().interrupt();
+        try {
+            DatabaseHealthService.closeProbePool(pool);
+            assertThat(Thread.currentThread().isInterrupted())
+                    .as("the caller's interrupt status is restored")
+                    .isTrue();
+        } finally {
+            Thread.interrupted();
+            LogCapture.detach(HikariDataSource.class, logs);
+        }
+
+        assertThat(pool.isClosed()).isTrue();
+        assertThat(LogCapture.messagesAt(Level.WARN, logs))
+                .noneMatch(message -> message.contains("Interrupted during closing"));
+        assertThat(LogCapture.messagesAt(Level.INFO, logs))
+                .anyMatch(message -> message.contains("Shutdown completed"));
     }
 }

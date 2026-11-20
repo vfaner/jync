@@ -9,13 +9,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -138,47 +140,69 @@ public class DatabaseHealthService {
         ExecutorService executor = Executors.newFixedThreadPool(
                 Math.min(MAX_PARALLEL, pending.size()), daemonThreads());
         try {
-            List<Callable<Health>> tasks = new ArrayList<>(pending.size());
+            List<Future<Health>> futures = new ArrayList<>(pending.size());
             for (DatabaseConfig config : pending) {
-                tasks.add(() -> probe(config));
+                futures.add(executor.submit(() -> probe(config)));
             }
-            List<Future<Health>> futures =
-                    executor.invokeAll(tasks, budget.toMillis(), TimeUnit.MILLISECONDS);
+            long deadline = System.nanoTime() + budget.toNanos();
             Instant expiresAt = Instant.now().plus(cacheTtl);
+            boolean interrupted = false;
             for (int i = 0; i < futures.size(); i++) {
                 DatabaseConfig config = pending.get(i);
-                Future<Health> future = futures.get(i);
                 Health health;
-                if (future.isCancelled()) {
-                    health = new Health(config.getId(), false, budget.toMillis(), TIMEOUT_MESSAGE);
+                if (interrupted) {
+                    futures.get(i).cancel(false);
+                    health = timeout(config, 0);
                 } else {
-                    health = await(future, config);
+                    health = await(futures.get(i), config, deadline);
+                    interrupted = Thread.currentThread().isInterrupted();
                 }
                 results.put(config.getId(), health);
                 cache.put(config.getId(),
                         new Cached(health, expiresAt, config.getUpdatedAt()));
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            for (DatabaseConfig config : pending) {
-                results.putIfAbsent(config.getId(),
-                        new Health(config.getId(), false, 0, TIMEOUT_MESSAGE));
-            }
         } finally {
-            // Interrupts a dial still in flight; its task closes its own pool on the way out.
-            executor.shutdownNow();
+            // Abandoned probes are cancelled without an interrupt, so they run to completion on
+            // daemon threads and close their pools themselves; shutdown lets them finish.
+            executor.shutdown();
         }
     }
 
-    private Health await(Future<Health> future, DatabaseConfig config) {
+    /**
+     * Waits for one probe until the page's shared deadline, then abandons it.
+     *
+     * <p>The abandonment must not interrupt the worker. A probe that is already closing its
+     * Hikari pool is inside {@code HikariPool.shutdown()}, waiting for the pool's own executors
+     * to terminate; interrupting it there makes Hikari treat the close as a shutdown request —
+     * it throws at the first {@code awaitTermination}, skips closing the pool's connections,
+     * and logs "Interrupted during closing" with a stack that reads like a failure. A probe
+     * that is still dialling is bounded by Hikari's own connection and validation timeouts, so
+     * letting it finish costs a daemon thread for a few seconds, not a hung page.
+     */
+    private Health await(Future<Health> future, DatabaseConfig config, long deadline) {
         try {
-            return future.get();
+            long remaining = deadline - System.nanoTime();
+            if (remaining <= 0) {
+                future.cancel(false);
+                return timeout(config, budget.toMillis());
+            }
+            return future.get(remaining, TimeUnit.NANOSECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(false);
+            return timeout(config, budget.toMillis());
         } catch (InterruptedException e) {
+            future.cancel(false);
             Thread.currentThread().interrupt();
-            return new Health(config.getId(), false, 0, TIMEOUT_MESSAGE);
-        } catch (Exception e) {
+            return timeout(config, 0);
+        } catch (CancellationException e) {
+            return timeout(config, budget.toMillis());
+        } catch (ExecutionException e) {
             return new Health(config.getId(), false, 0, messageOf(e));
         }
+    }
+
+    private static Health timeout(DatabaseConfig config, long elapsedMs) {
+        return new Health(config.getId(), false, elapsedMs, TIMEOUT_MESSAGE);
     }
 
     private Health probe(DatabaseConfig config) {
@@ -186,19 +210,58 @@ public class DatabaseHealthService {
         if (config.effectiveType() == DatabaseType.MONGODB_NATIVE) {
             return probeMongo(config, start);
         }
-        try (HikariDataSource pool = dataSourceManager.createProbeDataSource(config);
-             Connection connection = pool.getConnection()) {
-            if (!connection.isValid(VALIDATION_SECONDS)) {
-                return new Health(config.getId(), false, elapsed(start), INVALID_MESSAGE);
-            }
-            return new Health(config.getId(), true, elapsed(start), null);
-        } catch (SQLException e) {
-            log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
-            return new Health(config.getId(), false, elapsed(start), sqlMessage(e));
+        HikariDataSource pool;
+        try {
+            pool = dataSourceManager.createProbeDataSource(config);
         } catch (RuntimeException e) {
             // Driver class missing, bad jar path, malformed URL: all reachable from the page.
             log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
             return new Health(config.getId(), false, elapsed(start), messageOf(e));
+        }
+        try {
+            try (Connection connection = pool.getConnection()) {
+                if (!connection.isValid(VALIDATION_SECONDS)) {
+                    return new Health(config.getId(), false, elapsed(start), INVALID_MESSAGE);
+                }
+                return new Health(config.getId(), true, elapsed(start), null);
+            }
+        } catch (SQLException e) {
+            log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
+            return new Health(config.getId(), false, elapsed(start), sqlMessage(e));
+        } catch (RuntimeException e) {
+            log.debug("Health check failed for '{}': {}", config.getName(), e.getMessage());
+            return new Health(config.getId(), false, elapsed(start), messageOf(e));
+        } finally {
+            closeProbePool(pool);
+        }
+    }
+
+    /**
+     * Closes a probe pool with the thread's interrupt flag temporarily clear.
+     *
+     * <p>The page's budget is enforced by {@code invokeAll(..., budget, ...)}, which cancels the
+     * probes still running when it expires; cancellation interrupts the worker thread, and a
+     * driver may leave that flag set on the way out. HikariCP reads an interrupt during
+     * {@code close()} as "stop waiting now": its shutdown throws at the first
+     * {@code awaitTermination} and is abandoned half-way — the pool's connections are never
+     * closed — and it logs "Interrupted during closing" with a stack that reads like a failure.
+     * Clearing the flag for the duration of the close and restoring it afterwards lets Hikari
+     * finish; the thread belongs to a cancelled task whose result is discarded anyway.
+     */
+    static void closeProbePool(HikariDataSource pool) {
+        if (pool == null) {
+            return;
+        }
+        boolean interrupted = Thread.interrupted();
+        try {
+            pool.close();
+        } catch (RuntimeException e) {
+            // A failed close must not replace the verdict the probe just produced.
+            log.debug("Closing probe pool failed: {}", e.getMessage());
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
