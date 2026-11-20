@@ -1,6 +1,7 @@
 package com.qqmu.jync.diagnostics;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -9,6 +10,8 @@ import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.springframework.boot.diagnostics.FailureAnalysis;
 import org.springframework.boot.diagnostics.FailureAnalyzer;
@@ -69,7 +72,8 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
         }
         String target = storeBase();
         return new FailureAnalysis(
-                description(target, true) + logQuote() + storeChecks(Path.of(target), url),
+                description(target, true) + logQuote() + traceQuote(Path.of(target))
+                        + storeChecks(Path.of(target), url),
                 action(target, true), failure);
     }
 
@@ -137,6 +141,10 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
     private static final int MAX_LOG_TAIL_BYTES = 256 * 1024;
     private static final int MAX_QUOTED_CHARS = 300;
     private static final long LOW_DISK_BYTES = 64L * 1024 * 1024;
+    /** H2 trace blocks start with a local-time stamp and topic: "2026-11-20 15:29:05 database: opening ...". */
+    private static final Pattern TRACE_BLOCK_HEADER = Pattern.compile("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} .+");
+    /** The MVStore header is plain text: "H:2,...,format:2,version:2,fletcher:...". */
+    private static final Pattern WRITE_FORMAT = Pattern.compile("(?:^|[,\\s])format:(\\d+)");
 
     /**
      * Hibernate throws the dialect fallback as a <em>new</em> exception and only logs the real
@@ -152,17 +160,58 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
         return "\n\n最近一次启动日志里的底层错误（摘自 " + startupLog + "）：" + line;
     }
 
-    private String lastLoggedCause() {
-        String tail;
-        try (RandomAccessFile file = new RandomAccessFile(startupLog.toFile(), "r")) {
-            long length = file.length();
+    /**
+     * H2 records every open failure in {@code <store>.trace.db} at ERROR level, even when the
+     * application log was never redirected to a file. Its last block names the real cause
+     * (unsupported file version, corrupt header, IO exception, read-only store) and is
+     * timestamped, so the operator can confirm it belongs to the failed start.
+     */
+    private static String traceQuote(Path store) {
+        Path trace = Path.of(store + ".trace.db");
+        String tail = readTail(trace);
+        if (tail == null) {
+            return "";
+        }
+        String[] lines = tail.split("\\R");
+        int header = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (TRACE_BLOCK_HEADER.matcher(lines[i]).matches()) {
+                header = i;
+            }
+        }
+        if (header < 0) {
+            return "";
+        }
+        String text = lines[header].trim();
+        for (int i = header + 1; i < lines.length && i <= header + 6; i++) {
+            String candidate = lines[i].trim();
+            if (candidate.isEmpty() || candidate.startsWith("at ") || candidate.startsWith("...")) {
+                continue;
+            }
+            text = text + "：" + candidate;
+            break;
+        }
+        return "\n\n最近一次 H2 诊断（摘自 " + trace + "）：" + quote(text);
+    }
+
+    /** The last {@value #MAX_LOG_TAIL_BYTES} bytes of a log file as text, or null. */
+    private static String readTail(Path file) {
+        try (RandomAccessFile raf = new RandomAccessFile(file.toFile(), "r")) {
+            long length = raf.length();
             long start = Math.max(0, length - MAX_LOG_TAIL_BYTES);
             byte[] bytes = new byte[(int) (length - start)];
-            file.seek(start);
-            file.readFully(bytes);
-            tail = new String(bytes, StandardCharsets.UTF_8);
+            raf.seek(start);
+            raf.readFully(bytes);
+            return new String(bytes, StandardCharsets.UTF_8);
         } catch (IOException | RuntimeException e) {
             return null; // a failed diagnostic must never fail the diagnostic
+        }
+    }
+
+    private String lastLoggedCause() {
+        String tail = readTail(startupLog);
+        if (tail == null) {
+            return null;
         }
         String[] lines = tail.split("\\R");
         int marker = -1;
@@ -213,7 +262,8 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
         Path data = Path.of(store + ".mv.db");
         if (Files.isRegularFile(data)) {
             sb.append("元数据库文件 ").append(data)
-                    .append(Files.isWritable(data) ? " 存在且可写；" : " 存在但不可写；");
+                    .append(Files.isWritable(data) ? " 存在且可写" : " 存在但不可写")
+                    .append("，").append(storeFormat(data)).append("；");
         } else {
             sb.append("未找到元数据库文件 ").append(data).append("（路径不对或首次启动）；");
         }
@@ -228,6 +278,40 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
         appendHostName(url, sb);
         sb.setLength(sb.length() - 1);
         return sb.append('。').toString();
+    }
+
+    /**
+     * Jync pins H2 2.1.214 so that every 1.x metadata store stays readable; that release only
+     * supports MVStore write format 2, and a store written by H2 2.2+ (format 3) fails at open
+     * with "Unsupported database file version". Reading the format out of the plain-text header
+     * tells the two apart from a truncated or overwritten file without opening the store.
+     */
+    private static String storeFormat(Path data) {
+        byte[] head;
+        try (InputStream in = Files.newInputStream(data)) {
+            head = in.readNBytes(512);
+        } catch (IOException | RuntimeException e) {
+            return "文件头无法读取";
+        }
+        String text = new String(head, StandardCharsets.ISO_8859_1);
+        if (!text.startsWith("H:")) {
+            return "文件头不是有效的 H2 MVStore 头（可能已损坏或被其他程序改写）";
+        }
+        Matcher format = WRITE_FORMAT.matcher(text);
+        if (!format.find()) {
+            return "文件头里没有写格式，可能已损坏";
+        }
+        int value = Integer.parseInt(format.group(1));
+        if (value == 2) {
+            return "写格式 2";
+        }
+        if (value > 2) {
+            return "写格式 " + value + "——比本版本内置的 H2 2.1.214 所支持的写格式 2 更新"
+                    + "（H2 2.2 起使用写格式 3），这个库是被更新的 H2 写过的；"
+                    + "请用写入该文件的版本导出数据，或恢复升级前的备份";
+        }
+        return "写格式 " + value + "——比本版本内置的 H2 2.1.214 所支持的写格式 2 更旧，"
+                + "无法直接打开，请用 H2 2.1 的导出/导入完成迁移";
     }
 
     private static void appendFreeSpace(Path dir, StringBuilder sb) {

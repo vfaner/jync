@@ -229,6 +229,109 @@ class MetadataStoreFailureAnalyzerTest {
                 .doesNotContain("发现锁文件 " + store);
     }
 
+    /**
+     * H2 writes the real open error to {@code <store>.trace.db} even when the application log
+     * was never redirected to a file (a manual {@code java -jar} start, a console-only container).
+     * That file is the operator's most reliable copy of the cause, so it is quoted too.
+     */
+    @Test
+    void theLastH2TraceErrorIsQuotedWithItsTimestamp() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.createFile(Path.of(store + ".mv.db"));
+        Files.writeString(Path.of(store + ".trace.db"),
+                "2026-11-20 15:29:04 database: flush\n"
+                        + "org.h2.message.DbException: General error: \"inner\" [50000-214]\n"
+                        + "\tat org.h2.message.DbException.get(DbException.java:212)\n"
+                        + "\n"
+                        + "2026-11-20 15:29:05 database: opening " + store + "\n"
+                        + "org.h2.message.DbException: Unsupported database file version or invalid "
+                        + "file header in file \"" + store + ".mv.db\" [90048-214]\n"
+                        + "\tat org.h2.message.DbException.get(DbException.java:212)\n");
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL;AUTO_SERVER=TRUE");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription())
+                .contains("最近一次 H2 诊断")
+                .contains("2026-11-20 15:29:05")
+                .contains("database: opening")
+                .contains("Unsupported database file version")
+                .doesNotContain("General error")
+                .doesNotContain("at org.h2.message");
+    }
+
+    @Test
+    void withoutATraceFileNoH2DiagnosticIsQuoted() {
+        Path store = tempDir.resolve("data/jync");
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription()).doesNotContain("最近一次 H2 诊断");
+    }
+
+    /**
+     * Jync pins H2 2.1.214 because every 1.x release wrote MVStore format 2 and H2 2.2+ refuses
+     * that file. The inverse case is just as fatal and just as easy to name: a store written by
+     * H2 2.2+ (format 3) cannot be opened by the bundled 2.1.214, and the operator needs to know
+     * it is a version mismatch, not corruption.
+     */
+    @Test
+    void aNewerMvStoreWriteFormatIsNamedAsAVersionMismatch() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.writeString(Path.of(store + ".mv.db"),
+                "H:2,block:3,blockSize:1000,chunk:2,clean:1,created:1a1f80f45a3,format:3,"
+                        + "version:2,fletcher:95b899e2\n");
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription())
+                .contains("写格式 3")
+                .contains("H2 2.2")
+                .contains("2.1.214");
+    }
+
+    @Test
+    void theSupportedWriteFormatIsReportedAsNormal() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.writeString(Path.of(store + ".mv.db"),
+                "H:2,block:3,blockSize:1000,chunk:2,clean:1,created:1a1f80f8406,format:2,"
+                        + "version:2,fletcher:a4cb6be4\n");
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription())
+                .contains("写格式 2")
+                .doesNotContain("H2 2.2");
+    }
+
+    @Test
+    void aStoreFileThatIsNotAMvStoreIsCalledOutAsDamaged() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.writeString(Path.of(store + ".mv.db"), "not an h2 store");
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription()).contains("损坏");
+    }
+
     private static Throwable wrappedFailure() {
         return new IllegalStateException(
                 "Failed to initialize dependency 'EntityManagerFactory' of bean 'entityManagerFactory'",

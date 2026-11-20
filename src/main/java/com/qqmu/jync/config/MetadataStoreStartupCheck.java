@@ -8,13 +8,21 @@ import org.springframework.context.ApplicationListener;
 import lombok.extern.slf4j.Slf4j;
 
 /**
- * Warns at startup when the metadata store's H2 lock file shows that another Jync instance is
- * still using it, or was killed without cleaning up.
+ * Two pre-Hibernate checks on the metadata store:
+ *
+ * <ul>
+ *   <li>{@link MetadataStorePreflight} logs an ERROR when the running user cannot write the H2
+ *       store's directory or file — the case where H2 fails to create its {@code .lock.db} and
+ *       the operator otherwise only sees Hibernate's generic "Unable to determine Dialect"
+ *       with no lock file to explain it;</li>
+ *   <li>{@link MetadataStoreLock} warns when a lock file shows another Jync instance still uses
+ *       the store, or a killed process left the lock behind.</li>
+ * </ul>
  *
  * <p>Registered through {@code META-INF/spring.factories} as an {@code ApplicationListener}:
  * that runs after the logging system is configured (unlike an {@code EnvironmentPostProcessor})
- * but before any bean — including the datasource and Hibernate — is created. The check itself
- * only reads the lock file, never opens the store.
+ * but before any bean — including the datasource and Hibernate — is created. The checks only
+ * read the filesystem, never open the store.
  */
 @Slf4j
 public class MetadataStoreStartupCheck implements ApplicationListener<ApplicationPreparedEvent> {
@@ -28,11 +36,17 @@ public class MetadataStoreStartupCheck implements ApplicationListener<Applicatio
             }
             String url = event.getApplicationContext().getEnvironment()
                     .getProperty("spring.datasource.url");
-            MetadataStoreLock.startupWarning(url, Path.of(userDir), MetadataStoreLock::serverAnswers)
-                    .ifPresent(log::warn);
+            check(url, Path.of(userDir));
         } catch (RuntimeException e) {
             // A diagnostic must never be the reason a startup fails.
-            log.debug("Metadata store lock check failed", e);
+            log.debug("Metadata store check failed", e);
         }
+    }
+
+    /** Both checks read the filesystem only; the working directory is injectable for tests. */
+    void check(String url, Path workingDirectory) {
+        MetadataStorePreflight.startupProblem(url, workingDirectory).ifPresent(log::error);
+        MetadataStoreLock.startupWarning(url, workingDirectory, MetadataStoreLock::serverAnswers)
+                .ifPresent(log::warn);
     }
 }
