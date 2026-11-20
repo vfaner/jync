@@ -52,6 +52,26 @@ class SupportKnowledgeBaseTest {
     }
 
     @Test
+    void aChineseQuestionAboutTdengineFindsTheTimeSeriesSection() {
+        var hits = kb.search("zh", "TDengine 时序数据库怎么同步", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("TDengine 与时序数据");
+            assertThat(hit.body()).contains("taos-jdbcdriver-3.10.0-dist.jar");
+        });
+    }
+
+    @Test
+    void anEnglishQuestionAboutTdengineFindsTheTimeSeriesSection() {
+        var hits = kb.search("en", "TDengine time-series source ETL target", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("TDengine and time-series data");
+            assertThat(hit.body()).contains("taos-jdbcdriver-3.10.0-dist.jar");
+        });
+    }
+
+    @Test
     void noMatchReturnsEmptyRatherThanEverything() {
         assertThat(kb.search("zh", "zzzz qqqq", 3)).isEmpty();
     }

@@ -365,8 +365,36 @@ consume the JDBC pool.
 ## Connections and drivers
 
 Drivers are bundled except GBase, ShenTong, GaussDB, SAP HANA, ClickHouse, Hive, Impala,
-Elasticsearch and MongoDB. For those, provide the vendor jar path in the connection form; override
-the driver class on the same card when it differs.
+TDengine, Elasticsearch and MongoDB. For those, provide the vendor jar path in the connection
+form; override the driver class on the same card when it differs.
+
+## TDengine and time-series data
+
+- WebSocket only (port 6041); supply the official `taos-jdbcdriver-3.10.0-dist.jar` (the `-dist`
+  build bundles Netty and friends; the plain jar fails on missing classes). The connection must
+  name a database.
+- In real-time sync it is a SOURCE only, with no log CDC: polling or full comparison, so an
+  update or delete inside a polling window is not visible as such. With "sync deletes" enabled
+  and the table inside the row limit, the primary-key comparison still removes extra target rows.
+- Keys and cursors: without a declared primary key `ts` is unique; a super table is located by
+  `ts + declared key + TAG`, and subtables are not listed individually. Specify the cursor column
+  by hand (usually `ts`); timestamp watermarks use `LAST(column)` (TDengine rejects `MAX`/`MIN`
+  on TIMESTAMP), while integer and character cursors keep `MAX`.
+- Writing to TDengine is ETL-only, and the target table must already exist (a normal table or a
+  subtable) or be created by the pre-SQL. Jync never creates TDengine tables, a super table
+  cannot be a target, and ETL does not support UPSERT there.
+- A range-overwrite delete condition must carry a `ts` time window, otherwise TDengine rejects
+  the whole delete (no row is written in that run); the plain overwrite delete works.
+- Never use a `DECIMAL` column as an ETL target: server 3.3.6 with driver 3.10.0 / 3.8.4 sends
+  the decimal as text and decodes it as binary, writing a wrong value without an error. Use
+  `DOUBLE` (with precision loss) or a fixed server / driver combination.
+- `BINARY` and `VARCHAR` are indistinguishable in the driver and read as text (non-UTF-8 bytes
+  are corrupted); use `VARBINARY` for binary fidelity. `BIGINT UNSIGNED` maps to `DECIMAL(20,0)`
+  and `GEOMETRY` to `VARBINARY`.
+- No secondary indexes (indexes exist only on TAGs); when the cursor column is not the leading
+  primary-key column every incremental read scans the whole table. No transactions, so a failed
+  rerun may leave partial data.
+- Baseline: server 3.3.6 community with driver 3.10.0; other combinations are unverified.
 
 ## Users, roles and permissions
 
@@ -559,8 +587,16 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   exact row count of one table on both sides.
 - It searches this knowledge base for how-to answers and drafts a new task from a description, which
   the user must review before it pre-fills the form.
-- It is read-only: it cannot run SQL, change settings or start/stop tasks, and every number must come
-  from a tool result.
+- Runtime actions it can perform: start / stop a sync task, sync once now, and enable / disable /
+  run an ETL task now. The assistant only produces a confirmation card and never executes
+  directly; when you click "Confirm" the server checks the acting account's role and resource
+  ownership again — an operator can only act on resources they own, an administrator on anything,
+  and viewers never see the assistant.
+- Actions have a boundary: deletes, configuration changes, connection edits, system settings,
+  external authentication, alerts, AI settings, users and audit are outside the assistant's reach,
+  and it cannot run SQL.
+- Every number must come from a tool result and is never made up; when a tool fails, explain why
+  instead of retrying the same call.
 
 ## Running multiple instances
 
