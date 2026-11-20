@@ -892,7 +892,15 @@ public class CdcDdlTaskService {
             entry.setHandledBy(currentActor());
             entry.setHandledAt(Instant.now());
             repository.save(entry);
-            throw new IllegalStateException("error.ddl.replay:" + brief(e, 300), e);
+            String message = brief(e, 300);
+            if (message.startsWith("error.ddl.")) {
+                // A nested key such as error.ddl.tableMissing:<table> must reach the toast
+                // as-is: ChangeLogController translates only the head before the first
+                // colon, so prefixing it with error.ddl.replay: printed the inner key
+                // verbatim. The failure is already saved above.
+                throw new IllegalStateException(message, e);
+            }
+            throw new IllegalStateException("error.ddl.replay:" + message, e);
         }
         markReplayed(entry);
     }

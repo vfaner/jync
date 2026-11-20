@@ -333,31 +333,42 @@ public class PgLogicalReplicationCdcProbe {
             bySchema.computeIfAbsent(schema, k -> new ArrayList<>()).add(ot[1]);
         }
         List<String> missing = new ArrayList<>();
+        List<String> withoutPk = new ArrayList<>();
         List<String> notFound = new ArrayList<>();
         int checked = 0;
+        int indexIdentities = 0;
         try {
             for (Map.Entry<String, List<String>> e : bySchema.entrySet()) {
                 String schema = e.getKey();
-                Map<String, String> identities = new java.util.HashMap<>();
+                Map<String, TableIdentity> identities = new java.util.HashMap<>();
                 for (String variant : schemaVariants(schema)) {
                     identitiesByTable(conn, variant, e.getValue())
                             .forEach(identities::putIfAbsent);
                 }
                 for (String table : e.getValue()) {
                     // pg_class.relreplident 官方语义:'d'=DEFAULT(主键作 old key)、'f'=FULL
-                    // (全行旧镜像)、'i'=INDEX(指定唯一索引列作 old key,足以定位原行)、
-                    // 'n'=NOTHING(UPDATE/DELETE 事件不带任何旧键 — 消费端无法定位原行,
-                    // upsert 残留旧行、delete 落空,必须拒绝)。历史上此处把 i/n 写反:
+                    // (全行旧镜像)、'i'=INDEX(指定唯一索引列作 old key)、'n'=NOTHING
+                    // (UPDATE/DELETE 事件不带任何旧键)。历史上此处把 i/n 写反:
                     // 误拒可用的 INDEX、放行不可用的 NOTHING。
-                    String ident = identities.get(table);
+                    //
+                    // v2.4.3: 但 d/f/i 都只是「源端带不带旧镜像」,消费端却按主键做
+                    // 幂等 upsert/delete。没有主键的表在 old 镜像里也找不到主键列,
+                    // FULL 只多带业务列,delete 仍落空、update 仍残留旧行 —— 必须拒绝。
+                    TableIdentity ident = identities.get(table);
                     if (ident == null) {
                         ident = identities.get(table.toLowerCase(Locale.ROOT));
                     }
                     checked++;
                     if (ident == null) {
                         notFound.add(schema + "." + table);
-                    } else if ("n".equals(ident)) {
+                    } else if (!ident.hasPrimaryKey()) {
+                        withoutPk.add(schema + "." + table);
+                    } else if ("n".equals(ident.replicaIdentity())) {
                         missing.add(schema + "." + table);
+                    } else if ("i".equals(ident.replicaIdentity())) {
+                        // 目录只记录「哪个索引被标为 replident」,不记录它是否覆盖
+                        // 主键列;放行后提醒用户核对,而不是假装已经验证过。
+                        indexIdentities++;
                     }
                 }
             }
@@ -365,15 +376,26 @@ public class PgLogicalReplicationCdcProbe {
             return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, false,
                     msg(e));
         }
-        if (missing.isEmpty() && notFound.isEmpty()) {
-            return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, true,
-                    checked + " table(s) with usable REPLICA IDENTITY");
+        if (missing.isEmpty() && withoutPk.isEmpty() && notFound.isEmpty()) {
+            String detail = checked + " table(s) with usable REPLICA IDENTITY";
+            if (indexIdentities > 0) {
+                detail += "; " + indexIdentities + " use REPLICA IDENTITY USING INDEX —"
+                        + " verify the index covers every primary-key column, or switch to"
+                        + " REPLICA IDENTITY DEFAULT";
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.PG_REPLICA_IDENTITY, true, detail);
         }
-        List<String> parts = new ArrayList<>(2);
+        List<String> parts = new ArrayList<>(3);
+        if (!withoutPk.isEmpty()) {
+            parts.add("no primary key on: " + String.join(", ", withoutPk)
+                    + " — Jync applies UPDATE/DELETE by primary key; REPLICA IDENTITY FULL"
+                    + " does not give the consumer one, so these tables cannot be applied."
+                    + " Add a primary key or exclude them from the selection");
+        }
         if (!missing.isEmpty()) {
             parts.add("REPLICA IDENTITY is NOTHING on: " + String.join(", ", missing)
                     + " — fix with: ALTER TABLE \"<schema>\".\"<table>\""
-                    + " REPLICA IDENTITY DEFAULT;  -- or FULL if no PK");
+                    + " REPLICA IDENTITY DEFAULT;");
         }
         if (!notFound.isEmpty()) {
             parts.add("not found in the source catalog: " + String.join(", ", notFound)
@@ -391,8 +413,12 @@ public class PgLogicalReplicationCdcProbe {
         return folded.equals(schema) ? List.of(schema) : List.of(schema, folded);
     }
 
+    /** One catalog row: how the old tuple is built, and whether the table has a PK. */
+    private record TableIdentity(String replicaIdentity, boolean hasPrimaryKey) {
+    }
+
     /**
-     * {@code relname -> relreplident} for the named tables of one schema, in batches.
+     * {@code relname -> identity} for the named tables of one schema, in batches.
      *
      * <p>Each name is looked up by its exact spelling first and by the SQL-unquoted folding
      * second. The catalog keeps a quoted identifier's real case ({@code "MyTable"}), and the
@@ -403,10 +429,12 @@ public class PgLogicalReplicationCdcProbe {
      * table the project actually selected.
      *
      * <p>{@code relreplident} is {@code char NOT NULL}: an absent key in the map means
-     * "no such table", never "unknown identity".
+     * "no such table", never "unknown identity". {@code has_pk} rides along in the same
+     * query — the consumer's idempotent upsert/delete keys on the primary key, so an
+     * identity that carries no PK column is unusable however the old row is imaged.
      */
-    private static Map<String, String> identitiesByTable(Connection conn, String schema,
-                                                         List<String> tables)
+    private static Map<String, TableIdentity> identitiesByTable(Connection conn, String schema,
+                                                                List<String> tables)
             throws SQLException {
         // Every name to ask about, exact spelling first; keep order deterministic.
         java.util.LinkedHashSet<String> asked = new java.util.LinkedHashSet<>();
@@ -417,12 +445,15 @@ public class PgLogicalReplicationCdcProbe {
             asked.add(table.toLowerCase(Locale.ROOT));
         }
         List<String> names = new ArrayList<>(asked);
-        Map<String, String> identities = new java.util.HashMap<>();
+        Map<String, TableIdentity> identities = new java.util.HashMap<>();
         for (int from = 0; from < names.size(); from += IDENTITY_QUERY_BATCH) {
             List<String> batch = names.subList(from,
                     Math.min(names.size(), from + IDENTITY_QUERY_BATCH));
             StringBuilder sql = new StringBuilder(
-                    "SELECT c.relreplident, c.relname FROM pg_catalog.pg_class c"
+                    "SELECT c.relreplident, c.relname,"
+                            + " EXISTS (SELECT 1 FROM pg_catalog.pg_index i"
+                            + " WHERE i.indrelid = c.oid AND i.indisprimary) AS has_pk"
+                            + " FROM pg_catalog.pg_class c"
                             + " JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace"
                             + " WHERE n.nspname = ? AND c.relname IN (");
             for (int i = 0; i < batch.size(); i++) {
@@ -436,7 +467,8 @@ public class PgLogicalReplicationCdcProbe {
                 }
                 try (ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
-                        identities.put(rs.getString(2), rs.getString(1));
+                        identities.put(rs.getString(2),
+                                new TableIdentity(rs.getString(1), rs.getBoolean(3)));
                     }
                 }
             }

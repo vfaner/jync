@@ -11,8 +11,9 @@ import org.junit.jupiter.api.Test;
  *   <li>拉取 SQL 必须 ORDER BY __$start_lsn, __$seqval —— {@link SqlServerTxFold}
  *       的折叠语义(同 PK 后到覆盖先到、op=3 配对 op=4)只在源序下有净效果正确性;
  *       fn_cdc_get_all_changes 的默认顺序是文档口径,显式 ORDER BY 才是合同。</li>
- *   <li>capture_instance 名来自源库系统表、直接拼进 SQL —— 必须白名单校验
- *       (SQL Server 标识符此处只会是 [A-Za-z0-9_]),不合名的跳过而不是拼进去。</li>
+ *   <li>capture_instance 名来自源库系统表、会拼进 SQL —— 用方括号定界,不再做
+ *       [A-Za-z0-9_] 白名单。白名单把合法的空格/Unicode 名(默认名之外的显式
+ *       @capture_instance)整表静默跳过,水位照常前进,这些表就永远不同步。</li>
  * </ul>
  */
 class SqlServerCdcConsumerTest {
@@ -20,9 +21,32 @@ class SqlServerCdcConsumerTest {
     @Test
     void changesSqlOrdersByStartLsnAndSeqval() {
         String sql = SqlServerCdcConsumer.changesSql("dbo_orders_CT");
-        assertThat(sql).contains("cdc.fn_cdc_get_all_changes_dbo_orders_CT");
+        assertThat(sql).contains("[cdc].[fn_cdc_get_all_changes_dbo_orders_CT]");
         assertThat(sql).contains("'all update old'");
         assertThat(sql).contains("ORDER BY __$start_lsn, __$seqval");
+    }
+
+    /**
+     * change_tables 里的名字是服务器保证存在的标识符。合法名不限于
+     * [A-Za-z0-9_]:显式 @capture_instance 可以是 "订单_CT"、带空格,甚至带 ]
+     * (定界标识符内 ] 写作 ]])。定界后这些都安全,拒绝它们只会让整表静默不同步。
+     */
+    @Test
+    void captureInstanceNamesAreDelimitedInsteadOfWhitelisted() {
+        assertThat(SqlServerCdcConsumer.changesSql("dbo_订单2026"))
+                .contains("[cdc].[fn_cdc_get_all_changes_dbo_订单2026]");
+        assertThat(SqlServerCdcConsumer.changesSql("a]b"))
+                .contains("[cdc].[fn_cdc_get_all_changes_a]]b]");
+        assertThat(SqlServerCdcConsumer.changesSqlInclusive("dbo 订单"))
+                .contains("[cdc].[fn_cdc_get_all_changes_dbo 订单]");
+
+        assertThat(SqlServerCdcConsumer.isUsableCaptureInstanceName("dbo_订单")).isTrue();
+        assertThat(SqlServerCdcConsumer.isUsableCaptureInstanceName("a' OR 1=1--")).isTrue();
+        assertThat(SqlServerCdcConsumer.isUsableCaptureInstanceName("a;DROP TABLE x")).isTrue();
+        assertThat(SqlServerCdcConsumer.isUsableCaptureInstanceName("dbo orders")).isTrue();
+        assertThat(SqlServerCdcConsumer.isUsableCaptureInstanceName("")).isFalse();
+        assertThat(SqlServerCdcConsumer.isUsableCaptureInstanceName(null)).isFalse();
+        assertThat(SqlServerCdcConsumer.isUsableCaptureInstanceName("a\u0000b")).isFalse();
     }
 
     /**
@@ -86,14 +110,4 @@ class SqlServerCdcConsumerTest {
                 "0000002857AE0258000A", "0x00000000000000000000")).isTrue();
     }
 
-    @Test
-    void captureInstanceNamesAreWhitelisted() {
-        assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName("dbo_orders_CT")).isTrue();
-        assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName("schema_1")).isTrue();
-        // 拼接注入面:引号、空格、分号、注释一律拒绝。
-        assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName("a' OR 1=1--")).isFalse();
-        assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName("a;DROP TABLE x")).isFalse();
-        assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName("")).isFalse();
-        assertThat(SqlServerCdcConsumer.isSafeCaptureInstanceName(null)).isFalse();
-    }
 }

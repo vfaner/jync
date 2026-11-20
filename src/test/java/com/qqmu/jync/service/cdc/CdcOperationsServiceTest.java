@@ -163,10 +163,13 @@ class CdcOperationsServiceTest {
         when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
         CdcProbeResult expected = CdcProbeResult.of(List.of(
                 CdcProbeResult.Check.of(CdcProbeResult.YSTREAM_SOURCE, true, "YashanDB")));
-        when(yStreamProbe.probe(any(Connection.class), anyList())).thenReturn(expected);
+        // The project id travels so the capacity check can exclude this project's own
+        // service (it is reused rather than taking a new slot).
+        when(yStreamProbe.probe(any(Connection.class), anyList(), eq(1L))).thenReturn(expected);
 
         assertThat(service.probeProject(1L)).isSameAs(expected);
 
+        verify(yStreamProbe).probe(same(conn), anyList(), eq(1L));
         verify(logMinerProbe, never()).probe(any(), anyList(), any());
     }
 
@@ -213,6 +216,59 @@ class CdcOperationsServiceTest {
         verify(pgProbe).probe(same(conn), tables.capture());
         assertThat(tables.getValue().stream().map(t -> t[0] + "." + t[1]).toList())
                 .containsExactly("app.t1", "sales.t2");
+    }
+
+    /**
+     * SQL Server 与 Oracle 的项目级探测也必须收到表清单。以前两条分支写死
+     * {@code List.of()},于是 @role_name/@capture_instance、补充日志、LONG 列这些
+     * 表级检查对真实项目从不执行,探测却报「全部通过」—— 上线后第一笔变更才暴露。
+     */
+    @Test
+    void probeProjectHandsTheProjectsTablesToTheSqlServerProbe() throws SQLException {
+        Project p = project();
+        p.setSyncConfig("{\"captureStrategy\":\"SQLSERVER_CDC\",\"objectSelectionExplicit\":true,"
+                + "\"tables\":[\"orders\",\"dbo.sales\"]}");
+        SyncConfig config = new SyncConfig();
+        config.getTables().addAll(List.of("orders", "dbo.sales"));
+        when(contextFactory.parseConfig(p)).thenReturn(config);
+        DatabaseConfig src = source(DatabaseType.SQLSERVER);
+        src.setSchemaName("dbo");
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        when(mssqlProbe.probe(any(Connection.class), anyList()))
+                .thenReturn(CdcProbeResult.of(List.of()));
+
+        service.probeProject(1L);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String[]>> tables = ArgumentCaptor.forClass(List.class);
+        verify(mssqlProbe).probe(same(conn), tables.capture());
+        assertThat(tables.getValue().stream().map(t -> t[0] + "." + t[1]).toList())
+                .containsExactly("dbo.orders", "dbo.sales");
+    }
+
+    @Test
+    void probeProjectHandsTheProjectsTablesToTheOracleProbe() throws SQLException {
+        Project p = project();
+        p.setSyncConfig("{\"captureStrategy\":\"ORACLE_LOGMINER\",\"objectSelectionExplicit\":true,"
+                + "\"tables\":[\"T1\"]}");
+        SyncConfig config = new SyncConfig();
+        config.getTables().addAll(List.of("T1"));
+        when(contextFactory.parseConfig(p)).thenReturn(config);
+        DatabaseConfig src = source(DatabaseType.ORACLE);
+        src.setSchemaName("APP");
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        when(logMinerProbe.probe(any(Connection.class), anyList(), same(src)))
+                .thenReturn(CdcProbeResult.of(List.of()));
+
+        service.probeProject(1L);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<String[]>> tables = ArgumentCaptor.forClass(List.class);
+        verify(logMinerProbe).probe(same(conn), tables.capture(), same(src));
+        assertThat(tables.getValue().stream().map(t -> t[0] + "." + t[1]).toList())
+                .containsExactly("APP.T1");
     }
 
     /** 未显式选表(旧配置 = 同步源库全部对象)时清单未知,跳过表级检查而不是当成「没有表」。 */

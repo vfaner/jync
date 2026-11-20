@@ -150,21 +150,25 @@ public class CdcOperationsService {
             if (source.getType() == DatabaseType.YASHANDB) {
                 // 崖山 declares the ORACLE family but has no DBMS_LOGMNR (measured); its own
                 // logical log engine is YStream. Dispatch by product, exactly like the save
-                // gate and the page's strategy list.
+                // gate and the page's strategy list. The project id lets the capacity check
+                // exclude this project's own service — it is reused, not a new slot.
                 return yStreamProbe.probe(conn, ownerTables(
-                        contextFactory.parseConfig(project), source, conn));
+                        contextFactory.parseConfig(project), source, conn), project.getId());
             }
             if (source.getType() == DatabaseType.SQLSERVER) {
-                // SQL Server's table-level checks are not wired here either — same gap as
-                // Oracle below, out of this release's scope.
-                return mssqlProbe.probe(conn, List.of());
+                // Same rule as the PG branch: this IS the per-project probe, so it must
+                // carry the selection. Without it the per-table capture-instance and
+                // @role_name checks never ran, and a green report hid a table whose
+                // changes could not actually be read.
+                return mssqlProbe.probe(conn, ownerTables(
+                        contextFactory.parseConfig(project), source, conn));
             }
-            // Oracle's table-level checks (per-table supplemental logging, LONG columns)
-            // still get no list: their per-table semantics are not part of v1.9.0 and are
-            // not verified against live servers.
+            // Oracle's per-table checks (supplemental logging, LONG columns) need the
+            // selection for the same reason.
             // P0-2: the saved source config travels so the CDB mining-mode check can
             // see whether a mining account is configured.
-            return logMinerProbe.probe(conn, List.of(), source);
+            return logMinerProbe.probe(conn, ownerTables(
+                    contextFactory.parseConfig(project), source, conn), source);
         } catch (SQLException | RuntimeException e) {
             // Never an exception to the caller: degrade to a failed check carrying the
             // driver's message, mirroring BinlogCdcProbe.checkVersion's own SQLException path.

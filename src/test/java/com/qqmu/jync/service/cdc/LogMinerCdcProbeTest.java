@@ -192,7 +192,7 @@ class LogMinerCdcProbeTest {
         // Major=10 → 11g branch; the setUp stub registered the 12c SQL, not the 11g SQL,
         // so register the 11g role query here.
         singleLong(stmt, "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
-                + " ('EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE','DBA')", 1L);
+                + " ('EXECUTE_CATALOG_ROLE','DBA')", 1L);
 
         CdcProbeResult r = probe.probe(conn, Collections.emptyList());
         CdcProbeResult.Check c = byName(r, CdcProbeResult.VERSION);
@@ -252,9 +252,9 @@ class LogMinerCdcProbeTest {
         when(md.getDatabaseProductName()).thenReturn("Oracle");
         when(md.getDatabaseProductVersion()).thenReturn("11.2.0.4");
         when(conn.getMetaData()).thenReturn(md);
-        // 11g branch expects EXECUTE_CATALOG_ROLE in SESSION_ROLES.
+        // 11g branch expects EXECUTE_CATALOG_ROLE (or DBA) in SESSION_ROLES.
         singleLong(stmt, "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
-                + " ('EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE','DBA')", 1L);
+                + " ('EXECUTE_CATALOG_ROLE','DBA')", 1L);
 
         CdcProbeResult r = probe.probe(conn, Collections.emptyList());
         CdcProbeResult.Check c = byName(r, CdcProbeResult.MINING_PRIVILEGES);
@@ -262,9 +262,50 @@ class LogMinerCdcProbeTest {
         assertThat(c.getDetail()).contains("EXECUTE_CATALOG_ROLE");
     }
 
+    /**
+     * SELECT_CATALOG_ROLE 只涵盖数据字典的 SELECT,对 DBMS_LOGMNR 没有 EXECUTE;
+     * 11g 上接受它会让一个 START_LOGMNR 必报 ORA-01031 的账号通过探测。真正的
+     * EXECUTE 也可以来自 EXECUTE ANY PROCEDURE 系统权限,所以两者之外不再放行。
+     */
+    @Test
+    void elevenGDoesNotAcceptSelectCatalogRoleAlone() throws SQLException {
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn("Oracle");
+        when(md.getDatabaseProductVersion()).thenReturn("11.2.0.4");
+        when(conn.getMetaData()).thenReturn(md);
+        // 目录角色查询为 0(SELECT_CATALOG_ROLE 已从 SQL 里移除,理论上连查都不会查它);
+        // 也没有 EXECUTE ANY PROCEDURE。
+        singleLong(stmt, "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
+                + " ('EXECUTE_CATALOG_ROLE','DBA')", 0L);
+        singleLong(stmt, "SELECT COUNT(*) FROM SESSION_PRIVS"
+                + " WHERE PRIVILEGE = 'EXECUTE ANY PROCEDURE'", 0L);
+
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList());
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.MINING_PRIVILEGES);
+        assertThat(c.isPassed()).isFalse();
+        assertThat(c.getDetail()).contains("EXECUTE_CATALOG_ROLE");
+    }
+
+    @Test
+    void elevenGAcceptsExecuteAnyProcedureInsteadOfTheCatalogRole() throws SQLException {
+        DatabaseMetaData md = mock(DatabaseMetaData.class);
+        when(md.getDatabaseProductName()).thenReturn("Oracle");
+        when(md.getDatabaseProductVersion()).thenReturn("11.2.0.4");
+        when(conn.getMetaData()).thenReturn(md);
+        singleLong(stmt, "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
+                + " ('EXECUTE_CATALOG_ROLE','DBA')", 0L);
+        singleLong(stmt, "SELECT COUNT(*) FROM SESSION_PRIVS"
+                + " WHERE PRIVILEGE = 'EXECUTE ANY PROCEDURE'", 1L);
+
+        CdcProbeResult r = probe.probe(conn, Collections.emptyList());
+        CdcProbeResult.Check c = byName(r, CdcProbeResult.MINING_PRIVILEGES);
+        assertThat(c.isPassed()).isTrue();
+        assertThat(c.getDetail()).contains("EXECUTE ANY PROCEDURE");
+    }
+
     @Test
     void elevenGRequiresSelectAnyTransactionForLogmnrContents() throws SQLException {
-        // 11.2.0.2 实测:即便同时持有 EXECUTE_CATALOG_ROLE + SELECT_CATALOG_ROLE +
+        // 11.2.0.2 实测:即便同时持有 EXECUTE_CATALOG_ROLE +
         // 直接的 SELECT ON V_$LOGMNR_CONTENTS,START_LOGMNR 之后读 V$LOGMNR_CONTENTS
         // 仍然报 ORA-01031;授予 SELECT ANY TRANSACTION 后才返回数据(DBA 角色自带该
         // 权限,普通挖掘账号不带)。只查角色会把一个"首轮挖掘必失败"的源误报成就绪。
@@ -273,7 +314,7 @@ class LogMinerCdcProbeTest {
         when(md.getDatabaseProductVersion()).thenReturn("11.2.0.2");
         when(conn.getMetaData()).thenReturn(md);
         singleLong(stmt, "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
-                + " ('EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE','DBA')", 1L);
+                + " ('EXECUTE_CATALOG_ROLE','DBA')", 1L);
         // Role present, privilege absent — the customer's situation.
         singleLong(stmt, "SELECT COUNT(*) FROM SESSION_PRIVS"
                 + " WHERE PRIVILEGE = 'SELECT ANY TRANSACTION'", 0L);

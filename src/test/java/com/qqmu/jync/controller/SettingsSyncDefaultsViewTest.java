@@ -62,8 +62,7 @@ import com.qqmu.jync.util.CryptoUtil;
         "sync.cdc.supervise-interval-ms=10000",
         "sync.cdc.change-window-ms=10000",
         "sync.cdc.logminer.batch-size=10000",
-        "sync.cdc.pg.batch-size=1000",
-        "sync.cdc.mssql.batch-size=1000"})
+        "sync.cdc.pg.batch-size=1000"})
 class SettingsSyncDefaultsViewTest {
 
     @Autowired
@@ -150,7 +149,8 @@ class SettingsSyncDefaultsViewTest {
         assertThat(page).contains("变更聚合窗口");
         assertThat(page).contains("LogMiner 批次");
         assertThat(page).contains("PostgreSQL 逻辑复制批次");
-        assertThat(page).contains("SQL Server CDC 批次");
+        // No "SQL Server CDC 批次" row: fn_cdc_get_all_changes returns the whole LSN
+        // window in one call, so the old batch-size value was never consulted.
     }
 
     /**

@@ -58,6 +58,8 @@ class PgLogicalReplicationCdcProbeTest {
     private final Map<String, String> replicaIdentityByName = new HashMap<>();
     /** 未显式列出的表被 stub 的 relreplident;null = 目录里查不到(表不存在)。 */
     private String defaultReplicaIdentity = "d";
+    /** 目录里的表 → 是否有主键;默认都有。 */
+    private final Map<String, Boolean> primaryKeyByName = new HashMap<>();
 
     @BeforeEach
     void setUp() throws SQLException {
@@ -104,12 +106,13 @@ class PgLogicalReplicationCdcProbeTest {
             return null;
         }).when(identityPs).setString(anyInt(), anyString());
         when(identityPs.executeQuery()).thenAnswer(inv -> {
-            List<String[]> rows = new ArrayList<>();
+            List<Object[]> rows = new ArrayList<>();
             for (String name : identityBindings) {
                 String ident = replicaIdentityByName.containsKey(name)
                         ? replicaIdentityByName.get(name) : defaultReplicaIdentity;
                 if (ident != null) {
-                    rows.add(new String[]{ident, name});
+                    rows.add(new Object[]{ident, name,
+                            primaryKeyByName.getOrDefault(name, Boolean.TRUE)});
                 }
             }
             identityBindings.clear();
@@ -136,18 +139,19 @@ class PgLogicalReplicationCdcProbeTest {
         replicaIdentityByName.clear();
     }
 
-    /** A one-use ResultSet over {@code [relreplident, relname]} rows. */
-    private static ResultSet resultSetOf(List<String[]> rows) throws SQLException {
+    /** A one-use ResultSet over {@code [relreplident, relname, has_pk]} rows. */
+    private static ResultSet resultSetOf(List<Object[]> rows) throws SQLException {
         ResultSet rs = mock(ResultSet.class);
-        Iterator<String[]> it = rows.iterator();
-        String[][] current = new String[1][];
+        Iterator<Object[]> it = rows.iterator();
+        Object[][] current = new Object[1][];
         when(rs.next()).thenAnswer(inv -> {
             boolean has = it.hasNext();
             current[0] = has ? it.next() : null;
             return has;
         });
-        when(rs.getString(1)).thenAnswer(inv -> current[0][0]);
-        when(rs.getString(2)).thenAnswer(inv -> current[0][1]);
+        when(rs.getString(1)).thenAnswer(inv -> (String) current[0][0]);
+        when(rs.getString(2)).thenAnswer(inv -> (String) current[0][1]);
+        when(rs.getBoolean(3)).thenAnswer(inv -> (Boolean) current[0][2]);
         return rs;
     }
 
@@ -411,11 +415,34 @@ class PgLogicalReplicationCdcProbeTest {
     }
 
     @Test
-    void indexIdentityMustPass() throws SQLException {
-        // i=INDEX:old key 用该唯一索引列,足以定位原行,必须放行。
+    void indexIdentityMustPassWithACoverageReminder() throws SQLException {
+        // i=INDEX:old key 用该唯一索引列。有主键时放行,但索引是否覆盖全部主键列
+        // 目录里查不出来 —— 至少把这条前提告诉用户。
         replicaIdentity("i");
-        assertThat(check(probeOneTable(), CdcProbeResult.PG_REPLICA_IDENTITY).isPassed())
-                .isTrue();
+        CdcProbeResult.Check identity = check(probeOneTable(),
+                CdcProbeResult.PG_REPLICA_IDENTITY);
+        assertThat(identity.isPassed()).isTrue();
+        assertThat(identity.getDetail()).contains("USING INDEX");
+    }
+
+    /**
+     * 没有主键的表,REPLICA IDENTITY FULL 也救不了:旧镜像有整行,但消费端按主键做
+     * 幂等 upsert/delete,拿不到主键就既不能定位也不能删除。旧检查只看 relreplident,
+     * 于是 d/f 的无主键表被判「可用」,第一笔 UPDATE/DELETE 就静默漏掉。
+     */
+    @Test
+    void tableWithoutAPrimaryKeyMustFailEvenWithFullIdentity() throws SQLException {
+        replicaIdentity("f");
+        primaryKeyByName.put("t1", false);
+
+        CdcProbeResult.Check identity = check(probeOneTable(),
+                CdcProbeResult.PG_REPLICA_IDENTITY);
+
+        assertThat(identity.isPassed()).isFalse();
+        assertThat(identity.getDetail()).contains("public.t1")
+                .contains("primary key")
+                // 旧提示建议「没有主键就设 FULL」,那是错的;必须明确说 FULL 不够。
+                .contains("FULL");
     }
 
     @Test

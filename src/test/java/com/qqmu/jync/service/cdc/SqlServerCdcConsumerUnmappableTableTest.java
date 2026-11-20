@@ -50,6 +50,7 @@ class SqlServerCdcConsumerUnmappableTableTest {
     private Connection sourceConn;
     private Connection targetConn;
     private CdcRuntimeStats stats;
+    private CdcPositionStore positionStore;
     private SqlServerCdcConsumer consumer;
 
     private List<String> capturedColumns;
@@ -118,12 +119,13 @@ class SqlServerCdcConsumerUnmappableTableTest {
         when(ctx.getSourceReader()).thenReturn(reader);
 
         stats = new CdcRuntimeStats();
+        positionStore = mock(CdcPositionStore.class);
         Project project = new Project();
         project.setId(1L);
         project.setName("mssql-1");
         consumer = new SqlServerCdcConsumer(project,
                 mock(SyncLockService.LockHandle.class), ctx,
-                mock(CdcPositionStore.class), mock(CdcBaselineService.class),
+                positionStore, mock(CdcBaselineService.class),
                 mock(SyncTaskStore.class), mock(SyncStateWriter.class),
                 dsm, stats, new SyncProperties());
     }
@@ -147,5 +149,8 @@ class SqlServerCdcConsumerUnmappableTableTest {
         assertThat(stats.unsupportedTables()).contains("dbo.t1");
         // 整段窗口仍算读完:水位前进,项目不会每轮重扫同一个窗口。
         assertThat(result.nextLsn).isEqualTo(MAX_LSN);
+        // 而且必须落盘。只推进内存 nextLsn 时,重启会回到旧水位;等 CDC 清理作业
+        // 把这段时间的变更清掉,重启后的 22054 就会被误判成 PURGED 停机。
+        verify(positionStore).advanceLsn(1L, MAX_LSN);
     }
 }

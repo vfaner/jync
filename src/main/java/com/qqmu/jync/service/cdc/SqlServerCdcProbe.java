@@ -164,15 +164,62 @@ public class SqlServerCdcProbe {
             boolean ok = admin || reader || sa || owner;
             String detail = "cdc_Admin=" + admin + ", cdc_reader=" + reader + ", sysadmin=" + sa
                     + ", db_owner=" + owner;
-            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, ok,
-                    ok ? detail
-                            : detail + " — add the login to the capture instance's @role_name"
-                                    + " (cdc_Admin/cdc_reader when used as @role_name), or make"
-                                    + " it a db_owner/sysadmin; @role_name NULL requires db_owner"
-                                    + " or sysadmin.");
+            if (ok) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, true, detail);
+            }
+            // @role_name is chosen per capture table and is often a business role, not
+            // cdc_Admin/cdc_reader. Without this lookup a member of exactly the role the
+            // DBA configured was told it was not authorised — and pointed at a role that
+            // would not help.
+            String customRole = customCaptureRoleMembership(conn);
+            if (customRole != null) {
+                return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, true,
+                        detail + ", member of @role_name '" + customRole + "'");
+            }
+            return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, false,
+                    detail + " — add the login to the capture instance's @role_name"
+                            + " (whatever role the instance was created with), or make it a"
+                            + " db_owner/sysadmin; @role_name NULL requires db_owner or"
+                            + " sysadmin.");
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CDC_ROLE, false, msg(e));
         }
+    }
+
+    /**
+     * The first {@code cdc.change_tables.role_name} the login is a member of, or null.
+     *
+     * <p>Best-effort: an account that cannot read the capture catalog, or a role that
+     * cannot be checked, only means "unknown" — the caller keeps its original verdict
+     * instead of turning a missing answer into a failure.
+     */
+    private static String customCaptureRoleMembership(Connection conn) {
+        List<String> roles = new ArrayList<>();
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT DISTINCT role_name FROM cdc.change_tables"
+                     + " WHERE role_name IS NOT NULL")) {
+            while (rs.next()) {
+                String role = rs.getString(1);
+                if (role != null && !role.isBlank() && !roles.contains(role)) {
+                    roles.add(role);
+                }
+            }
+        } catch (SQLException e) {
+            return null;
+        }
+        for (String role : roles) {
+            try (java.sql.PreparedStatement ps = conn.prepareStatement("SELECT IS_MEMBER(?)")) {
+                ps.setString(1, role);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next() && rs.getInt(1) == 1) {
+                        return role;
+                    }
+                }
+            } catch (SQLException ignored) {
+                // This role could not be checked; another one may still match.
+            }
+        }
+        return null;
     }
 
     // —— ⑤ per-table capture instance + actual read permission ——
@@ -224,15 +271,14 @@ public class SqlServerCdcProbe {
         // drain, so fail early.
         List<String> unprobed = new ArrayList<>();
         for (String ci : ciNames) {
-            // P1-7: same whitelist the consumer enforces (isSafeCaptureInstanceName) —
-            // the name is inlined into the fn call below, and a CI outside [A-Za-z0-9_]
-            // can never be synced at runtime anyway. Failing here keeps the probe honest:
-            // a green probe must mean the consumer will actually stream this table.
-            if (!SqlServerCdcConsumer.isSafeCaptureInstanceName(ci)) {
+            // Same rule the consumer enforces: a real name is delimited
+            // (captureFunction), not white-listed. Only an empty/NUL-bearing name is
+            // refused — such a name cannot be a capture instance at all.
+            if (!SqlServerCdcConsumer.isUsableCaptureInstanceName(ci)) {
                 return CdcProbeResult.Check.of(CdcProbeResult.MSSQL_CAPTURE_INSTANCE, false,
-                        "capture instance " + ci + " has a name outside [A-Za-z0-9_]"
-                                + " — Jync refuses to inline it into SQL, so its changes"
-                                + " can never be synced; recreate it with"
+                        "capture instance name is empty or contains NUL — it cannot be"
+                                + " quoted as an identifier, so its changes can never be"
+                                + " synced; recreate it with"
                                 + " sys.sp_cdc_enable_table @capture_instance=N'<schema>_<table>'");
             }
             try {
@@ -246,7 +292,8 @@ public class SqlServerCdcProbe {
                     unprobed.add(ci);
                     continue;
                 }
-                String sql = "SELECT TOP(1) * FROM cdc.fn_cdc_get_all_changes_" + ci
+                String sql = "SELECT TOP(1) * FROM "
+                        + SqlServerCdcConsumer.captureFunction(ci)
                         + "(sys.fn_cdc_get_min_lsn(?), sys.fn_cdc_get_max_lsn(), 'all')";
                 try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, ci);

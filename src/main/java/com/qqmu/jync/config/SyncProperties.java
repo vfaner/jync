@@ -455,8 +455,10 @@ public class SyncProperties {
         @Getter
         @Setter
         public static class Mssql {
-            /** Rows fetched per cdc.fn_cdc_get_all_changes batch. */
-            private long batchSize = 1_000L;
+            // No batch size: fn_cdc_get_all_changes returns the whole LSN range in one
+            // call, so a "rows per batch" knob could never be honoured. See
+            // docs/known-limitations.md — the memory ceiling is the per-transaction cap,
+            // not a fetch size.
             /** Idle poll interval between change-table reads. */
             private long idlePollMs = 1_000L;
         }

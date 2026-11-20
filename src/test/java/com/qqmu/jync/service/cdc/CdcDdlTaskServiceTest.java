@@ -255,6 +255,36 @@ class CdcDdlTaskServiceTest {
         assertThat(log.getErrorDetail()).isNull();
     }
 
+    /**
+     * A source table that no longer exists raises {@code error.ddl.tableMissing:<table>}.
+     * The catch-all used to prefix it with {@code error.ddl.replay:}, producing
+     * {@code error.ddl.replay:error.ddl.tableMissing:T} — the toast translates only the
+     * head before the first colon and printed the inner key verbatim.
+     */
+    @Test
+    void aVanishedSourceTableKeepsItsOwnMessageKey() throws Exception {
+        ChangeLog log = pendingLog();
+        log.setDdlExecuted(true);
+        log.setAffectedTables("orders(suffix)");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(contextFactory.build(any(), any(), any(), any())).thenReturn(ctx);
+        when(ctx.getSourceConfig()).thenReturn(new DatabaseConfig());
+        when(ctx.getTargetConfig()).thenReturn(new DatabaseConfig());
+        when(ctx.getSourceSchema()).thenReturn(null);
+        when(ctx.getSourceReader()).thenReturn(metadataReader);
+        when(metadataReader.readTable(any(), any(), eq("orders"))).thenReturn(null);
+        when(dataSourceManager.getConnection(any())).thenReturn(mock(Connection.class));
+
+        assertThatThrownBy(() -> service.replayDdl(9L, AccessGuard.system()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.ddl.tableMissing:orders");
+
+        assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_FAILED);
+        assertThat(log.getErrorDetail()).contains("error.ddl.tableMissing:orders");
+        verify(dataSyncService, never()).syncTable(any(), any(), any(), any(), any(), any());
+    }
+
     @Test
     void replayingBeforeTheTargetWasAlignedIsRefused() {
         ChangeLog log = pendingLog();

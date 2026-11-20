@@ -693,11 +693,19 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         // whose tracked tables are quiet while untracked tables churn kept fromLsn
         // pinned, re-running full discovery over a monotonically growing window every
         // cycle until aged-out logs tripped 22054. Guarded by running: an interrupted
-        // scan did not finish the window and must not advance it. The persisted
-        // position still only moves in flushTransaction (data-first); after a restart
-        // the quiet window re-scans once, harmlessly (unsupported rows skip again).
+        // scan did not finish the window and must not advance it.
+        //
+        // P1-8: persist it too. Previously only flushTransaction wrote the position, so
+        // a window that folded nothing (every tracked table unsupported/no PK, or quiet
+        // while untracked tables churned) moved the in-memory watermark only. A restart
+        // then resumed at the old persisted LSN; by the time CDC cleanup (72h default)
+        // had purged the interval, the restart met 22054 with start_lsn <= watermark and
+        // parked the project as PURGED — a false data-loss park with nothing lost.
+        // advanceLsn is monotonic and a no-op when a flush in this window already wrote a
+        // later LSN, so data-first order is preserved (flushTransaction runs above).
         if (running && !Thread.currentThread().isInterrupted()) {
             out.nextLsn = maxLsn;
+            positionStore.advanceLsn(projectId, maxLsn);
         }
         return out;
     }
@@ -811,7 +819,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      */
     static String changesSql(String captureInstance) {
         return "SELECT CONVERT(varchar(32), __$start_lsn, 1), __$operation, *"
-                + " FROM cdc.fn_cdc_get_all_changes_" + captureInstance
+                + " FROM " + captureFunction(captureInstance)
                 + "((SELECT sys.fn_cdc_increment_lsn(CONVERT(binary(10), ?, 1))),"
                 + " CONVERT(binary(10), ?, 1),'all update old')"
                 + " ORDER BY __$start_lsn, __$seqval";
@@ -827,29 +835,37 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      */
     static String changesSqlInclusive(String captureInstance) {
         return "SELECT CONVERT(varchar(32), __$start_lsn, 1), __$operation, *"
-                + " FROM cdc.fn_cdc_get_all_changes_" + captureInstance
+                + " FROM " + captureFunction(captureInstance)
                 + "(CONVERT(binary(10), ?, 1), CONVERT(binary(10), ?, 1),'all update old')"
                 + " ORDER BY __$start_lsn, __$seqval";
     }
 
     /**
-     * P1-7: capture instance names come from a system table and are concatenated into
-     * SQL — they are identifiers, and SQL Server identifiers used here only ever contain
-     * letters, digits and underscore. Anything else is skipped (not executed).
+     * The change function of one capture instance, as a delimited identifier:
+     * {@code [cdc].[fn_cdc_get_all_changes_<name>]}.
+     *
+     * <p>P1-7 originally refused any name outside {@code [A-Za-z0-9_]}. That protected
+     * the inline, but it also refused legitimate names: an explicit
+     * {@code @capture_instance} may contain spaces or non-ASCII characters, and those
+     * tables were then skipped for ever while the watermark kept moving — a silent data
+     * loss for the one table the operator had explicitly enabled. Bracket-quoting keeps
+     * the injection surface closed without rejecting names SQL Server itself accepts;
+     * a {@code ]} inside a delimited identifier is written {@code ]]}.
      */
-    static boolean isSafeCaptureInstanceName(String captureInstance) {
-        if (captureInstance == null || captureInstance.isEmpty()) {
-            return false;
-        }
-        for (int i = 0; i < captureInstance.length(); i++) {
-            char c = captureInstance.charAt(i);
-            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-                    || (c >= '0' && c <= '9') || c == '_';
-            if (!ok) {
-                return false;
-            }
-        }
-        return true;
+    static String captureFunction(String captureInstance) {
+        return "[cdc].[fn_cdc_get_all_changes_"
+                + captureInstance.replace("]", "]]") + "]";
+    }
+
+    /**
+     * The names we can still not use: only an empty name (no function can be named that)
+     * or one containing NUL (not representable in a T-SQL batch). Everything else is a
+     * real identifier from a system table and is safe once delimited by
+     * {@link #captureFunction(String)}.
+     */
+    static boolean isUsableCaptureInstanceName(String captureInstance) {
+        return captureInstance != null && !captureInstance.isEmpty()
+                && captureInstance.indexOf('\0') < 0;
     }
 
     /** This drain window's spiller, disposed when the window ends. */
@@ -963,12 +979,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 String ci = rs.getString(3);
                 String startLsn = rs.getString(4); // canonical — lexicographic == LSN order
                 if (!matchesProjectTable(schema, table)) continue;
-                if (!isSafeCaptureInstanceName(ci)) {
-                    // P1-7: the name is concatenated into the change-pull SQL; a name
-                    // outside [A-Za-z0-9_] never reaches the statement.
-                    log.warn("Skipping capture instance '{}' of {}.{} — name contains"
-                            + " characters outside [A-Za-z0-9_]; its changes will NOT be"
-                            + " synced until the instance is recreated with a safe name",
+                if (!isUsableCaptureInstanceName(ci)) {
+                    // Only an empty or NUL-bearing name is unquotable; it cannot be a
+                    // function SQL Server created, so there is nothing to sync.
+                    log.warn("Skipping capture instance '{}' of {}.{} — the name is empty"
+                            + " or contains NUL and cannot be quoted as an identifier",
                             ci, schema, table);
                     continue;
                 }

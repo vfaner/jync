@@ -331,6 +331,54 @@ class YStreamCdcProbeTest {
                 .contains("32").contains("Release");
     }
 
+    /**
+     * 实例满 32 个时,本项目已有的服务不占「新槽」:ensure 会复用它,或先 drop
+     * 再 create(净占用不变)。把 32 当成硬失败会让一个本来能启动的项目被探测拦住。
+     */
+    @Test
+    void theProjectsOwnServiceDoesNotConsumeAFreeSlot() throws SQLException {
+        serviceCount = YStreamServiceAdmin.MAX_SERVICES;
+        allLoggedTables.addAll(List.of("SYS.T1", "SYS.T2"));
+        primaryKeyTables.addAll(List.of("SYS.T1", "SYS.T2"));
+        rigServiceList("JYNC_42_00ABCDEF");
+
+        CdcProbeResult result = probe.probe(conn, TWO_TABLES, 42L);
+
+        assertThat(result.failures()).as("%s", result.failures()).isEmpty();
+        CdcProbeResult.Check capacity = result.getChecks().stream()
+                .filter(c -> CdcProbeResult.YSTREAM_SERVICE_CAPACITY.equals(c.getName()))
+                .findFirst().orElseThrow();
+        assertThat(capacity.isPassed()).isTrue();
+        assertThat(capacity.getDetail()).contains("1").contains("this project");
+    }
+
+    /** 别人的服务仍然占槽:满 32 且没有自己的服务时,项目确实无法创建。 */
+    @Test
+    void anotherProjectsServiceStillConsumesASlot() throws SQLException {
+        serviceCount = YStreamServiceAdmin.MAX_SERVICES;
+        allLoggedTables.addAll(List.of("SYS.T1", "SYS.T2"));
+        primaryKeyTables.addAll(List.of("SYS.T1", "SYS.T2"));
+        rigServiceList("JYNC_7_00ABCDEF");
+
+        CdcProbeResult result = probe.probe(conn, TWO_TABLES, 42L);
+
+        assertThat(failure(result, CdcProbeResult.YSTREAM_SERVICE_CAPACITY))
+                .contains("32").contains("Release");
+    }
+
+    /** One V$YSTREAM_SERVER row for the service-list query (serviceCount keeps its stub). */
+    private void rigServiceList(String... names) throws SQLException {
+        ResultSet rs = mock(ResultSet.class);
+        Boolean[] tail = new Boolean[names.length];
+        java.util.Arrays.fill(tail, Boolean.TRUE);
+        tail[names.length - 1] = Boolean.FALSE;
+        when(rs.next()).thenReturn(Boolean.TRUE, tail);
+        when(rs.getString("SERVER_NAME")).thenReturn(names[0],
+                java.util.Arrays.copyOfRange(names, 1, names.length));
+        when(stmt.executeQuery(org.mockito.ArgumentMatchers.contains("ORDER BY SERVER_NAME")))
+                .thenReturn(rs);
+    }
+
     private static String failure(CdcProbeResult result, String name) {
         return result.failures().stream()
                 .filter(c -> name.equals(c.getName()))

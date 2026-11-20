@@ -411,9 +411,11 @@ public class LogMinerCdcProbe {
         String expected;
         String roleGrant;
         if (is11g) {
+            // SELECT_CATALOG_ROLE 只给数据字典的 SELECT,对 DBMS_LOGMNR 没有 EXECUTE;
+            // 接受它会让一个 START_LOGMNR 必报 ORA-01031 的账号通过探测。
             roleSql = "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN"
-                    + " ('EXECUTE_CATALOG_ROLE','SELECT_CATALOG_ROLE','DBA')";
-            expected = "EXECUTE_CATALOG_ROLE / SELECT_CATALOG_ROLE (or DBA)";
+                    + " ('EXECUTE_CATALOG_ROLE','DBA')";
+            expected = "EXECUTE_CATALOG_ROLE (or DBA)";
             roleGrant = "EXECUTE_CATALOG_ROLE";
         } else {
             roleSql = "SELECT COUNT(*) FROM SESSION_ROLES WHERE ROLE IN ('LOGMINING','DBA')";
@@ -422,6 +424,17 @@ public class LogMinerCdcProbe {
         }
         try {
             boolean hasRole = count(conn, roleSql) > 0;
+            // 11g 上 EXECUTE_CATALOG_ROLE 不是唯一路径:直接的 EXECUTE ANY PROCEDURE
+            // 同样覆盖 DBMS_LOGMNR(以及 DBMS_LOGMNR_D)的 EXECUTE。不认它会把一个
+            // 完全可用的最小授权账号判成缺角色。12c+ 的 LOGMINING 还带来别的权限,
+            // 不能用这一个系统权限替代。
+            boolean hasExecuteAnyProcedure = false;
+            if (is11g && !hasRole) {
+                hasExecuteAnyProcedure = count(conn,
+                        "SELECT COUNT(*) FROM SESSION_PRIVS"
+                                + " WHERE PRIVILEGE = 'EXECUTE ANY PROCEDURE'") > 0;
+                hasRole = hasExecuteAnyProcedure;
+            }
             // Oracle 11.2.0.2 实测:持有目录角色 + 直接 SELECT ON V_$LOGMNR_CONTENTS,
             // START_LOGMNR 之后读该视图仍报 ORA-01031,授予 SELECT ANY TRANSACTION 才通。
             // 12c+ 的 LOGMINING 角色同样不隐含它(IT 里也是单独授予),所以各版本都查。
@@ -430,12 +443,15 @@ public class LogMinerCdcProbe {
                     "SELECT COUNT(*) FROM SESSION_PRIVS"
                             + " WHERE PRIVILEGE = 'SELECT ANY TRANSACTION'") > 0;
             if (hasRole && hasSelectAnyTxn) {
+                String how = hasExecuteAnyProcedure
+                        ? "EXECUTE ANY PROCEDURE (covers DBMS_LOGMNR)" : expected;
                 return CdcProbeResult.Check.of(CdcProbeResult.MINING_PRIVILEGES, true,
-                        "has " + expected + " and SELECT ANY TRANSACTION");
+                        "has " + how + " and SELECT ANY TRANSACTION");
             }
             List<String> missing = new ArrayList<>();
             if (!hasRole) {
-                missing.add("missing " + expected + " — GRANT " + roleGrant + " TO <user>");
+                missing.add("missing " + expected + " — GRANT " + roleGrant + " TO <user>"
+                        + (is11g ? " (or GRANT EXECUTE ANY PROCEDURE TO <user>)" : ""));
             }
             if (!hasSelectAnyTxn) {
                 missing.add("missing SELECT ANY TRANSACTION — without it every read of"

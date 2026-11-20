@@ -182,6 +182,7 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 - 主键、游标列与列清洗涉及的列**必须物化**，上限是 `force-inline-max-bytes`（默认 1MB）。超过即报错并指出表、列与配置键——这是有意的硬边界，避免为了"能跑"而悄悄写坏数据。
 - PostgreSQL 源库在读取期间保持只读事务（`enable-source-streaming`），代价是读取期间源库的 vacuum 被推迟；大表全量应安排在低峰。
 - Oracle CLOB 目标把空串绑定为空 CLOB、VARCHAR2/CHAR 目标仍绑定 NULL；依赖"空串等于 NULL"语义的应用需要自行确认。
+- **SQL Server CDC 的窗口与内存**：每个轮询周期读取一个 LSN 窗口（`sync.cdc.change-window-ms`，默认 10 秒）；窗口内的行由驱动流式返回、按源事务折叠，JVM 堆的峰值取决于**单笔源事务**，并由 `sync.cdc.max-transaction-rows` / `sync.cdc.max-transaction-bytes` 硬性限制——超限直接停车并提示调小批次或改轮询，不会被当成瞬态错误无限重连。`fn_cdc_get_all_changes` 一次返回整个区间，因此没有「每次抓取行数」的配置项（旧设置页展示的 `sync.cdc.mssql.batch-size` 从未生效，已删除）；窗口太大时压力主要在源库的读取与传输，想减小单次读取量请调小 `change-window-ms`。
 
 ---
 

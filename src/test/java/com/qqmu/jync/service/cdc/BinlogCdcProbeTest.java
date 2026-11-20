@@ -67,7 +67,9 @@ class BinlogCdcProbeTest {
         variable("binlog_row_image", "FULL");
         variable("server_id", "1");
         variable("binlog_expire_logs_seconds", "2592000");
+        variable("binlog_expire_logs_auto_purge", "ON");
         grants("GRANT ALL PRIVILEGES ON *.* TO 'sync'@'%'");
+        currentRole("NONE");
         binlogStatus("SHOW BINARY LOG STATUS", "mysql-bin.000003", 154L);
         // 默认:服务器只列出一个(当前)binlog 文件
         binlogFiles("mysql-bin.000003");
@@ -120,6 +122,29 @@ class BinlogCdcProbeTest {
      */
     private void grants(String... rows) throws SQLException {
         when(stmt.executeQuery("SHOW GRANTS")).thenAnswer(invocation -> {
+            ResultSet rs = mock(ResultSet.class);
+            Boolean[] tail = new Boolean[rows.length];
+            Arrays.fill(tail, Boolean.TRUE);
+            tail[rows.length - 1] = Boolean.FALSE;
+            when(rs.next()).thenReturn(Boolean.TRUE, tail);
+            when(rs.getString(1)).thenReturn(rows[0], Arrays.copyOfRange(rows, 1, rows.length));
+            return rs;
+        });
+    }
+
+    /** Mock {@code SELECT CURRENT_ROLE()}: the enabled role list, or NONE. */
+    private void currentRole(String value) throws SQLException {
+        when(stmt.executeQuery("SELECT CURRENT_ROLE()")).thenAnswer(invocation -> {
+            ResultSet rs = mock(ResultSet.class);
+            when(rs.next()).thenReturn(true, false);
+            when(rs.getString(1)).thenReturn(value);
+            return rs;
+        });
+    }
+
+    /** Mock {@code SHOW GRANTS FOR <role>} the same way as {@link #grants(String...)}. */
+    private void grantsFor(String role, String... rows) throws SQLException {
+        when(stmt.executeQuery("SHOW GRANTS FOR " + role)).thenAnswer(invocation -> {
             ResultSet rs = mock(ResultSet.class);
             Boolean[] tail = new Boolean[rows.length];
             Arrays.fill(tail, Boolean.TRUE);
@@ -257,7 +282,43 @@ class BinlogCdcProbeTest {
     @Test
     void replicationSlaveOnlyIsNotEnough() throws SQLException {
         grants("GRANT REPLICATION SLAVE ON *.* TO 'sync'@'%'");
+        // 位点也读不到,才没有「CLIENT 能力已被实测」的旁证;否则 SLAVE + 可读位点
+        // 在真实服务器上只可能来自 REPLICATION CLIENT 或 SUPER,已经够用。
+        when(stmt.executeQuery("SHOW BINARY LOG STATUS"))
+                .thenThrow(new SQLException("access denied"));
+        when(stmt.executeQuery("SHOW MASTER STATUS"))
+                .thenThrow(new SQLException("access denied"));
+
         assertThat(check(probe.probe(conn, config(), 612001L), "REPLICATION_GRANTS").isPassed()).isFalse();
+    }
+
+    /**
+     * 角色授权时 SHOW GRANTS 只列角色名,具体权限挂在角色上。只匹配直接授权的文本
+     * 会把一个权限完全正确的账号判成「缺权限」,用户照着提示去加一个已经有的权限。
+     * 必须展开 CURRENT_ROLE() 再读每个角色的授权。
+     */
+    @Test
+    void privilegesGrantedThroughARoleAreAccepted() throws SQLException {
+        grants("GRANT `repl`@`%` TO `sync`@`%`");
+        currentRole("`repl`@`%`");
+        grantsFor("`repl`@`%`",
+                "GRANT REPLICATION REPLICA, REPLICATION CLIENT ON *.* TO `repl`@`%`");
+
+        CdcProbeResult.Check check = check(probe.probe(conn, config(), 612001L),
+                "REPLICATION_GRANTS");
+
+        assertThat(check.isPassed()).isTrue();
+    }
+
+    /** 位点能读出来,本身就是 REPLICATION CLIENT(或 SUPER)的实测证明。 */
+    @Test
+    void aReadablePositionProvesReplicationClient() throws SQLException {
+        grants("GRANT REPLICATION SLAVE ON *.* TO 'sync'@'%'");
+
+        CdcProbeResult.Check check = check(probe.probe(conn, config(), 612001L),
+                "REPLICATION_GRANTS");
+
+        assertThat(check.isPassed()).isTrue();
     }
 
     @Test
@@ -279,6 +340,23 @@ class BinlogCdcProbeTest {
         CdcProbeResult.Check retention = check(probe.probe(conn, config(), 612001L), "BINLOG_RETENTION");
         assertThat(retention.isPassed()).isFalse();
         assertThat(retention.getDetail()).contains("3600");
+    }
+
+    /**
+     * MySQL 8.0.30+ 的 binlog_expire_logs_auto_purge=OFF 会让 expire 值变成纯摆设:
+     * 没有任何自动清理,再短的 retention 也不会把位点清掉。只按秒数判失败会把
+     * 「磁盘自己管」的部署判成配置错误。
+     */
+    @Test
+    void disabledAutoPurgeMakesShortRetentionManualOnly() throws SQLException {
+        variable("binlog_expire_logs_seconds", "3600");
+        variable("binlog_expire_logs_auto_purge", "OFF");
+
+        CdcProbeResult.Check retention = check(probe.probe(conn, config(), 612001L),
+                "BINLOG_RETENTION");
+
+        assertThat(retention.isPassed()).isTrue();
+        assertThat(retention.getDetail()).contains("auto_purge").contains("manual");
     }
 
     @Test

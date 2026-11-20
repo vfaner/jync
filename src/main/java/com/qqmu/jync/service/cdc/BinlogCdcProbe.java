@@ -66,7 +66,7 @@ public class BinlogCdcProbe {
                 v -> "FULL".equalsIgnoreCase(v), "FULL",
                 "binlog_row_image is %s — CDC applies full after-images and needs FULL"));
         checks.add(checkServerId(conn, plannedServerId));
-        checks.add(checkGrants(conn));
+        checks.add(checkGrants(conn, position));
         checks.add(checkBinlogStatus(position));
         checks.add(checkRetention(conn));
         checks.add(checkEventDecodable(conn, config, position));
@@ -260,36 +260,30 @@ public class BinlogCdcProbe {
         }
     }
 
-    private CdcProbeResult.Check checkGrants(Connection conn) {
-        boolean slave = false;
-        boolean client = false;
-        try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery("SHOW GRANTS")) {
-            while (rs.next()) {
-                String grant = rs.getString(1).toUpperCase(Locale.ROOT);
-                boolean global = grant.contains("ON *.*");
-                boolean all = grant.contains("ALL PRIVILEGES") && global;
-                // MySQL 8.0.22+ renamed REPLICATION SLAVE to REPLICATION REPLICA; 8.4
-                // stopped accepting the old name entirely. Matching only SLAVE told a
-                // correctly privileged account it was missing the grant.
-                if (all || grant.contains("REPLICATION SLAVE")
-                        || grant.contains("REPLICATION REPLICA")) {
-                    slave = true;
-                }
-                // MariaDB 10.5 renamed REPLICATION CLIENT to BINLOG MONITOR; the old name
-                // is still accepted by GRANT but SHOW GRANTS prints only the new one, so a
-                // correctly privileged MariaDB account looked like it was missing the grant.
-                if (all || grant.contains("REPLICATION CLIENT")
-                        || grant.contains("BINLOG MONITOR")) {
-                    client = true;
-                }
+    private CdcProbeResult.Check checkGrants(Connection conn, BinlogPosition position) {
+        // A readable position is proof of REPLICATION CLIENT (or SUPER) — that is exactly
+        // the privilege SHOW BINARY LOG STATUS / SHOW MASTER STATUS require. The same
+        // question was already asked by readPosition; reusing the answer avoids telling a
+        // working account it lacks a privilege it must have, whatever SHOW GRANTS shows.
+        boolean clientProven = position != null && position.file() != null;
+        boolean[] grants = new boolean[2]; // [0] = REPLICA/SLAVE, [1] = CLIENT/BINLOG MONITOR
+        try {
+            scanGrants(conn, "SHOW GRANTS", grants);
+            if (!grants[0] || (!grants[1] && !clientProven)) {
+                // Privileges can be held through a role: SHOW GRANTS then prints only the
+                // GRANT role TO user line, and the text match above sees nothing.
+                scanRoleGrants(conn, grants);
             }
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.REPLICATION_GRANTS, false,
                     String.valueOf(e.getMessage()));
         }
+        boolean slave = grants[0];
+        boolean client = grants[1] || clientProven;
         if (slave && client) {
             return CdcProbeResult.Check.of(CdcProbeResult.REPLICATION_GRANTS, true,
-                    "REPLICATION REPLICA/SLAVE + REPLICATION CLIENT");
+                    "REPLICATION REPLICA/SLAVE + REPLICATION CLIENT"
+                            + (!grants[1] ? " (position read proved REPLICATION CLIENT)" : ""));
         }
         List<String> missing = new ArrayList<>();
         if (!slave) {
@@ -300,6 +294,93 @@ public class BinlogCdcProbe {
         }
         return CdcProbeResult.Check.of(CdcProbeResult.REPLICATION_GRANTS, false,
                 "missing grant(s): " + String.join(", ", missing));
+    }
+
+    /** Reads one SHOW GRANTS result set into {@code [slave, client]}. */
+    private static void scanGrants(Connection conn, String sql, boolean[] grants)
+            throws SQLException {
+        try (Statement st = conn.createStatement(); ResultSet rs = st.executeQuery(sql)) {
+            while (rs.next()) {
+                String grant = rs.getString(1).toUpperCase(Locale.ROOT);
+                boolean global = grant.contains("ON *.*");
+                boolean all = grant.contains("ALL PRIVILEGES") && global;
+                // MySQL 8.0.22+ renamed REPLICATION SLAVE to REPLICATION REPLICA; 8.4
+                // stopped accepting the old name entirely. Matching only SLAVE told a
+                // correctly privileged account it was missing the grant.
+                if (all || grant.contains("REPLICATION SLAVE")
+                        || grant.contains("REPLICATION REPLICA")) {
+                    grants[0] = true;
+                }
+                // MariaDB 10.5 renamed REPLICATION CLIENT to BINLOG MONITOR; the old name
+                // is still accepted by GRANT but SHOW GRANTS prints only the new one, so a
+                // correctly privileged MariaDB account looked like it was missing the grant.
+                if (all || grant.contains("REPLICATION CLIENT")
+                        || grant.contains("BINLOG MONITOR")) {
+                    grants[1] = true;
+                }
+            }
+        }
+    }
+
+    /**
+     * Expands {@code CURRENT_ROLE()} and reads each role's own grants. A role the account
+     * cannot inspect (or a server without roles) is skipped; another role may still carry
+     * the privilege, and the caller reports failure only if none did.
+     */
+    private static void scanRoleGrants(Connection conn, boolean[] grants) {
+        List<String> roles;
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT CURRENT_ROLE()")) {
+            roles = rs.next() ? splitRoles(rs.getString(1)) : List.of();
+        } catch (SQLException e) {
+            return;
+        }
+        for (String role : roles) {
+            try {
+                scanGrants(conn, "SHOW GRANTS FOR " + role, grants);
+            } catch (SQLException ignored) {
+                // Not allowed to inspect this role; keep trying the others.
+            }
+            if (grants[0] && grants[1]) {
+                return;
+            }
+        }
+    }
+
+    /**
+     * Splits MySQL's {@code CURRENT_ROLE()} reply into role specifications. The value is
+     * comma-separated but role names are quoted, so a comma inside backticks or quotes
+     * belongs to the name, not the list. {@code NONE} means no role is enabled.
+     */
+    static List<String> splitRoles(String currentRole) {
+        List<String> roles = new ArrayList<>();
+        if (currentRole == null || currentRole.isBlank()
+                || "NONE".equalsIgnoreCase(currentRole.trim())) {
+            return roles;
+        }
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < currentRole.length(); i++) {
+            char c = currentRole.charAt(i);
+            if (c == '`' || c == '\'') {
+                quoted = !quoted;
+            }
+            if (c == ',' && !quoted) {
+                addRole(roles, current);
+                continue;
+            }
+            current.append(c);
+        }
+        addRole(roles, current);
+        return roles;
+    }
+
+    private static void addRole(List<String> roles, StringBuilder current) {
+        String role = current.toString().trim();
+        current.setLength(0);
+        if (!role.isEmpty()) {
+            roles.add(role);
+        }
     }
 
     private CdcProbeResult.Check checkRetention(Connection conn) {
@@ -325,6 +406,18 @@ public class BinlogCdcProbe {
                         detail + " (never auto-purged — watch disk usage)");
             }
             if (seconds < MIN_RETENTION_SECONDS) {
+                // MySQL 8.0.30+: binlog_expire_logs_auto_purge=OFF disables automatic
+                // purging entirely, so the short expire value never removes a file the
+                // consumer still needs. Failing on the seconds alone told such a
+                // deployment to "fix" a setting that cannot hurt it.
+                String autoPurge = showVariable(conn, "binlog_expire_logs_auto_purge");
+                if (autoPurge != null && ("OFF".equalsIgnoreCase(autoPurge.trim())
+                        || "0".equals(autoPurge.trim()))) {
+                    return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_RETENTION, true,
+                            detail + " (binlog_expire_logs_auto_purge=OFF — files are only"
+                                    + " removed by manual PURGE BINARY LOGS; watch disk"
+                                    + " usage)");
+                }
                 return CdcProbeResult.Check.of(CdcProbeResult.BINLOG_RETENTION, false,
                         detail + " — keep at least " + MIN_RETENTION_SECONDS
                                 + "s so an outage window cannot purge the position away");

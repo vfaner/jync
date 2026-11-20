@@ -51,6 +51,15 @@ public class YStreamCdcProbe {
      *                    the two table-level checks are skipped rather than failed
      */
     public CdcProbeResult probe(Connection conn, List<String[]> ownerTables) {
+        return probe(conn, ownerTables, null);
+    }
+
+    /**
+     * @param projectId the project being probed, when known — its own service is reused (or
+     *                  dropped and re-created) by {@link YStreamServiceLifecycle}, so it does
+     *                  not need a free slot; {@code null} on the connection-test page
+     */
+    public CdcProbeResult probe(Connection conn, List<String[]> ownerTables, Long projectId) {
         CdcProbeResult.Check source = checkSource(conn);
         if (!source.isPassed()) {
             // Either it is not Yashan at all, or it is one whose admin views this account
@@ -66,7 +75,7 @@ public class YStreamCdcProbe {
             checks.add(checkTableLogging(conn, ownerTables));
             checks.add(checkPrimaryKeys(conn, ownerTables));
         }
-        checks.add(checkCapacity(conn));
+        checks.add(checkCapacity(conn, projectId));
         return CdcProbeResult.of(checks);
     }
 
@@ -237,18 +246,33 @@ public class YStreamCdcProbe {
 
     // —— ⑦ service capacity ——
 
-    private CdcProbeResult.Check checkCapacity(Connection conn) {
+    /**
+     * Instance-wide slots, minus this project's own services: {@code ensure} reuses a single
+     * decodable service and otherwise drops every leftover before creating one, so a
+     * project's own service occupies no <em>new</em> slot. Counting it made a project that
+     * can start at a full instance look unstartable.
+     */
+    private CdcProbeResult.Check checkCapacity(Connection conn, Long projectId) {
         int used;
+        int own = 0;
         try {
             used = YStreamServiceAdmin.serviceCount(conn);
+            if (projectId != null) {
+                own = YStreamServiceAdmin.servicesFor(conn, projectId).size();
+            }
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.YSTREAM_SERVICE_CAPACITY, false,
                     msg(e));
         }
-        boolean ok = used < YStreamServiceAdmin.MAX_SERVICES;
+        int effective = Math.max(0, used - own);
+        boolean ok = effective < YStreamServiceAdmin.MAX_SERVICES;
+        String detail = used + "/" + YStreamServiceAdmin.MAX_SERVICES + " services used";
+        if (own > 0) {
+            detail += " — " + own + " already belong to this project and are reused"
+                    + " (dropped and re-created if unusable), leaving " + effective + " in use";
+        }
         return CdcProbeResult.Check.of(CdcProbeResult.YSTREAM_SERVICE_CAPACITY, ok,
-                used + "/" + YStreamServiceAdmin.MAX_SERVICES + " services used"
-                        + (ok ? "" : " — no slot left for this project. Release one by"
+                detail + (ok ? "" : " — no slot left for this project. Release one by"
                         + " deleting another YStream project, or by switching it to polling"));
     }
 

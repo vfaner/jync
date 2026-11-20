@@ -131,19 +131,32 @@ class SqlServerCdcProbeTest {
     }
 
     @Test
-    void unsafeCaptureInstanceNameFailsWithoutExecutingFnCall() throws SQLException {
+    void injectableLookingCaptureInstanceNameIsQuotedAndProbed() throws SQLException {
+        // 名字来自系统表,不是用户输入;定界后引号/分号只是名字的一部分。旧白名单
+        // 直接判它不可同步,而消费者其实能用方括号安全地调用它 —— 探测与消费端
+        // 必须一致,否则正常配置会得到「永远无法同步」的假失败。
         captureInstanceNamed("dbo_orders'; DROP TABLE x--");
+
+        CdcProbeResult result = probe.probe(conn,
+                Collections.singletonList(new String[]{"dbo", "orders"}));
+
+        assertThat(check(result).isPassed()).isTrue();
+        verify(conn).prepareStatement(contains(
+                "[cdc].[fn_cdc_get_all_changes_dbo_orders'; DROP TABLE x--]"));
+        verify(fnPs).executeQuery();
+    }
+
+    @Test
+    void anEmptyCaptureInstanceNameFailsWithoutExecutingFnCall() throws SQLException {
+        captureInstanceNamed("");
 
         CdcProbeResult result = probe.probe(conn,
                 Collections.singletonList(new String[]{"dbo", "orders"}));
 
         CdcProbeResult.Check ci = check(result);
         assertThat(ci.isPassed()).isFalse();
-        assertThat(ci.getDetail()).contains("dbo_orders'; DROP TABLE x--")
-                .contains("[A-Za-z0-9_]");
-        // 白名单外的名字绝不允许进入任何拼接语句。
+        assertThat(ci.getDetail()).contains("empty");
         verify(conn, never()).prepareStatement(contains("fn_cdc_get_all_changes"));
-        assertThat(result.passed()).isFalse();
     }
 
     /**
@@ -208,6 +221,70 @@ class SqlServerCdcProbeTest {
         assertThat(role.isPassed()).isTrue();
         assertThat(role.getDetail()).contains("db_owner=true");
         verify(stmt).executeQuery(contains("IS_MEMBER('db_owner')"));
+    }
+
+    /**
+     * @role_name 是每张捕获表自由指定的角色名,常见的部署会把它设成业务自定义角色
+     * (如 jync_reader)而不是 cdc_Admin/cdc_reader。只认后两者会把一个确实能读
+     * 变更数据的账号判成未授权,并指引用户去加一个根本不对的角色。
+     */
+    @Test
+    void aMemberOfTheCaptureInstanceCustomRolePassesTheRoleCheck() throws SQLException {
+        ResultSet roleRs = mock(ResultSet.class);
+        when(roleRs.next()).thenReturn(true, false);
+        when(roleRs.getInt(1)).thenReturn(0); // cdc_Admin
+        when(roleRs.getInt(2)).thenReturn(0); // cdc_reader
+        when(roleRs.getInt(3)).thenReturn(0); // sysadmin
+        when(roleRs.getInt(4)).thenReturn(0); // db_owner
+        when(stmt.executeQuery(contains("IS_MEMBER"))).thenReturn(roleRs);
+
+        ResultSet rolesRs = mock(ResultSet.class);
+        when(rolesRs.next()).thenReturn(true, false);
+        when(rolesRs.getString(1)).thenReturn("jync_reader");
+        when(stmt.executeQuery(contains("SELECT DISTINCT role_name"))).thenReturn(rolesRs);
+
+        PreparedStatement memberPs = mock(PreparedStatement.class);
+        when(conn.prepareStatement(contains("IS_MEMBER(?)"))).thenReturn(memberPs);
+        ResultSet memberRs = mock(ResultSet.class);
+        when(memberRs.next()).thenReturn(true, false);
+        when(memberRs.getInt(1)).thenReturn(1);
+        when(memberPs.executeQuery()).thenReturn(memberRs);
+
+        CdcProbeResult result = probe.probe(conn, List.of());
+
+        CdcProbeResult.Check role = result.getChecks().stream()
+                .filter(c -> c.getName().equals(CdcProbeResult.MSSQL_CDC_ROLE))
+                .findFirst().orElseThrow();
+        assertThat(role.isPassed()).isTrue();
+        assertThat(role.getDetail()).contains("jync_reader");
+        verify(memberPs).setString(1, "jync_reader");
+    }
+
+    /**
+     * 自定义角色的成员查询失败(无权读 cdc.change_tables 等)时退回原判定,
+     * 不能因为「查不到角色」就更严格地判失败。
+     */
+    @Test
+    void anUnreadableCaptureRoleCatalogKeepsTheOriginalVerdict() throws SQLException {
+        ResultSet roleRs = mock(ResultSet.class);
+        when(roleRs.next()).thenReturn(true, false);
+        when(roleRs.getInt(1)).thenReturn(0);
+        when(roleRs.getInt(2)).thenReturn(0);
+        when(roleRs.getInt(3)).thenReturn(0);
+        when(roleRs.getInt(4)).thenReturn(0);
+        when(stmt.executeQuery(contains("IS_MEMBER"))).thenReturn(roleRs);
+        when(stmt.executeQuery(contains("SELECT DISTINCT role_name")))
+                .thenThrow(new SQLException("permission denied"));
+
+        CdcProbeResult result = probe.probe(conn, List.of());
+
+        CdcProbeResult.Check role = result.getChecks().stream()
+                .filter(c -> c.getName().equals(CdcProbeResult.MSSQL_CDC_ROLE))
+                .findFirst().orElseThrow();
+        // 查不到角色目录 ≠ 未授权:退回原有四个角色的判定并正常给出失败原因。
+        assertThat(role.isPassed()).isFalse();
+        assertThat(role.getDetail()).contains("cdc_Admin=false")
+                .doesNotContain("permission denied");
     }
 
     // —— P1-9:Azure SQL DB(EngineEdition=5)不支持 CDC,必须明确失败并跳过 Agent 检查 ——
