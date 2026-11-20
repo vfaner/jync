@@ -23,6 +23,15 @@ public class SyncProperties {
     private int fetchSize = 1000;
 
     /**
+     * Socket read timeout (milliseconds) added to MySQL/MariaDB, PostgreSQL and Oracle JDBC
+     * URLs so a half-dead connection (NAT drop, target down without RST) fails in bounded time
+     * instead of hanging on the OS TCP timeout for minutes. 0 disables it (the default, so
+     * existing deployments are unchanged); set e.g. 60000 on WAN links. Must exceed the longest
+     * legitimate batch write. Other drivers have no universal property and are left untouched.
+     */
+    private long jdbcSocketTimeoutMs = 0L;
+
+    /**
      * Rows per JDBC batch for the initial/full load only; the incremental and CDC replay
      * paths keep {@link #batchSize}. A full load has no live traffic to protect the source
      * from and benefits directly from fewer, larger commits, while a two-second incremental

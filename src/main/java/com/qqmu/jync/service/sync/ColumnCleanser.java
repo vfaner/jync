@@ -305,15 +305,20 @@ public final class ColumnCleanser {
         return value.substring(0, value.offsetByCodePoints(0, 1)) + "***" + value.substring(at);
     }
 
-    private static String sha256Hex(String value) {
+    /** One digest per thread instead of a JCA provider lookup per hashed cell. */
+    private static final ThreadLocal<MessageDigest> SHA256 = ThreadLocal.withInitial(() -> {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of()
-                    .formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
+            return MessageDigest.getInstance("SHA-256");
         } catch (NoSuchAlgorithmException e) {
             // Every Java runtime is required to provide SHA-256.
             throw new IllegalStateException("SHA-256 is unavailable", e);
         }
+    });
+
+    private static String sha256Hex(String value) {
+        MessageDigest digest = SHA256.get();
+        digest.reset();
+        return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
     }
 
     private static String findKey(Map<String, Object> row, String column) {

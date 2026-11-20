@@ -143,8 +143,10 @@ public final class CdcTableBinding {
             for (ColumnMeta column : columns) {
                 String name = column.getName();
                 String upper = name == null ? "" : name.toUpperCase(Locale.ROOT);
-                built.add(new CdcRowMapper.ColumnPlan(column,
-                        charsetByUpperColumn.get(upper), enumByUpperColumn.get(upper),
+                String charsetName = charsetByUpperColumn.get(upper);
+                built.add(new CdcRowMapper.ColumnPlan(column, charsetName,
+                        CdcRowMapper.resolveCharset(charsetName, column),
+                        enumByUpperColumn.get(upper),
                         CdcRowMapper.isJsonType(column.getTypeName()),
                         CdcRowMapper.isCharLikeType(column.getJdbcType(), column.getTypeName())));
             }

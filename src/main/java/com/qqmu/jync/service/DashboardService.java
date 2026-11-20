@@ -152,8 +152,10 @@ public class DashboardService {
         Map<Long, SyncTask> taskByProject = taskStore.findByProjectIds(overviewIds);
 
         Map<Long, Long> rowsByProject = new HashMap<>();
-        for (Object[] row : changeLogRepository.sumAffectedRowsGroupedByProject()) {
-            rowsByProject.put((Long) row[0], (Long) row[1]);
+        if (!overviewIds.isEmpty()) {
+            for (Object[] row : changeLogRepository.sumAffectedRowsGroupedByProject(overviewIds)) {
+                rowsByProject.put((Long) row[0], (Long) row[1]);
+            }
         }
 
         List<ProjectSummary> summaries = new ArrayList<>(overviewProjects.size());

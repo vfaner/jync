@@ -288,6 +288,10 @@ public class SyncLockService {
          * wedged, so it would mask exactly the condition the page must report.
          */
         private volatile Instant lastProgressAt;
+        /** Caller-driven renewals are throttled to this window; the watchdog still ticks at TTL/3. */
+        private static final long RENEW_THROTTLE_MS = 1_000L;
+        private volatile long lastRenewAtMs;
+        private volatile boolean lastRenewResult = true;
         /** One wedge warning per cycle, however many renewal ticks follow it. */
         private final AtomicBoolean stallWarned = new AtomicBoolean();
         /** Set when the caller's own transaction deletes the lease row; see close(). */
@@ -324,6 +328,7 @@ public class SyncLockService {
             // that was briefly unreachable must not disarm the watchdog: the cycle would run
             // on unrenewed, expire by TTL mid-load and abort through LockLostException.
             if (attemptRenewal() == Renewal.LOST) {
+                lastRenewResult = false;   // a throttled renew() must stop writing at once
                 watchdogTask.cancel(false);
             }
         }
@@ -397,7 +402,18 @@ public class SyncLockService {
          *         meaning the cycle must stop writing — another instance may own the project
          */
         public boolean renew() {
-            boolean renewed = attemptRenewal() == Renewal.RENEWED;
+            long now = System.currentTimeMillis();
+            boolean renewed;
+            if (now - lastRenewAtMs < RENEW_THROTTLE_MS) {
+                // Reuse the last verdict instead of one metadata-store write per source
+                // transaction. The watchdog (TTL/3) still probes ownership and clears the
+                // cached verdict on LOST, so a takeover stops writes within this window.
+                renewed = lastRenewResult;
+            } else {
+                renewed = attemptRenewal() == Renewal.RENEWED;
+                lastRenewResult = renewed;
+                lastRenewAtMs = now;
+            }
             if (renewed) {
                 // Only a caller-visible renewal counts: the cycle itself reached a safe
                 // point. Watchdog ticks call attemptRenewal() directly and are not progress.

@@ -147,10 +147,29 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      */
     private final Function<String, ColumnCleanser> spillCleansers;
 
+    /**
+     * Bound on tracked table ids. MySQL assigns a fresh table_id whenever a table is reopened,
+     * so a weeks-long connection would otherwise accumulate them without limit. An LRU cap keeps
+     * recently-used (active) ids and drops only the oldest. It must NOT evict by table name: one
+     * statement can open the same table twice (FK cascade + trigger) under two live ids, and
+     * dropping the first would silently skip its row events.
+     */
+    private static final int MAX_TRACKED_TABLE_IDS = 4096;
+
     /** tableId -> TABLE_MAP payload; kept only to name tables in ignored-row diagnostics. */
-    private final Map<Long, TableMapEventData> tableMaps = new LinkedHashMap<>();
+    private final Map<Long, TableMapEventData> tableMaps = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, TableMapEventData> eldest) {
+            return size() > MAX_TRACKED_TABLE_IDS;
+        }
+    };
     /** tableId -> binding; filtered ids (wrong schema, unselected, no PK) are absent. */
-    private final Map<Long, CdcTableBinding> bindings = new LinkedHashMap<>();
+    private final Map<Long, CdcTableBinding> bindings = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<Long, CdcTableBinding> eldest) {
+            return size() > MAX_TRACKED_TABLE_IDS;
+        }
+    };
     /** "database.table" -> current transaction's buffered changes. */
     private final Map<String, TableChange> buffered = new LinkedHashMap<>();
     private String currentFile;
@@ -350,6 +369,9 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     /** Contract 1: record the map, then filter — schema, selection, applicability (B4). */
     private void onTableMap(TableMapEventData data) {
         long tableId = data.getTableId();
+        // Keep every table_id: MySQL emits TABLE_MAP per table INSTANCE, so one statement can
+        // open the same table twice (FK cascade + trigger both touching a child) under two ids.
+        // Evicting by name would drop the first id's binding and silently skip its row events.
         tableMaps.put(tableId, data);
         String database = data.getDatabase();
         String table = data.getTable();

@@ -38,8 +38,8 @@ public final class CdcRowMapper {
      * Decode facts for one column, resolved once per binding instead of once per cell: see
      * {@link CdcTableBinding#columnPlans()}.
      */
-    public record ColumnPlan(ColumnMeta column, String charset, CdcEnumDefinition enumDefinition,
-                             boolean json, boolean charLike) {
+    public record ColumnPlan(ColumnMeta column, String charset, Charset resolvedCharset,
+                             CdcEnumDefinition enumDefinition, boolean json, boolean charLike) {
 
         String name() {
             return column == null ? null : column.getName();
@@ -73,7 +73,7 @@ public final class CdcRowMapper {
 
     static Object mapValue(Serializable raw, ColumnPlan plan, CdcRuntimeStats stats)
             throws CdcUnmappableValueException {
-        return mapValue(raw, plan.column(), plan.charset(), stats, plan.enumDefinition(),
+        return mapValue(raw, plan.column(), plan.resolvedCharset(), stats, plan.enumDefinition(),
                 plan.json(), plan.charLike());
     }
 
@@ -86,11 +86,13 @@ public final class CdcRowMapper {
                            CdcRuntimeStats stats, CdcEnumDefinition enumDefinition)
             throws CdcUnmappableValueException {
         // No pre-resolved flags on this entry point: resolve them from the type name, but
-        // only when a byte[] actually arrives.
-        return mapValue(raw, column, charsetName, stats, enumDefinition, null, null);
+        // only when a byte[] actually arrives. The charset is resolved once per call here
+        // rather than inside the per-cell worker.
+        Charset charset = raw instanceof byte[] ? resolveCharset(charsetName, column) : null;
+        return mapValue(raw, column, charset, stats, enumDefinition, null, null);
     }
 
-    private static Object mapValue(Serializable raw, ColumnMeta column, String charsetName,
+    private static Object mapValue(Serializable raw, ColumnMeta column, Charset charset,
                                    CdcRuntimeStats stats, CdcEnumDefinition enumDefinition,
                                    Boolean json, Boolean charLike)
             throws CdcUnmappableValueException {
@@ -164,7 +166,7 @@ public final class CdcRowMapper {
                 return decodeBinaryJson(bytes, column);
             }
             if (charLike != null ? charLike : isCharLikeType(jdbcType, column.getTypeName())) {
-                return new String(bytes, resolveCharset(charsetName, column));
+                return new String(bytes, charset);
             }
             if (jdbcType == Types.BIT) {
                 if (column.getSize() != null && column.getSize() == 1) {

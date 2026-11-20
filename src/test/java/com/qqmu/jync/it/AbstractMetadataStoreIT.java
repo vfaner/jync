@@ -137,7 +137,7 @@ abstract class AbstractMetadataStoreIT {
         entry.setOccurredAt(Instant.now());
         changeLogs.saveAndFlush(entry);
 
-        List<Object[]> grouped = changeLogs.sumAffectedRowsGroupedByProject();
+        List<Object[]> grouped = changeLogs.sumAffectedRowsGroupedByProject(List.of(project.getId()));
         assertThat(grouped).anySatisfy(row -> {
             assertThat(((Number) row[0]).longValue()).isEqualTo(project.getId());
             assertThat(((Number) row[1]).longValue()).isEqualTo(7L);
