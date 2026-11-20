@@ -155,6 +155,38 @@ class AiChatClientConverseTest {
     }
 
     /**
+     * 网关无视 stream:true 时返回的是整段完成体，工具调用同样在 message.tool_calls 里。
+     * 旧实现只取了正文、把调用丢成空列表——浏览器看到「我先查」却没有任何进度行，下一轮
+     * 也没有工具结果可回填。
+     */
+    @Test
+    void openAiBufferedJsonBodyKeepsItsToolCalls() {
+        sseBody = """
+                {"model":"gpt-x","choices":[{"message":{"content":"我先查","tool_calls":[\
+                {"id":"call_9","type":"function","function":{"name":"project_status","arguments":"{\\"projectId\\":7}"}},\
+                {"type":"function","function":{"name":"alerts","arguments":{}}}]}}]}
+                """;
+        List<String> deltas = new ArrayList<>();
+
+        AiChatClient.ToolChatResult result = client.converseStream(
+                provider(AiProtocol.OPENAI), "sk-1", "SYS",
+                List.of(AiChatClient.Turn.user("现在什么情况")),
+                List.of(PROJECT_STATUS), 512, deltas::add);
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.text()).isEqualTo("我先查");
+        assertThat(deltas).containsExactly("我先查");
+        assertThat(result.toolCalls()).hasSize(2);
+        assertThat(result.toolCalls().get(0).id()).isEqualTo("call_9");
+        assertThat(result.toolCalls().get(0).name()).isEqualTo("project_status");
+        assertThat(result.toolCalls().get(0).argumentsJson()).isEqualTo("{\"projectId\":7}");
+        // 兼容端点可能不回 id；与流式路径一致，用位置兜底，并接受 arguments 是对象。
+        assertThat(result.toolCalls().get(1).id()).isEqualTo("call_1");
+        assertThat(result.toolCalls().get(1).name()).isEqualTo("alerts");
+        assertThat(result.toolCalls().get(1).argumentsJson()).isEqualTo("{}");
+    }
+
+    /**
      * Anthropic requires every tool_result for one assistant turn to sit in the single user
      * message that immediately follows it. Jync records one Turn per call, so a round with two
      * calls would otherwise become two user messages and the provider answers 400

@@ -88,6 +88,8 @@ class SupportWidgetViewTest {
         assertThat(html).contains("id=\"support-widget\"")
                 .contains("/js/support.js")
                 .contains("data-action=\"/api/support/chat\"")
+                // 切页面后用来重接正在进行的回答。
+                .contains("data-run-url=\"/api/support/runs\"")
                 .contains("data-tool-project_status=")
                 .contains("data-tool-recent_failures=")
                 .contains("data-tool-diagnose_project=")

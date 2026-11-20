@@ -236,19 +236,104 @@ class SupportAssistantServiceTest {
                 "tool:DONE:control_project", "delta:请在卡片上确认", "action:tok");
     }
 
+    /**
+     * 工具预算用完不应该把已经取到的证据丢掉。现场反馈：四轮工具之后直接报「工具轮次
+     * 过多，助手已停止」，用户拿到的是零信息。最后一轮改为不带工具再问一次，让模型
+     * 基于已执行的结果作答。
+     */
     @Test
-    void toolRoundLimitStopsTheLoop() {
+    void lastToolRoundIsSynthesizedInsteadOfErroring() {
         AiChatClient.ToolCall call = new AiChatClient.ToolCall("c", "search_docs", "{}");
+        AiChatClient.ToolChatResult toolRound = new AiChatClient.ToolChatResult(
+                true, "OK", "", List.of(call), "", 1, false);
         when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
-                .thenReturn(new AiChatClient.ToolChatResult(
-                        true, "OK", "x", List.of(call), "", 1, false));
+                .thenReturn(toolRound, toolRound, toolRound, toolRound,
+                        new AiChatClient.ToolChatResult(
+                                true, "OK", "汇总", List.of(), "", 1, false));
         when(registry.execute(any(), any(), any())).thenReturn("{}");
 
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("hi"), sink);
 
-        assertThat(sink.events).contains("error:error.support.tooManyRounds");
-        verify(chat, times(4)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AiChatClient.ToolSpec>> tools =
+                ArgumentCaptor.forClass(List.class);
+        verify(chat, times(5)).converseStream(any(), any(), any(), any(), tools.capture(),
+                anyInt(), any());
+        assertThat(tools.getAllValues().get(4)).isEmpty();
+        assertThat(sink.events).contains("delta:汇总");
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    /**
+     * 现场截图：助手回「我先核对任务，再取证据。」却不调用任何工具，下一轮就直接结束
+     * 了——用户看到的是空话。计划句必须纠偏一次，让模型真正取证。
+     */
+    @Test
+    void aPlanOnlyAnswerIsNudgedOnceAndContinued() {
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(true, "OK", "我先核对任务，再取证据。",
+                                List.of(), "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "当前没有告警。",
+                                List.of(), "", 1, false));
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("现在有告警吗"), sink);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
+        verify(chat, times(2)).converseStream(any(), any(), any(), turns.capture(), any(),
+                anyInt(), any());
+        assertThat(turns.getAllValues().get(1))
+                .extracting(AiChatClient.Turn::content)
+                .contains("我先核对任务，再取证据。")
+                .anyMatch(text -> text.contains("不要只说明计划"));
+        assertThat(sink.events).contains("delta:当前没有告警。");
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    @Test
+    void aSecondPlanOnlyAnswerIsAcceptedWithoutASecondNudge() {
+        AiChatClient.ToolChatResult plan = new AiChatClient.ToolChatResult(
+                true, "OK", "我先核对任务，再取证据。", List.of(), "", 1, false);
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(plan, plan);
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("现在有告警吗"), sink);
+
+        verify(chat, times(2)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
+    }
+
+    @Test
+    void aSubstantiveAnswerIsNotNudged() {
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(new AiChatClient.ToolChatResult(
+                        true, "OK", "当前没有告警。", List.of(), "", 1, false));
+
+        service().ask(actor, "zh", ask("现在有告警吗"), new Recorder());
+
+        verify(chat, times(1)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+    }
+
+    /**
+     * 计划句识别要保守：真正的结论里也会出现「正在运行」「准备完成」，把它们当成空话
+     * 会白白多花一轮。
+     */
+    @Test
+    void planDetectionRecognisesIntentMarkers() {
+        assertThat(SupportAssistantService.isPlanOnly("我先核对任务，再取证据。")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("让我看一下位点")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("稍等，我查一下")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("接下来调用诊断工具")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("Let me check the project status.")).isTrue();
+        assertThat(SupportAssistantService.isPlanOnly("任务正在运行。")).isFalse();
+        assertThat(SupportAssistantService.isPlanOnly("任务准备完成。")).isFalse();
+        assertThat(SupportAssistantService.isPlanOnly("当前没有告警。")).isFalse();
+        assertThat(SupportAssistantService.isPlanOnly("")).isFalse();
+        assertThat(SupportAssistantService.isPlanOnly(null)).isFalse();
     }
 
     /**

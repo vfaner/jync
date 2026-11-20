@@ -576,8 +576,10 @@ public class AiChatClient {
                 if (!whole.isEmpty()) {
                     sink.accept(whole);
                 }
-                return ToolChatResult.success(whole, List.of(), servedModel(root),
-                        System.currentTimeMillis() - start);
+                // 整段完成体同样带工具调用；丢了它们，对话会带着「我先查」结束，下一轮
+                // 也没有 tool 结果可回填。
+                return ToolChatResult.success(whole, bufferedToolCalls(protocol, root),
+                        servedModel(root), System.currentTimeMillis() - start);
             }
             List<ToolCall> calls = new ArrayList<>();
             partials.forEach((index, call) -> calls.add(new ToolCall(
@@ -1202,6 +1204,58 @@ public class AiChatClient {
             return sb.toString();
         }
         return root.path("choices").path(0).path("message").path("content").asString("");
+    }
+
+    /**
+     * Tool calls in a buffered (non-streaming) completion body.
+     *
+     * <p>OpenAI puts them in {@code choices[0].message.tool_calls}; Anthropic puts
+     * {@code tool_use} blocks in {@code content}. Arguments may be a JSON string or, on
+     * some gateways, an object — both are handed to the registry as JSON.
+     */
+    private List<ToolCall> bufferedToolCalls(AiProtocol protocol, JsonNode root) {
+        if (root == null) {
+            return List.of();
+        }
+        List<ToolCall> calls = new ArrayList<>();
+        if (protocol == AiProtocol.ANTHROPIC) {
+            int index = 0;
+            for (JsonNode block : root.path("content")) {
+                if (!"tool_use".equals(block.path("type").asString())) {
+                    index++;
+                    continue;
+                }
+                String name = block.path("name").asString("");
+                if (!name.isBlank()) {
+                    calls.add(new ToolCall(idOrFallback(block.path("id").asString(""), index),
+                            name, argumentsJson(block.path("input"))));
+                }
+                index++;
+            }
+            return calls;
+        }
+        int index = 0;
+        for (JsonNode chunk : root.path("choices").path(0).path("message").path("tool_calls")) {
+            String name = chunk.path("function").path("name").asString("");
+            if (!name.isBlank()) {
+                calls.add(new ToolCall(idOrFallback(chunk.path("id").asString(""), index),
+                        name, argumentsJson(chunk.path("function").path("arguments"))));
+            }
+            index++;
+        }
+        return calls;
+    }
+
+    /** Endpoints that omit the call id get the same positional fallback the stream path uses. */
+    private static String idOrFallback(String id, int index) {
+        return id == null || id.isBlank() ? "call_" + index : id;
+    }
+
+    private static String argumentsJson(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return "";
+        }
+        return node.isString() ? node.asString("") : node.toString();
     }
 
     /** The model the endpoint says answered, which gateways often remap from the alias sent. */

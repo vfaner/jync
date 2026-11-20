@@ -465,17 +465,9 @@
     return pump();
   }
 
-  function submit() {
-    var text = (input.value || '').trim();
-    if (!text || busy || unusable) return;
-    input.value = '';
-    input.style.height = '';
-    appendBubble('user', text);
-    remember('user', text);
-    var history = turns().slice(0, -1).map(function (turn) {
-      return { role: turn.role, text: turn.text };
-    });
-
+  // 一次回答的视图。实时 SSE 与切页回来后的快照重放走同一套事件处理，两条路径渲染
+  // 出来的进度行、草稿卡与正文完全一致。
+  function createAnswerView() {
     var bubble = appendBubble('assistant', '');
     bubble.classList.add('support-md-host', 'is-thinking');
     var thinkingEl = document.createElement('span');
@@ -487,6 +479,8 @@
     var answered = false;
     var paintPending = false;
     var steps = {};
+    var finalized = false;
+
     function paintStep(el, state) {
       el.setAttribute('data-state', state);
       el.classList.toggle('is-done', state === 'DONE');
@@ -521,6 +515,82 @@
       else flush();
     }
 
+    function apply(name, data) {
+      data = data || {};
+      if (name === 'done') return;
+      startAnswer();
+      if (name === 'delta') {
+        answer += data.text || '';
+        paint();
+      } else if (name === 'tool') {
+        var stepId = data.id || data.name || '';
+        var step = steps[stepId];
+        if (!step) {
+          step = document.createElement('div');
+          step.className = 'support-tool';
+          step.setAttribute('data-tool-label', toolLabel(data.name || ''));
+          steps[stepId] = step;
+          bubble.appendChild(step);
+        }
+        paintStep(step, data.state || 'RUNNING');
+        log.scrollTop = log.scrollHeight;
+      } else if (name === 'draft') {
+        showDraft(data);
+      } else if (name === 'action') {
+        showAction(data);
+      } else if (name === 'error') {
+        showError(data.messageKey || 'error.unexpected', data.detail);
+      }
+    }
+
+    return {
+      apply: apply,
+      // 快照里的正文是累计值：整段替换，不能当 delta 追加。
+      setText: function (text) {
+        answer = text || '';
+        startAnswer();
+        paint();
+      },
+      finalize: function () {
+        if (finalized) return;
+        finalized = true;
+        abandonSteps();
+        bubble.classList.remove('is-thinking');
+        if (answer) {
+          answerEl.innerHTML = mdToHtml(answer);
+          remember('assistant', answer);
+        }
+        // 没正文也没工具进度（例如只回了错误事件）：不留空气泡。
+        if (!answer && !bubble.querySelector('.support-tool') && bubble.parentNode) {
+          bubble.parentNode.removeChild(bubble);
+        }
+      }
+    };
+  }
+
+  function endTurn() {
+    busy = false;
+    sendBtn.disabled = unusable;
+    input.disabled = unusable;
+    if (!unusable) input.focus();
+  }
+
+  function discardRun() {
+    save({ runId: null });
+  }
+
+  function submit() {
+    var text = (input.value || '').trim();
+    if (!text || busy || unusable) return;
+    input.value = '';
+    input.style.height = '';
+    appendBubble('user', text);
+    remember('user', text);
+    var history = turns().slice(0, -1).map(function (turn) {
+      return { role: turn.role, text: turn.text };
+    });
+
+    var view = createAnswerView();
     busy = true;
     sendBtn.disabled = true;
     input.disabled = true;
@@ -542,52 +612,89 @@
         showError('error.network');
         return null;
       }
+      // 服务端在响应头里给出这次回答的 runId：整页跳转销毁 fetch 之后，页面靠它接回
+      // 仍在继续的回答。
+      var runId = response.headers.get('X-Support-Run-Id');
+      if (runId) save({ runId: runId });
       if (!response.body) {
         return response.json().then(function (data) { showError(data.messageKey); });
       }
-      return consume(response, function (name, data) {
-        startAnswer();
-        if (name === 'delta') {
-          answer += data.text || '';
-          paint();
-        } else if (name === 'tool') {
-          var stepId = data.id || data.name || '';
-          var step = steps[stepId];
-          if (!step) {
-            step = document.createElement('div');
-            step.className = 'support-tool';
-            step.setAttribute('data-tool-label', toolLabel(data.name || ''));
-            steps[stepId] = step;
-            bubble.appendChild(step);
-          }
-          paintStep(step, data.state || 'RUNNING');
-          log.scrollTop = log.scrollHeight;
-        } else if (name === 'draft') {
-          showDraft(data);
-        } else if (name === 'action') {
-          showAction(data);
-        } else if (name === 'error') {
-          showError(data.messageKey || 'error.unexpected', data.detail);
-        }
-      });
+      return consume(response, function (name, data) { view.apply(name, data); });
     }).catch(function () {
       showError('error.network');
     }).finally(function () {
-      abandonSteps();
-      bubble.classList.remove('is-thinking');
-      if (answer) {
-        answerEl.innerHTML = mdToHtml(answer);
-        remember('assistant', answer);
-      }
-      // 没正文也没工具进度（例如只回了错误事件）：不留空气泡。
-      if (!answer && !bubble.querySelector('.support-tool') && bubble.parentNode) {
-        bubble.parentNode.removeChild(bubble);
-      }
-      busy = false;
-      sendBtn.disabled = unusable;
-      input.disabled = unusable;
-      if (!unusable) input.focus();
+      view.finalize();
+      discardRun();
+      endTurn();
     });
+  }
+
+  // 切页回来：服务端缓冲着这次回答的事件。先取一份快照重放，运行中再定时轮询增量。
+  var RUN_POLL_MS = 1200;
+
+  function resumeIfNeeded() {
+    var runId = state().runId;
+    if (!runId || busy || unusable) return;
+    var view = createAnswerView();
+    busy = true;
+    sendBtn.disabled = true;
+    input.disabled = true;
+    var runUrl = root.getAttribute('data-run-url') || '/api/support/runs';
+    var since = 0;
+    var finished = false;
+    var warnedTruncated = false;
+
+    // 「新会话」会清掉 runId：此时这条回答不再属于当前对话，别再写回 turns。
+    function stillCurrent() {
+      return state().runId === runId;
+    }
+    function finish() {
+      if (finished) return;
+      finished = true;
+      if (!stillCurrent()) {
+        // 这条回答已不归当前对话：不渲染也不记入 turns，但输入框要解锁，
+        // 服务端若仍在跑会以 409 明确拒绝下一条。
+        endTurn();
+        return;
+      }
+      view.finalize();
+      discardRun();
+      endTurn();
+    }
+    function applySnapshot(snapshot) {
+      view.setText(snapshot.text || '');
+      (snapshot.events || []).forEach(function (event) {
+        view.apply(event.type, event.data);
+      });
+      since = snapshot.nextSeq || since;
+      if (snapshot.truncated && !warnedTruncated) {
+        warnedTruncated = true;
+        showError('support.run.truncated');
+      }
+      return !!snapshot.done;
+    }
+    function poll() {
+      fetch(runUrl + '/' + encodeURIComponent(runId) + '?since=' + since, {
+        headers: { 'Accept': 'application/json' }, credentials: 'same-origin'
+      }).then(function (response) {
+        if (response.status === 404) return null;
+        if (!response.ok) throw new Error('support run http ' + response.status);
+        return response.json();
+      }).then(function (snapshot) {
+        if (!snapshot) {
+          // 单节点内存缓冲：重启、过期或切到别的节点都会 404。轻提示一句，不挡新提问。
+          showError('support.run.expired');
+          finish();
+          return;
+        }
+        if (applySnapshot(snapshot)) finish();
+        else window.setTimeout(poll, RUN_POLL_MS);
+      }).catch(function () {
+        showError('error.network');
+        finish();
+      });
+    }
+    poll();
   }
 
   // 输入框随内容长高，最多 6 行；未到上限时隐藏滚动条，避免 scrollHeight 取整
@@ -616,9 +723,16 @@
   });
   root.querySelector('[data-role="support-new"]').addEventListener('click', function () {
     log.innerHTML = '';
-    save({ turns: [], draftUsed: null });
+    // 丢弃进行中的 run：新会话不该把一个还在跑的回答接回来。
+    save({ turns: [], draftUsed: null, runId: null });
     showGreeting();
     input.focus();
+  });
+
+  // bfcache 恢复的页面不重新执行脚本：没有活动流时按 runId 接回。busy 说明流可能
+  // 还活着，交给原来的 consume，避免两条路径同时往日志里写字。
+  window.addEventListener('pageshow', function (e) {
+    if (e.persisted && !busy) resumeIfNeeded();
   });
 
   // Esc：最大化先还原，否则关闭。
@@ -692,4 +806,5 @@
   resize.addEventListener('pointercancel', function () { dragging = false; });
 
   restore();
+  resumeIfNeeded();
 })();

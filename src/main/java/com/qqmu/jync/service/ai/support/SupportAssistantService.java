@@ -39,6 +39,14 @@ public class SupportAssistantService {
     static final long TOTAL_BUDGET_MS = 90_000L;
     static final long AVAILABILITY_TTL_MS = 5_000L;
 
+    /** Sent back to a model that announced a plan instead of calling a tool. */
+    static final String NUDGE_ZH =
+            "不要只说明计划。现在直接调用合适的工具取证，拿到结果后再给出完整结论；"
+                    + "如果确实不需要工具，就直接回答。";
+    static final String NUDGE_EN =
+            "Do not reply with a plan only. Call the appropriate tool now, then answer from "
+                    + "the evidence; if no tool is needed, answer directly.";
+
     static final String SYSTEM_PROMPT = """
             你是 Jync（捷同，数据库实时同步工具）的运维助手，面向管理员与运维人员。
             一、事实与边界
@@ -108,7 +116,10 @@ public class SupportAssistantService {
             四、症状诊断与建议
                1. 用户报告问题时先按名称核对任务，再按资源类型调用诊断工具一次取齐证据：
                   同步任务用 diagnose_project，ETL 用 diagnose_etl_task，专属迁移先
-                  list_migrations 再 diagnose_migration。不要先给结论，也不要凭印象猜原因。
+                  list_migrations 再 diagnose_migration。不要凭印象猜原因；拿到工具结果
+                  之前不要给结论。禁止只回复计划或过渡句（「我先…」「让我…」「稍等」
+                  「正在…」「接下来…」「准备…」「马上…」「待我…」）后结束本轮：说要查就
+                  在同一轮调用工具，需要查多个就一次把工具调用发齐。
                2. 「源有新数据，目标没有反应」按资源类型判断：
                   - 同步任务：liveness.lastSuccessAt / minutesSinceLastSuccess 看是否写过，
                     liveness.lastChangeAt / minutesSinceLastChange 看 Jync 是否看到变更。
@@ -139,8 +150,8 @@ public class SupportAssistantService {
                5. 证据不足时只问一个最具体的问题（哪张表、源端是否删过数据、报表是否外部生成），
                   不要罗列可能性让用户自己挑。
             五、回答格式
-               - 先结论后依据，用短段落与要点；两项以上对比用表格。通常不超过 300 字，用户
-                 要求细节时再展开。
+               - 先给结论、再列依据（结论只能来自本轮工具结果），用短段落与要点；两项以上
+                 对比用表格。通常不超过 300 字，用户要求细节时再展开。
                - 工具返回空列表：明确说「没有查到 / 当前没有」，不要猜。
                - 工具返回错误 key：用一句话解释并给出下一步；不要用相同参数反复重试，仍失败
                  就建议到页面查看、导出诊断包或联系维护方。
@@ -220,6 +231,7 @@ public class SupportAssistantService {
             List<AiChatClient.ToolSpec> tools = specs();
             boolean toolMode = !tools.isEmpty();
             boolean announcedFallback = false;
+            boolean nudged = false;
             boolean drafted = false;
             String draftResult = null;
             List<String> actionResults = new ArrayList<>();
@@ -266,6 +278,16 @@ public class SupportAssistantService {
                     sink.delta(result.text());
                 }
                 if (result.toolCalls().isEmpty()) {
+                    if (toolMode && !nudged && usedTools.isEmpty()
+                            && isPlanOnly(result.text())) {
+                        // 现场反馈：模型只回「我先核对任务，再取证据。」就结束本轮，用户
+                        // 看到的是空话。纠偏一次，并把这一轮还给模型——重试不占工具轮次。
+                        nudged = true;
+                        turns.add(AiChatClient.Turn.assistant(result.text(), List.of()));
+                        turns.add(AiChatClient.Turn.user(nudgeInstruction(language)));
+                        round--;
+                        continue;
+                    }
                     ok = true;
                     break;
                 }
@@ -309,8 +331,31 @@ public class SupportAssistantService {
                     turns.add(AiChatClient.Turn.toolResult(call.id(), output));
                 }
                 if (round == MAX_ROUNDS - 1) {
-                    sink.error("error.support.tooManyRounds");
-                    return;
+                    // 工具体预算用完时不能把已经取到的证据丢掉（旧行为是回一句「工具轮次
+                    // 过多，助手已停止」）。再发一次不带工具的请求，让模型基于已执行的
+                    // 结果收束成结论；这一次也不占工具轮次。
+                    if (System.currentTimeMillis() - started > TOTAL_BUDGET_MS) {
+                        sink.error("error.support.timeout");
+                        return;
+                    }
+                    boolean[] finalStreamed = new boolean[1];
+                    AiChatClient.ToolChatResult summary = chat.converseStream(provider,
+                            providers.decryptKey(provider), SYSTEM_PROMPT, turns, List.of(),
+                            1_024, text -> {
+                                finalStreamed[0] = true;
+                                sink.delta(text);
+                            });
+                    if (!summary.success()) {
+                        log.warn("Support AI synthesis failed: {}", summary.message());
+                        sink.error("error.ai.requestFailed", summary.message());
+                        return;
+                    }
+                    if (!finalStreamed[0] && summary.text() != null
+                            && !summary.text().isEmpty()) {
+                        sink.delta(summary.text());
+                    }
+                    ok = true;
+                    break;
                 }
             }
 
@@ -330,6 +375,48 @@ public class SupportAssistantService {
                             + "; success=" + ok + "; elapsedMs=" + ms,
                     actor == null ? null : actor.username());
         }
+    }
+
+    /**
+     * 「只说明计划、没有结论」的短回复。现场反馈的是「我先核对任务，再取证据。」这类
+     * 句子——模型说要查，却没在同一轮发起工具调用。
+     *
+     * <p>只对短文本生效，且「正在 / 准备 / 马上」这类歧义词只在开头出现时才算计划，
+     * 这样「任务正在运行。」「任务准备完成。」这类真正的结论不会被误判而白跑一轮。
+     */
+    static boolean isPlanOnly(String text) {
+        if (text == null) {
+            return false;
+        }
+        String trimmed = text.trim();
+        if (trimmed.isEmpty() || trimmed.length() > 160) {
+            return false;
+        }
+        String lower = trimmed.toLowerCase(java.util.Locale.ROOT);
+        for (String marker : new String[] {"let me ", "i'll ", "i will ", "i'm going to ",
+                "please wait", "let's "}) {
+            if (lower.startsWith(marker)) {
+                return true;
+            }
+        }
+        for (String marker : new String[] {"我先", "让我", "稍等", "待我", "接下来",
+                "我现在"}) {
+            if (trimmed.startsWith(marker)) {
+                return true;
+            }
+        }
+        if (trimmed.length() <= 40) {
+            for (String marker : new String[] {"正在", "准备", "马上"}) {
+                if (trimmed.startsWith(marker)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static String nudgeInstruction(String language) {
+        return language != null && language.startsWith("en") ? NUDGE_EN : NUDGE_ZH;
     }
 
     /** 个别兼容端点不回调用 id；浏览器按 id 找进度行，缺了就用「名字#序号」兜底。 */
