@@ -4,6 +4,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.model.MigrationRunTrigger;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.audit.AuditDetail;
@@ -12,6 +13,7 @@ import com.qqmu.jync.service.cdc.CdcNotHolderException;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcRestartFailedException;
 import com.qqmu.jync.service.etl.EtlTaskService;
+import com.qqmu.jync.service.migration.MigrationTaskService;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -43,15 +45,17 @@ public class SupportActionService {
     private final SupportActionStore store;
     private final ProjectService projects;
     private final EtlTaskService etlTasks;
+    private final MigrationTaskService migrationTasks;
     private final CdcOperationsService cdcOperations;
     private final AdminAuditService audit;
 
     public SupportActionService(SupportActionStore store, ProjectService projects,
-                                EtlTaskService etlTasks, CdcOperationsService cdcOperations,
-                                AdminAuditService audit) {
+                                EtlTaskService etlTasks, MigrationTaskService migrationTasks,
+                                CdcOperationsService cdcOperations, AdminAuditService audit) {
         this.store = store;
         this.projects = projects;
         this.etlTasks = etlTasks;
+        this.migrationTasks = migrationTasks;
         this.cdcOperations = cdcOperations;
         this.audit = audit;
     }
@@ -107,6 +111,7 @@ public class SupportActionService {
         switch (pending.kind()) {
             case PROJECT -> runProject(pending, actor);
             case ETL_TASK -> runEtlTask(pending, actor);
+            case MIGRATION_TASK -> runMigrationTask(pending, actor);
         }
     }
 
@@ -115,9 +120,13 @@ public class SupportActionService {
             case START -> projects.start(pending.resourceId(), actor);
             case STOP -> projects.stop(pending.resourceId(), actor);
             case SYNC_NOW -> projects.syncNow(pending.resourceId(), actor);
-            // rebaseline() is controller-invoked today; it checks the CDC strategy and the
-            // cross-node lease itself, and writes its own audit trail.
-            case REBASELINE -> cdcOperations.rebaseline(pending.resourceId());
+            // rebaseline() takes no actor: it checks the CDC strategy and the cross-node lease
+            // itself and writes its own audit trail, so ownership must be re-applied here —
+            // exactly the step CdcApiController performs before it calls the same method.
+            case REBASELINE -> {
+                projects.requireEditable(pending.resourceId(), actor);
+                cdcOperations.rebaseline(pending.resourceId());
+            }
             default -> throw new IllegalStateException("support.action.failed");
         }
     }
@@ -131,6 +140,28 @@ public class SupportActionService {
                 etlTasks.requireEditable(pending.resourceId(), actor);
                 if (!etlTasks.submit(pending.resourceId())) {
                     throw new IllegalStateException("error.etl.running");
+                }
+            }
+            default -> throw new IllegalStateException("support.action.failed");
+        }
+    }
+
+    private void runMigrationTask(SupportActionStore.Pending pending, AccessGuard actor) {
+        switch (pending.action()) {
+            case START -> migrationTasks.setEnabled(pending.resourceId(), true, actor);
+            case STOP -> migrationTasks.setEnabled(pending.resourceId(), false, actor);
+            case RUN_NOW -> {
+                // submit() has no actor of its own; qualify before a RUNNING row is written.
+                migrationTasks.requireEditable(pending.resourceId(), actor);
+                if (!migrationTasks.submit(pending.resourceId(), MigrationRunTrigger.MANUAL)) {
+                    throw new IllegalStateException("error.migration.running");
+                }
+            }
+            case CANCEL -> {
+                // cancel() already re-checks ownership; the boolean says whether a run was
+                // actually in flight, which is the difference between done and a no-op.
+                if (!migrationTasks.cancel(pending.resourceId(), actor)) {
+                    throw new IllegalStateException("error.migration.not.running");
                 }
             }
             default -> throw new IllegalStateException("support.action.failed");

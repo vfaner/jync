@@ -137,6 +137,30 @@ class JsMessageMapCoverageTest {
                 .isEmpty();
     }
 
+    /**
+     * 助手确认卡点击后用 {@code t(body.message)} 渲染结果，服务端的 messageKey 全部来自
+     * SupportActionService 的返回分支（异常 key 是服务方法动态抛的，控制器扫描看不见）。
+     * 漏一个，卡片上直接显示 error.migration.running 这样的键——正是迁移模块修过的老问题。
+     */
+    private static final List<String> SUPPORT_ACTION_RESULT_KEYS = List.of(
+            "support.action.done",
+            "support.action.expired",
+            "support.action.failed",
+            "error.accessDenied",
+            "cdc.rebaseline.not.holder",
+            "error.cdc.rebaseline.restartFailed",
+            "error.etl.running",
+            "error.migration.running",
+            "error.migration.not.running");
+
+    @Test
+    @DisplayName("every confirmation-card outcome key is in the browser map")
+    void supportActionResultKeysAreInTheMap() throws Exception {
+        assertThat(missing(new TreeSet<>(SUPPORT_ACTION_RESULT_KEYS), mapKeys()))
+                .as("the confirmation card shows the raw key instead of this sentence")
+                .isEmpty();
+    }
+
     @Test
     @DisplayName("every refusal the TLS upload button can show is in the browser map")
     void tlsStageRefusalsAreInTheMap() throws Exception {

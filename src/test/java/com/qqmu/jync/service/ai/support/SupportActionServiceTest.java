@@ -21,7 +21,9 @@ import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.cdc.CdcNotHolderException;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcRestartFailedException;
+import com.qqmu.jync.model.MigrationRunTrigger;
 import com.qqmu.jync.service.etl.EtlTaskService;
+import com.qqmu.jync.service.migration.MigrationTaskService;
 
 /**
  * The confirmation endpoint is the second half of the two-phase design: the token prepared by
@@ -33,12 +35,14 @@ class SupportActionServiceTest {
     private final SupportActionStore store = new SupportActionStore();
     private final ProjectService projects = mock(ProjectService.class);
     private final EtlTaskService etlTasks = mock(EtlTaskService.class);
+    private final MigrationTaskService migrationTasks = mock(MigrationTaskService.class);
     private final CdcOperationsService cdcOperations = mock(CdcOperationsService.class);
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AccessGuard ops = AccessGuard.of("ops1", UserRole.OPS);
 
     private SupportActionService service() {
-        return new SupportActionService(store, projects, etlTasks, cdcOperations, audit);
+        return new SupportActionService(store, projects, etlTasks, migrationTasks,
+                cdcOperations, audit);
     }
 
     private String token(String username, SupportActionStore.Kind kind, long id,
@@ -152,6 +156,23 @@ class SupportActionServiceTest {
     }
 
     /**
+     * rebaseline() 本身不收 actor，页面在调用它之前先做 requireEditable；助手这条路径
+     * 也必须做同一步，否则卡片生成后任务换了归属，点击时仍会在旧账号手里重建基线。
+     */
+    @Test
+    void aRebaselineRefusedByOwnershipNeverReachesTheCdcOperation() {
+        String token = token("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.REBASELINE, "订单同步");
+        doThrow(new AccessDeniedException("error.accessDenied"))
+                .when(projects).requireEditable(7L, ops);
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.DENIED);
+        verifyNoInteractions(cdcOperations);
+    }
+
+    /**
      * A rebaseline on a node that does not hold the consumer lease is refused before any
      * mutation. The refusal is a conflict the operator must act on, so its message survives
      * instead of collapsing into the generic failure sentence.
@@ -196,5 +217,69 @@ class SupportActionServiceTest {
         assertThat(result.messageKey()).isEqualTo("support.action.failed");
         assertThat(result.messageKey()).doesNotContain("ORA");
         verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION), any(), eq("ops1"));
+    }
+
+    @Test
+    void aConfirmedMigrationRunQueuesTheTaskAndIsAudited() {
+        String token = token("ops1", SupportActionStore.Kind.MIGRATION_TASK, 5L,
+                SupportActionStore.Action.RUN_NOW, "es-orders");
+        when(migrationTasks.submit(5L, MigrationRunTrigger.MANUAL)).thenReturn(true);
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        verify(migrationTasks).requireEditable(5L, ops);
+        verify(migrationTasks).submit(5L, MigrationRunTrigger.MANUAL);
+        verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
+                contains("support.action.migration_task.run_now"), eq("ops1"));
+    }
+
+    @Test
+    void aMigrationRunQueuedTwiceSaysItIsAlreadyRunning() {
+        String token = token("ops1", SupportActionStore.Kind.MIGRATION_TASK, 5L,
+                SupportActionStore.Action.RUN_NOW, "es-orders");
+        when(migrationTasks.submit(5L, MigrationRunTrigger.MANUAL)).thenReturn(false);
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.FAILED);
+        assertThat(result.messageKey()).isEqualTo("error.migration.running");
+    }
+
+    @Test
+    void aConfirmedMigrationStartEnablesTheSchedule() {
+        String token = token("ops1", SupportActionStore.Kind.MIGRATION_TASK, 5L,
+                SupportActionStore.Action.START, "es-orders");
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        verify(migrationTasks).setEnabled(5L, true, ops);
+    }
+
+    @Test
+    void aConfirmedMigrationCancelCancelsTheRunInFlight() {
+        String token = token("ops1", SupportActionStore.Kind.MIGRATION_TASK, 5L,
+                SupportActionStore.Action.CANCEL, "es-orders");
+        when(migrationTasks.cancel(5L, ops)).thenReturn(true);
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        verify(migrationTasks).cancel(5L, ops);
+        verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
+                contains("support.action.migration_task.cancel"), eq("ops1"));
+    }
+
+    @Test
+    void aMigrationCancelWithNothingRunningKeepsItsOwnKey() {
+        String token = token("ops1", SupportActionStore.Kind.MIGRATION_TASK, 5L,
+                SupportActionStore.Action.CANCEL, "es-orders");
+        when(migrationTasks.cancel(5L, ops)).thenReturn(false);
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.FAILED);
+        assertThat(result.messageKey()).isEqualTo("error.migration.not.running");
     }
 }
