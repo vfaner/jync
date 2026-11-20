@@ -2,6 +2,7 @@ package com.qqmu.jync.diagnostics;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -120,6 +121,112 @@ class MetadataStoreFailureAnalyzerTest {
                                 LogFactory.getLog(MetadataStoreFailureAnalyzerTest.class)));
 
         assertThat(analyzers).anyMatch(MetadataStoreFailureAnalyzer.class::isInstance);
+    }
+
+    /**
+     * Hibernate throws the dialect fallback as a NEW exception and only logs the connection
+     * error (HHH100046), so the cause chain carries nothing. The operator's only copy of the
+     * real reason is the startup log the upgrade launcher writes; the analysis must quote it.
+     */
+    @Test
+    void theUnderlyingErrorQuotedFromTheStartupLogBecomesPartOfTheDescription() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Path logs = Files.createDirectories(tempDir.resolve("logs"));
+        Files.writeString(logs.resolve("jync.log"),
+                "2026-11-20T15:29:06.100+08:00  WARN 1 --- [jync] [main] "
+                        + "org.hibernate.engine.jdbc.env.internal.JdbcEnvironmentInitiator : "
+                        + "HHH100046: Could not obtain connection to query JDBC database metadata\n"
+                        + "org.h2.jdbc.JdbcSQLNonTransientConnectionException: Database may be "
+                        + "already in use: \"" + store + "\". Possible solutions [90020-224]\n"
+                        + "\tat org.h2.message.DbException.getJdbcSQLException(DbException.java:690)\n");
+
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL;AUTO_SERVER=TRUE");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription())
+                .contains("最近一次启动日志")
+                .contains("Database may be already in use")
+                .contains("[90020-224]")
+                .doesNotContain("at org.h2.message");
+    }
+
+    /** The same log quote helps an external store's "Connection refused" just as much. */
+    @Test
+    void aCredentialInTheQuotedLogLineIsRedacted() throws Exception {
+        Path logs = Files.createDirectories(tempDir.resolve("logs"));
+        Files.writeString(logs.resolve("jync.log"),
+                "WARN 1 --- [jync] [main] x : "
+                        + "HHH100046: Could not obtain connection to query JDBC database metadata\n"
+                        + "java.sql.SQLException: Connection refused to db.internal:5432, "
+                        + "password=hunter2\n");
+
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:postgresql://db.internal:5432/jync?password=secret");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription())
+                .contains("最近一次启动日志")
+                .contains("to db.internal:5432")
+                .doesNotContain("hunter2")
+                .doesNotContain("secret");
+    }
+
+    /** No log file (a manual console start) must not add an empty "see the log" sentence. */
+    @Test
+    void withoutAStartupLogTheDescriptionStaysAsBefore() {
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + tempDir.resolve("data/jync"));
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription()).doesNotContain("最近一次启动日志");
+    }
+
+    /**
+     * The most common file-store causes are answerable without opening the store: a lock file,
+     * an unwritable data directory, no space, an unwritable or missing store file.
+     */
+    @Test
+    void theDescriptionStatesWhatTheFileStoreChecksFound() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.createFile(Path.of(store + ".mv.db"));
+        Files.createFile(Path.of(store + ".lock.db"));
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store + ";MODE=MySQL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription())
+                .contains("启动自检")
+                .contains("发现锁文件")
+                .contains(store + ".lock.db")
+                .contains("可写")
+                .contains(store + ".mv.db")
+                .doesNotContain("未发现锁文件");
+    }
+
+    @Test
+    void anAbsentLockFileIsRuledOutInsteadOfHopedFor() throws Exception {
+        Path store = tempDir.resolve("data/jync");
+        Files.createDirectories(store.getParent());
+        Files.createFile(Path.of(store + ".mv.db"));
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:h2:file:" + store);
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env, tempDir, null)
+                .analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription())
+                .contains("未发现锁文件")
+                .doesNotContain("发现锁文件 " + store);
     }
 
     private static Throwable wrappedFailure() {

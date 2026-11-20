@@ -1,6 +1,14 @@
 package com.qqmu.jync.diagnostics;
 
+import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileStore;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 
 import org.springframework.boot.diagnostics.FailureAnalysis;
 import org.springframework.boot.diagnostics.FailureAnalyzer;
@@ -30,9 +38,19 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
     static final String DIALECT_FALLBACK = "Unable to determine Dialect without JDBC metadata";
 
     private final Environment environment;
+    private final Path workingDirectory;
+    private final Path startupLog;
 
     public MetadataStoreFailureAnalyzer(Environment environment) {
+        this(environment, Path.of(System.getProperty("user.dir", ".")), null);
+    }
+
+    /** The working directory and log path are injectable so tests never touch the real ones. */
+    MetadataStoreFailureAnalyzer(Environment environment, Path workingDirectory, Path startupLog) {
         this.environment = environment;
+        this.workingDirectory = workingDirectory;
+        this.startupLog = startupLog != null
+                ? startupLog : workingDirectory.resolve("logs").resolve("jync.log");
     }
 
     @Override
@@ -46,10 +64,13 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
             // MySQL / PostgreSQL / Oracle (documented external stores) or a malformed or absent
             // URL: there is no H2 lock file to talk about.
             String target = url == null || url.isBlank() ? "默认元数据库" : redact(url);
-            return new FailureAnalysis(description(target, false), action(target, false), failure);
+            return new FailureAnalysis(description(target, false) + logQuote(),
+                    action(target, false), failure);
         }
-        return new FailureAnalysis(description(storeBase(), true), action(storeBase(), true),
-                failure);
+        String target = storeBase();
+        return new FailureAnalysis(
+                description(target, true) + logQuote() + storeChecks(Path.of(target), url),
+                action(target, true), failure);
     }
 
     private static boolean matches(Throwable failure) {
@@ -72,7 +93,6 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
         if (base == null) {
             base = Path.of("./data/jync");
         }
-        Path workingDirectory = Path.of(System.getProperty("user.dir", "."));
         return (base.isAbsolute() ? base : workingDirectory.resolve(base)).normalize().toString();
     }
 
@@ -111,6 +131,130 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
                 + "3. 多实例共用一个外部元数据库是支持的，不要按 H2 锁文件问题处理。\n"
                 + "4. 如果刚用一键升级，请查看 jar 旁的 logs/jync-restart.log，确认旧进程已"
                 + "退出后新进程才启动。";
+    }
+
+    /** How much of the startup log to scan for the logged cause. */
+    private static final int MAX_LOG_TAIL_BYTES = 256 * 1024;
+    private static final int MAX_QUOTED_CHARS = 300;
+    private static final long LOW_DISK_BYTES = 64L * 1024 * 1024;
+
+    /**
+     * Hibernate throws the dialect fallback as a <em>new</em> exception and only logs the real
+     * connection error (HHH100046 / HHH000342), so the cause chain is empty. The packaged
+     * launcher appends the process output to {@code logs/jync.log}; quoting that error line is
+     * the only way this analysis can name the actual cause instead of listing suspects.
+     */
+    private String logQuote() {
+        String line = lastLoggedCause();
+        if (line == null) {
+            return "";
+        }
+        return "\n\n最近一次启动日志里的底层错误（摘自 " + startupLog + "）：" + line;
+    }
+
+    private String lastLoggedCause() {
+        String tail;
+        try (RandomAccessFile file = new RandomAccessFile(startupLog.toFile(), "r")) {
+            long length = file.length();
+            long start = Math.max(0, length - MAX_LOG_TAIL_BYTES);
+            byte[] bytes = new byte[(int) (length - start)];
+            file.seek(start);
+            file.readFully(bytes);
+            tail = new String(bytes, StandardCharsets.UTF_8);
+        } catch (IOException | RuntimeException e) {
+            return null; // a failed diagnostic must never fail the diagnostic
+        }
+        String[] lines = tail.split("\\R");
+        int marker = -1;
+        for (int i = 0; i < lines.length; i++) {
+            if (lines[i].contains("HHH000342") || lines[i].contains("HHH100046")) {
+                marker = i;
+            }
+        }
+        if (marker < 0) {
+            for (int i = lines.length - 1; i >= 0; i--) {
+                if (lines[i].trim().startsWith("Caused by:")) {
+                    return quote(lines[i]);
+                }
+            }
+            return null;
+        }
+        // The exception's own line follows the WARN; its stack frames are useless here.
+        for (int i = marker + 1; i < lines.length && i <= marker + 8; i++) {
+            String candidate = lines[i].trim();
+            if (candidate.isEmpty() || candidate.startsWith("at ") || candidate.startsWith("...")) {
+                continue;
+            }
+            if (candidate.matches("^\\d{4}-\\d{2}-\\d{2}T.*")) {
+                break; // the next log record: the exception line never appeared
+            }
+            return quote(candidate);
+        }
+        return quote(lines[marker]);
+    }
+
+    private static String quote(String line) {
+        String text = redact(line).replaceAll("\\s+", " ").trim();
+        return text.length() <= MAX_QUOTED_CHARS
+                ? text : text.substring(0, MAX_QUOTED_CHARS) + "…";
+    }
+
+    /**
+     * Facts about the H2 file store that answer the most common causes without opening it:
+     * a lock file, an unwritable data directory (a new lock file cannot be created there),
+     * no space, a missing or unwritable store file, and hostname resolution for AUTO_SERVER.
+     */
+    private static String storeChecks(Path store, String url) {
+        StringBuilder sb = new StringBuilder("\n\n启动自检：");
+        Path lock = Path.of(store + ".lock.db");
+        sb.append(Files.isRegularFile(lock)
+                ? "发现锁文件 " + lock + "（另一个实例可能仍占用，或上次进程被强制结束留下的残留）；"
+                : "未发现锁文件，可排除锁占用；");
+        Path data = Path.of(store + ".mv.db");
+        if (Files.isRegularFile(data)) {
+            sb.append("元数据库文件 ").append(data)
+                    .append(Files.isWritable(data) ? " 存在且可写；" : " 存在但不可写；");
+        } else {
+            sb.append("未找到元数据库文件 ").append(data).append("（路径不对或首次启动）；");
+        }
+        Path dir = store.toAbsolutePath().getParent();
+        if (dir != null) {
+            sb.append("目录 ").append(dir)
+                    .append(Files.isWritable(dir) ? " 可写"
+                            : " 不可写——运行用户建不了锁文件，这是常见原因")
+                    .append("；");
+            appendFreeSpace(dir, sb);
+        }
+        appendHostName(url, sb);
+        sb.setLength(sb.length() - 1);
+        return sb.append('。').toString();
+    }
+
+    private static void appendFreeSpace(Path dir, StringBuilder sb) {
+        try {
+            FileStore store = Files.getFileStore(dir);
+            long usable = store.getUsableSpace();
+            if (usable < LOW_DISK_BYTES) {
+                sb.append("磁盘可用空间仅 ").append(usable / (1024 * 1024))
+                        .append(" MB，可能写不进锁文件；");
+            } else {
+                sb.append("磁盘可用空间 ").append(usable / (1024 * 1024)).append(" MB；");
+            }
+        } catch (IOException | RuntimeException e) {
+            // Unknown space must not make the analysis fail.
+        }
+    }
+
+    private static void appendHostName(String url, StringBuilder sb) {
+        if (url == null || !url.toUpperCase(Locale.ROOT).contains("AUTO_SERVER=TRUE")) {
+            return;
+        }
+        try {
+            InetAddress.getLocalHost();
+        } catch (UnknownHostException e) {
+            sb.append("主机名无法解析，AUTO_SERVER=TRUE 依赖它，请在 /etc/hosts 补本机名或改用")
+                    .append(" AUTO_SERVER=FALSE；");
+        }
     }
 
     /** A JDBC URL can carry credentials; the analysis is written to the log. */
