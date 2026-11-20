@@ -299,6 +299,19 @@ public final class JdbcRowMapper {
                     value = rs.getObject(idx);
                 }
                 break;
+            case Types.BIT:
+                value = rs.getObject(idx);
+                // Connector/J reports MySQL TINYINT(1) as BIT and hands the cell over as
+                // Boolean, so 2..127 collapse to true — a status column stored 5 comes
+                // back as 1 and no rebaseline can fix it. Docker 实测 (8.4.11 + Connector/J
+                // 8.0.33): TINYINT(1) and a genuine BIT(1) are indistinguishable in the
+                // metadata (both jdbc=BIT, typeName=BIT, precision=1), and getInt on a real
+                // BIT(1) returns the identical 0/1 — so every boolean-collapsed MySQL cell
+                // is re-read numerically. BIT(n>1) arrives as byte[] and keeps that form.
+                if (value instanceof Boolean && isMysqlFamily(sourceType)) {
+                    value = rs.getInt(idx);
+                }
+                break;
             case Types.TIME:
             case Types.TIME_WITH_TIMEZONE:
                 // Ruling R5: rs.getTime cannot carry MySQL's TIME domain — Connector/J's
@@ -397,6 +410,18 @@ public final class JdbcRowMapper {
     private static boolean isPostgresFamily(com.qqmu.jync.model.DatabaseType sourceType) {
         return sourceType != null
                 && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType.DialectFamily.POSTGRES;
+    }
+
+    /** MySQL-protocol sources (MySQL, MariaDB and the compatible presets). */
+    private static boolean isMysqlFamily(com.qqmu.jync.model.DatabaseType sourceType) {
+        return sourceType != null
+                && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
+    }
+
+    /** MySQL-protocol targets, where {@code BOOLEAN} is really {@code TINYINT(1)}. */
+    private static boolean isMysqlFamily(com.qqmu.jync.service.converter.SqlDialect targetDialect) {
+        return targetDialect != null
+                && targetDialect.family() == com.qqmu.jync.model.DatabaseType.DialectFamily.MYSQL;
     }
 
     private static boolean isPgTextBorneOther(String typeName) {
@@ -502,12 +527,18 @@ public final class JdbcRowMapper {
             // A BIT(1) source value arriving as Boolean must be accepted by an integer
             // target; PostgreSQL-family drivers do not coerce Boolean→INTEGER.
             ps.setObject(idx, (Boolean) value ? 1 : 0);
-        } else if (value instanceof Number && isBooleanType(targetType)) {
+        } else if (value instanceof Number && isBooleanType(targetType)
+                && !isMysqlFamily(targetDialect)) {
             // Connector/J reports MySQL TINYINT(1) as BIT, so the target column is boolean;
             // the JDBC read path hands the cell over as Boolean, but the binlog decoder
             // delivers TINY as Integer 0/1. PostgreSQL-family drivers reject int4 bound
             // into a boolean column, so a numeric image becomes the flag it means —
             // nonzero is true, the server's own integer-to-boolean cast rule.
+            //
+            // A MySQL-family target is the exception: its BIT mapping IS TINYINT(1), which
+            // holds 2..127. Coercing there turned a status of 5 into 1 on every write, so
+            // the number is kept and setObject sends it through unchanged. Boolean targets
+            // on every other family still need the flag (dialect null keeps the old path).
             ps.setBoolean(idx, ((Number) value).doubleValue() != 0d);
         } else if (typedTemporal && value instanceof CharSequence
                 && targetType != null && CursorTypes.isTemporal(targetType)) {

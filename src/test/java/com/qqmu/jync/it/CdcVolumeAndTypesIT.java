@@ -201,6 +201,17 @@ class CdcVolumeAndTypesIT extends CdcMySqlContainerHarnessIT {
         roundTrip("tinyint", "TINYINT", "-128", "v", -128, "127", 127);
     }
 
+    /**
+     * {@code TINYINT(1)} is reported as JDBC BIT by Connector/J and was collapsed to 0/1
+     * on both legs: the full load's {@code getObject} handed back Boolean, and the stream
+     * bind turned any number into a flag. A status stored as 5 reached the target as 1 and
+     * no rebaseline could repair it (2.4.3 现场反馈). Both columns here are TINYINT(1), so
+     * the target metadata reports BIT and the buggy bind path is the one exercised.
+     */
+    @Test void tinyint1BooleanWidthRoundTrip() {
+        roundTrip("tinyint1", "TINYINT(1)", "5", "v + 0", 5, "0", 0);
+    }
+
     @Test void smallintRoundTrip() {
         roundTrip("smallint", "SMALLINT", "-32768", "v", -32768, "32767", 32767);
     }
