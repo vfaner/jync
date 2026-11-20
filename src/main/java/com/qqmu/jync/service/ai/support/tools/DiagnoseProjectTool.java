@@ -1,5 +1,7 @@
 package com.qqmu.jync.service.ai.support.tools;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,7 +12,9 @@ import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
@@ -44,17 +48,20 @@ public class DiagnoseProjectTool implements SupportTool {
     private final CdcStatusTool cdc;
     private final RecentFailuresTool failures;
     private final AlertsTool alerts;
+    private final ChangeLogRepository changes;
     private final SyncProperties properties;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public DiagnoseProjectTool(ProjectService projects, ProjectStatusTool status,
                                CdcStatusTool cdc, RecentFailuresTool failures,
-                               AlertsTool alerts, SyncProperties properties) {
+                               AlertsTool alerts, ChangeLogRepository changes,
+                               SyncProperties properties) {
         this.projects = projects;
         this.status = status;
         this.cdc = cdc;
         this.failures = failures;
         this.alerts = alerts;
+        this.changes = changes;
         this.properties = properties;
     }
 
@@ -108,6 +115,7 @@ public class DiagnoseProjectTool implements SupportTool {
         if (project != null) {
             out.put("settings", settings(project));
         }
+        out.put("liveness", liveness(projectId));
 
         Object cdcResult = cdc.execute(projectArgs, ctx);
         if (cdcResult instanceof Map<?, ?> cdcMap) {
@@ -144,6 +152,44 @@ public class DiagnoseProjectTool implements SupportTool {
         args.put("projectId", projectId);
         args.put("hours", hours);
         return args;
+    }
+
+    /**
+     * "The source changed and the target did nothing" splits into two questions: did Jync see
+     * the change, and did it apply one? The newest row answers the first; the newest successful
+     * row answers the second. Both are metadata reads, so this works while the stream is broken.
+     */
+    private Map<String, Object> liveness(long projectId) {
+        ChangeLog latest = changes.findFirstByProjectIdOrderByOccurredAtDesc(projectId)
+                .orElse(null);
+        ChangeLog lastSuccess =
+                changes.findFirstByProjectIdAndSuccessTrueOrderByOccurredAtDesc(projectId)
+                        .orElse(null);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("lastChangeAt", instant(latest == null ? null : latest.getOccurredAt()));
+        out.put("lastChangeSuccess", latest == null ? null : latest.getSuccess());
+        out.put("lastChangeType", latest == null || latest.getChangeType() == null
+                ? null : latest.getChangeType().name());
+        out.put("lastChangeObject", latest == null ? null : latest.getObjectName());
+        out.put("lastSuccessAt", instant(lastSuccess == null ? null
+                : lastSuccess.getOccurredAt()));
+        out.put("minutesSinceLastChange", minutesSince(latest == null ? null
+                : latest.getOccurredAt()));
+        out.put("minutesSinceLastSuccess", minutesSince(lastSuccess == null ? null
+                : lastSuccess.getOccurredAt()));
+        return out;
+    }
+
+    private String instant(Instant value) {
+        return value == null ? null : value.toString();
+    }
+
+    private Long minutesSince(Instant value) {
+        if (value == null) {
+            return null;
+        }
+        // A clock that moved backwards must not produce a negative age the model reads as fresh.
+        return Math.max(0L, Duration.between(value, Instant.now()).toMinutes());
     }
 
     /**

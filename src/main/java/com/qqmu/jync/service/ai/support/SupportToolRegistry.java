@@ -86,6 +86,23 @@ public class SupportToolRegistry {
         }
     }
 
+    /**
+     * True when {@link #execute} returned its own error object. The browser uses this to mark
+     * a progress line "failed" instead of "done"; only a root-level {@code error} key counts,
+     * so a data field that happens to be named {@code lastError} is not a tool failure.
+     */
+    public boolean isError(String output) {
+        if (output == null || output.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode root = mapper.readTree(output);
+            return root.isObject() && root.has("error");
+        } catch (JacksonException e) {
+            return false;
+        }
+    }
+
     private String error(String key) {
         ObjectNode node = mapper.createObjectNode();
         node.put("error", key);

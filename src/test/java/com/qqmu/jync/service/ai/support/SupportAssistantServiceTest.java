@@ -60,7 +60,9 @@ class SupportAssistantServiceTest {
         final List<String> events = new ArrayList<>();
 
         public void delta(String text) { events.add("delta:" + text); }
-        public void tool(String name, String labelKey) { events.add("tool:" + name); }
+        public void tool(String callId, String name, String labelKey, ToolState state) {
+            events.add("tool:" + state + ":" + name);
+        }
         public void draft(DraftView draft) { events.add("draft:" + draft.token()); }
         public void action(ActionView action) { events.add("action:" + action.token()); }
         public void error(String messageKey) { events.add("error:" + messageKey); }
@@ -88,8 +90,62 @@ class SupportAssistantServiceTest {
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("订单同步在跑吗"), sink);
 
-        assertThat(sink.events).containsExactly("delta:我先查", "tool:project_status",
-                "delta:它在跑");
+        assertThat(sink.events).containsExactly("delta:我先查",
+                "tool:QUEUED:project_status", "tool:RUNNING:project_status",
+                "tool:DONE:project_status", "delta:它在跑");
+    }
+
+    /**
+     * 一轮里的多个调用先全部以「等待进行」通知，再逐个跑。用户才能看到队列，而不是
+     * 一个接一个凭空冒出来。
+     */
+    @Test
+    void everyCallInARoundIsQueuedBeforeAnyOfThemRuns() {
+        List<AiChatClient.ToolCall> calls = List.of(
+                new AiChatClient.ToolCall("c1", "project_status", "{\"projectId\":1}"),
+                new AiChatClient.ToolCall("c2", "alerts", "{}"));
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(true, "OK", "", calls, "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "查完了", List.of(),
+                                "", 1, false));
+        when(registry.execute(any(), any(), any())).thenReturn("{}");
+        when(registry.isError(any())).thenReturn(false);
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("现在什么情况"), sink);
+
+        assertThat(sink.events).containsExactly(
+                "tool:QUEUED:project_status", "tool:QUEUED:alerts",
+                "tool:RUNNING:project_status", "tool:DONE:project_status",
+                "tool:RUNNING:alerts", "tool:DONE:alerts",
+                "delta:查完了");
+    }
+
+    /**
+     * 工具失败时进度行必须变成「失败」，不能显示成已完成——否则管理员会把
+     * 「没查到」当成「查过且没问题」。
+     */
+    @Test
+    void aToolThatReturnsAnErrorIsReportedAsFailed() {
+        AiChatClient.ToolCall call =
+                new AiChatClient.ToolCall("c1", "project_status", "{\"projectId\":7}");
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(true, "OK", "", List.of(call),
+                                "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "查询失败", List.of(),
+                                "", 1, false));
+        when(registry.execute(any(), any(), any()))
+                .thenReturn("{\"error\":\"error.support.tool.failed\"}");
+        when(registry.isError(any())).thenReturn(true);
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("订单同步在跑吗"), sink);
+
+        assertThat(sink.events).containsExactly(
+                "tool:QUEUED:project_status", "tool:RUNNING:project_status",
+                "tool:FAILED:project_status", "delta:查询失败");
     }
 
     /**
@@ -135,6 +191,10 @@ class SupportAssistantServiceTest {
                 .contains("control_etl_task")
                 .contains("recent_failures")
                 .contains("diagnose_project")
+                .contains("diagnose_etl_task")
+                .contains("list_migrations")
+                .contains("diagnose_migration")
+                .contains("control_migration")
                 .contains("可执行项")
                 .contains("REBASELINE")
                 .contains("确认")
@@ -171,8 +231,9 @@ class SupportAssistantServiceTest {
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("把订单同步停掉"), sink);
 
-        assertThat(sink.events).containsExactly("delta:我来准备", "tool:control_project",
-                "delta:请在卡片上确认", "action:tok");
+        assertThat(sink.events).containsExactly("delta:我来准备",
+                "tool:QUEUED:control_project", "tool:RUNNING:control_project",
+                "tool:DONE:control_project", "delta:请在卡片上确认", "action:tok");
     }
 
     @Test
@@ -291,6 +352,20 @@ class SupportAssistantServiceTest {
                 .contains("2912167928")
                 .contains("qqmu66")
                 .contains("426669837");
+    }
+
+    /**
+     * Three facts the tools cannot put into their own answers, so the prompt has to: a CDC
+     * project refuses SYNC_NOW at the click, every tool result is a snapshot taken at call time,
+     * and hitting a per-conversation cap is reported with one fixed key.
+     */
+    @Test
+    void theSystemPromptPinsTheCdcSyncNowRefusalTheSnapshotAndTheCapKey() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("变更日志（CDC）任务不支持「立即同步」")
+                .contains("查询那一刻的快照")
+                .contains("error.support.tooManyQuestions")
+                .contains("batchId");
     }
 
     @Test

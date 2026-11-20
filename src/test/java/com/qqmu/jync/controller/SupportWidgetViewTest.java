@@ -91,6 +91,10 @@ class SupportWidgetViewTest {
                 .contains("data-tool-project_status=")
                 .contains("data-tool-recent_failures=")
                 .contains("data-tool-diagnose_project=")
+                .contains("data-label-step-queued=\"Queued:\"")
+                .contains("data-label-step-running=\"Running:\"")
+                .contains("data-label-step-done=\"Done:\"")
+                .contains("data-label-step-failed=\"Failed:\"")
                 .contains("data-label-greeting=\"Hi, I")
                 .contains("placeholder=\"Type a message\"")
                 .doesNotContain("??");

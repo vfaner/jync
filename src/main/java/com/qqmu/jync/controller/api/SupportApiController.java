@@ -163,8 +163,9 @@ public class SupportApiController {
             send("delta", Map.of("text", text));
         }
 
-        public void tool(String name, String labelKey) {
-            send("tool", Map.of("name", name, "labelKey", labelKey));
+        public void tool(String callId, String name, String labelKey, ToolState state) {
+            send("tool", Map.of("id", callId, "name", name, "labelKey", labelKey,
+                    "state", state.name()));
         }
 
         public void draft(DraftView draft) {

@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,7 +23,11 @@ import org.mockito.ArgumentCaptor;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
+import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.ChangeType;
+import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.ToolContext;
@@ -47,9 +52,10 @@ class DiagnoseProjectToolTest {
     private final CdcStatusTool cdc = mock(CdcStatusTool.class);
     private final RecentFailuresTool failures = mock(RecentFailuresTool.class);
     private final AlertsTool alerts = mock(AlertsTool.class);
+    private final ChangeLogRepository changes = mock(ChangeLogRepository.class);
 
     private DiagnoseProjectTool tool() {
-        return new DiagnoseProjectTool(projects, status, cdc, failures, alerts,
+        return new DiagnoseProjectTool(projects, status, cdc, failures, alerts, changes,
                 new SyncProperties());
     }
 
@@ -121,6 +127,68 @@ class DiagnoseProjectToolTest {
         verify(failures).execute(failureArgs.capture(), eq(ctx));
         assertThat(failureArgs.getValue().path("projectId").asLong()).isEqualTo(7L);
         assertThat(failureArgs.getValue().path("hours").asInt()).isEqualTo(24);
+    }
+
+    private static ChangeLog change(String table, ChangeType type, boolean success, Instant at) {
+        ChangeLog row = ChangeLog.of(7L, ObjectType.TABLE, table, type, "detail");
+        row.setSuccess(success);
+        row.setOccurredAt(at);
+        return row;
+    }
+
+    /**
+     * "The source changed but the target did not" has two very different causes: Jync never
+     * saw the change, or it saw it and the write failed. The change log's newest row and newest
+     * successful row separate them without opening either database.
+     */
+    @Test
+    void reportsWhetherJyncSawAChangeAndWhetherItAppliedOne() throws Exception {
+        when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "orders")));
+        when(projects.loadConfig(any())).thenReturn(new SyncConfig());
+        when(status.execute(any(), eq(ctx))).thenReturn(Map.of("name", "orders", "running", true));
+        when(cdc.execute(any(), eq(ctx))).thenReturn(Map.of("cdc", false));
+        when(failures.execute(any(), eq(ctx))).thenReturn(List.of());
+        when(alerts.execute(any(), eq(ctx))).thenReturn(List.of());
+
+        Instant now = Instant.now();
+        when(changes.findFirstByProjectIdOrderByOccurredAtDesc(7L))
+                .thenReturn(Optional.of(change("orders", ChangeType.UPDATE, false,
+                        now.minusSeconds(120))));
+        when(changes.findFirstByProjectIdAndSuccessTrueOrderByOccurredAtDesc(7L))
+                .thenReturn(Optional.of(change("orders", ChangeType.UPDATE, true,
+                        now.minusSeconds(3600))));
+
+        ObjectNode args = mapper.createObjectNode();
+        args.put("projectId", 7L);
+        JsonNode out = run(args);
+
+        assertThat(out.path("liveness").path("lastChangeSuccess").asBoolean()).isFalse();
+        assertThat(out.path("liveness").path("lastChangeType").asString()).isEqualTo("UPDATE");
+        assertThat(out.path("liveness").path("lastChangeObject").asString()).isEqualTo("orders");
+        assertThat(out.path("liveness").path("minutesSinceLastChange").asLong())
+                .isBetween(1L, 3L);
+        assertThat(out.path("liveness").path("lastSuccessAt").asString())
+                .isEqualTo(now.minusSeconds(3600).toString());
+        assertThat(out.path("liveness").path("minutesSinceLastSuccess").asLong())
+                .isBetween(59L, 61L);
+    }
+
+    @Test
+    void noChangeLogRowsAtAllMeansJyncHasSeenNothingYet() throws Exception {
+        when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "orders")));
+        when(projects.loadConfig(any())).thenReturn(new SyncConfig());
+        when(status.execute(any(), eq(ctx))).thenReturn(Map.of("name", "orders", "running", true));
+        when(cdc.execute(any(), eq(ctx))).thenReturn(Map.of("cdc", false));
+        when(failures.execute(any(), eq(ctx))).thenReturn(List.of());
+        when(alerts.execute(any(), eq(ctx))).thenReturn(List.of());
+
+        ObjectNode args = mapper.createObjectNode();
+        args.put("projectId", 7L);
+        JsonNode out = run(args);
+
+        assertThat(out.path("liveness").path("lastChangeAt").isNull()).isTrue();
+        assertThat(out.path("liveness").path("lastSuccessAt").isNull()).isTrue();
+        assertThat(out.path("liveness").path("minutesSinceLastChange").isNull()).isTrue();
     }
 
     @Test

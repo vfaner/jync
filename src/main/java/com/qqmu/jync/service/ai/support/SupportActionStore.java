@@ -26,13 +26,15 @@ import org.springframework.stereotype.Component;
 public class SupportActionStore {
 
     public enum Kind {
-        PROJECT, ETL_TASK
+        PROJECT, ETL_TASK, MIGRATION_TASK
     }
 
     public enum Action {
         START, STOP, SYNC_NOW, RUN_NOW,
         /** CDC recovery: reset the position and let the next start run a full load. */
-        REBASELINE
+        REBASELINE,
+        /** Stop a dedicated-migration run that is in flight. */
+        CANCEL
     }
 
     public record Pending(String username, Kind kind, Long resourceId, Action action,

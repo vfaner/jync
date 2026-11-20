@@ -21,6 +21,10 @@
      th:data-label-restore="#{support.restore}"
      th:data-label-greeting="#{support.greeting}"
      th:data-label-network="#{error.network}"
+     th:data-label-step-queued="#{support.tool.state.queued}"
+     th:data-label-step-running="#{support.tool.state.running}"
+     th:data-label-step-done="#{support.tool.state.done}"
+     th:data-label-step-failed="#{support.tool.state.failed}"
      th:data-tool-list_projects="#{support.tool.list_projects}"
      th:data-tool-project_status="#{support.tool.project_status}"
      th:data-tool-project_row_count="#{support.tool.project_row_count}"
@@ -35,6 +39,10 @@
      th:data-tool-etl_status="#{support.tool.etl_status}"
      th:data-tool-control_project="#{support.tool.control_project}"
      th:data-tool-control_etl_task="#{support.tool.control_etl_task}"
+     th:data-tool-diagnose_etl_task="#{support.tool.diagnose_etl_task}"
+     th:data-tool-list_migrations="#{support.tool.list_migrations}"
+     th:data-tool-diagnose_migration="#{support.tool.diagnose_migration}"
+     th:data-tool-control_migration="#{support.tool.control_migration}"
      th:data-tool-draft_project="#{support.tool.draft_project}">
 
   <button type="button" class="support-fab" data-role="support-toggle"

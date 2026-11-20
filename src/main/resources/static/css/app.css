@@ -2197,6 +2197,8 @@ a.type-card:focus-visible {
 .support-error-detail { align-self: center; color: var(--ink-soft); background: var(--bg); border: 1px dashed var(--line); font-family: var(--mono); font-size: 12px; }
 .support-msg.is-thinking { color: var(--ink-mute); font-style: italic; }
 .support-tool { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line); color: var(--ink-soft); font-size: 12px; }
+.support-tool.is-done { opacity: .75; }
+.support-tool.is-failed { color: var(--danger); }
 
 /* 助手回答按 Markdown 渲染；user 气泡仍是纯文本，保留输入的换行。 */
 .support-md-host { white-space: normal; }

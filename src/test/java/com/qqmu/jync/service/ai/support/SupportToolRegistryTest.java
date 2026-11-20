@@ -98,6 +98,23 @@ class SupportToolRegistryTest {
                 .isEqualTo("{\"error\":\"error.project.not.found\"}");
     }
 
+    /**
+     * 界面要把失败的工具标成「失败」而不是「已完成」：判定必须看根对象的 error 键，
+     * 业务数据里出现 lastError 之类的字段不能算工具失败；截断包装更不算。
+     */
+    @Test
+    void anErrorObjectIsRecognisedByItsRootKey() {
+        var ok = new SupportToolRegistry(List.of(tool("t", Map.of("lastError", "x"))));
+        assertThat(ok.isError(ok.execute("t", "{}", context()))).isFalse();
+
+        var unknown = new SupportToolRegistry(List.of(tool("t", Map.of())));
+        assertThat(unknown.isError(unknown.execute("nope", "{}", context()))).isTrue();
+
+        var huge = new SupportToolRegistry(
+                List.of(tool("t", Map.of("text", "x".repeat(9000)))));
+        assertThat(huge.isError(huge.execute("t", "{}", context()))).isFalse();
+    }
+
     @Test
     void duplicateToolNamesAreRefusedAtStartup() {
         assertThatThrownBy(() ->

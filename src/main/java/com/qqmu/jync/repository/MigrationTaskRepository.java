@@ -11,6 +11,9 @@ public interface MigrationTaskRepository extends JpaRepository<MigrationTask, Lo
 
     List<MigrationTask> findByTypeOrderByIdDesc(MigrationType type);
 
+    /** The newest tasks first, for the AI assistant's name lookup across every type. */
+    List<MigrationTask> findAllByOrderByIdDesc();
+
     List<MigrationTask> findByEnabledTrueAndType(MigrationType type);
 
     long countByType(MigrationType type);

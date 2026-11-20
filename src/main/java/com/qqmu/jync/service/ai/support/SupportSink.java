@@ -7,7 +7,14 @@ public interface SupportSink {
 
     void delta(String text);
 
-    void tool(String name, String labelKey);
+    /**
+     * Progress of one tool call. A round's calls are announced as {@link ToolState#QUEUED}
+     * first, then each moves to {@code RUNNING} and finally {@code DONE} or {@code FAILED} —
+     * the browser must never show "running" for a call that already returned.
+     */
+    void tool(String callId, String name, String labelKey, ToolState state);
+
+    enum ToolState { QUEUED, RUNNING, DONE, FAILED }
 
     void draft(DraftView draft);
 

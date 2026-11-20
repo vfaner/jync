@@ -115,6 +115,17 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
             Long projectId, Instant since);
 
     /**
+     * The newest row for a project, successful or not — "did Jync see anything at all?".
+     *
+     * <p>The AI diagnosis pairs it with the newest successful row: a recent failure with an
+     * older success means changes reach Jync but writes fail; both old means the source's
+     * cursor never moved, and the cause is on the read side.
+     */
+    Optional<ChangeLog> findFirstByProjectIdOrderByOccurredAtDesc(Long projectId);
+
+    Optional<ChangeLog> findFirstByProjectIdAndSuccessTrueOrderByOccurredAtDesc(Long projectId);
+
+    /**
      * The project's DDL tasks that are still open.
      *
      * <p>Used to tell whether a column is already covered by an open task — a column that

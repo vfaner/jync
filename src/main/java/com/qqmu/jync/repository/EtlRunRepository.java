@@ -25,6 +25,16 @@ public interface EtlRunRepository extends JpaRepository<EtlRun, Long> {
      */
     long countByOccurredAtBetween(Instant from, Instant to);
 
+    /**
+     * One task's run history for the AI diagnosis, newest first.
+     *
+     * <p>The task row only keeps the latest outcome, and a single "SUCCESS read=0 written=0"
+     * cannot tell "the source has no new rows" from "the watermark moved past the data". A
+     * bounded list shows whether the task has been failing all night, writing zero rows for
+     * days, or simply firing on schedule with nothing to copy.
+     */
+    List<EtlRun> findTop20ByEtlTaskIdOrderByOccurredAtDesc(Long etlTaskId);
+
     @Query("select coalesce(sum(r.affectedRows), 0) from EtlRun r "
             + "where r.occurredAt >= :from and r.occurredAt <= :to")
     long sumAffectedRowsBetween(@Param("from") Instant from, @Param("to") Instant to);

@@ -25,7 +25,11 @@
     target: root.getAttribute('data-label-target') || 'Target',
     restore: root.getAttribute('data-label-restore') || 'Restore',
     greeting: root.getAttribute('data-label-greeting') || '',
-    network: root.getAttribute('data-label-network') || 'Network error'
+    network: root.getAttribute('data-label-network') || 'Network error',
+    stepQueued: root.getAttribute('data-label-step-queued') || '',
+    stepRunning: root.getAttribute('data-label-step-running') || '',
+    stepDone: root.getAttribute('data-label-step-done') || '',
+    stepFailed: root.getAttribute('data-label-step-failed') || ''
   };
 
   var fab = root.querySelector('[data-role="support-toggle"]');
@@ -42,6 +46,20 @@
   // 工具名是 snake_case，property 名会把 data-tool- 后的连字符大写，所以按属性名查。
   function toolLabel(name) {
     return root.getAttribute('data-tool-' + name) || name;
+  }
+
+  // 工具进度行有四种状态，全部由服务端的 tool 事件驱动（QUEUED → RUNNING →
+  // DONE / FAILED），浏览器不猜：猜就有「回答结束了还写着正在」的错觉。
+  var STEP_ICONS = { QUEUED: '… ', RUNNING: '⏳ ', DONE: '✓ ', FAILED: '✗ ' };
+
+  function stepText(state, label) {
+    var prefix = state === 'DONE' ? labels.stepDone
+      : state === 'FAILED' ? labels.stepFailed
+      : state === 'QUEUED' ? labels.stepQueued
+      : labels.stepRunning;
+    // 中文前缀自带宽窄句读（「正在进行：」），西文前缀后补一个空格。
+    var join = !prefix ? '' : (/^[\x20-\x7e]+$/.test(prefix) ? ' ' : '');
+    return (STEP_ICONS[state] || '') + prefix + join + label;
   }
 
   function state() {
@@ -468,6 +486,21 @@
     var answer = '';
     var answered = false;
     var paintPending = false;
+    var steps = {};
+    function paintStep(el, state) {
+      el.setAttribute('data-state', state);
+      el.classList.toggle('is-done', state === 'DONE');
+      el.classList.toggle('is-failed', state === 'FAILED');
+      el.textContent = stepText(state, el.getAttribute('data-tool-label') || '');
+    }
+    // 流在工具执行途中断掉（超时、断网）时，服务端来不及发终态：原地标成失败，
+    // 不让进度行永远停在「正在进行」。
+    function abandonSteps() {
+      Object.keys(steps).forEach(function (id) {
+        var state = steps[id].getAttribute('data-state');
+        if (state === 'QUEUED' || state === 'RUNNING') paintStep(steps[id], 'FAILED');
+      });
+    }
     function startAnswer() {
       if (answered) return;
       answered = true;
@@ -518,10 +551,16 @@
           answer += data.text || '';
           paint();
         } else if (name === 'tool') {
-          var toolLine = document.createElement('div');
-          toolLine.className = 'support-tool';
-          toolLine.textContent = '⏳ ' + toolLabel(data.name || '');
-          bubble.appendChild(toolLine);
+          var stepId = data.id || data.name || '';
+          var step = steps[stepId];
+          if (!step) {
+            step = document.createElement('div');
+            step.className = 'support-tool';
+            step.setAttribute('data-tool-label', toolLabel(data.name || ''));
+            steps[stepId] = step;
+            bubble.appendChild(step);
+          }
+          paintStep(step, data.state || 'RUNNING');
           log.scrollTop = log.scrollHeight;
         } else if (name === 'draft') {
           showDraft(data);
@@ -534,6 +573,7 @@
     }).catch(function () {
       showError('error.network');
     }).finally(function () {
+      abandonSteps();
       bubble.classList.remove('is-thinking');
       if (answer) {
         answerEl.innerHTML = mdToHtml(answer);
