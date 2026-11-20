@@ -278,6 +278,34 @@ executes once when a worker becomes free.
 - Multiple instances: run the rebuild on the node holding the consumer lease; other nodes refuse
   it by design. A full load of a large table is heavy, so avoid peak hours.
 
+## When data stops arriving
+
+When the source has new or changed rows and the target shows nothing, split the question by task
+type — the three kinds fail for different reasons.
+
+- Real-time sync asks two things: did Jync see a change, and did it write one? If both the newest
+  change and the newest successful write are stale, the cause is on the read side (task not running,
+  CDC stalled, polling never triggered, a prerequisite on the position or timestamp column unmet).
+  If changes are seen but the newest write failed, the cause is on the write side — read the failing
+  side and error summary in the failure list. With CDC, also check whether the consumer is on this
+  node and whether the position has expired; with polling, check that the cursor column actually
+  changes at the source (an update that leaves the cursor column untouched is invisible to polling).
+- ETL: confirm the task is enabled, its cron is valid and it is not running, then read the latest
+  result line and the consecutive-failure count. Repeated successful runs that write 0 rows mean the
+  run is healthy and the extraction window or resume watermark has no new data (the source really
+  has none, or the range condition conflicts with the checkpoint) — not a sync fault.
+- Dedicated migration: check whether the newest run is still RUNNING and whether the current index
+  and written-document count are growing; INTERRUPTED means the process restarted mid-run; when
+  failed indices are above zero, quote the summary in the run message.
+- Ask the same question in the floating assistant and it gathers the evidence in one call —
+  diagnose_project, diagnose_etl_task or diagnose_migration, by task type — then answers with a
+  conclusion, recommendations and executable items. Start, stop, run-now and rebuild actions are
+  confirmation cards and take effect only after Confirm. Each tool line goes through queued,
+  running, done or failed; the self-check and row comparison, which open the source database,
+  are not evidence until they finish.
+- None of the three kinds sends the process log file to the AI; diagnosis uses task state, run
+  history and product metadata only.
+
 ## ETL tasks and variables
 
 ETL runs the customer's own SELECT and copies the rows. Built-in variables include `${date}`,
@@ -600,6 +628,17 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 
 - The floating assistant is for administrators and operators; it reads project state, progress rows,
   the last failure, and 1-hour throughput and lag.
+- Answers follow "conclusion → evidence → recommendations → executable items". An executable item
+  is a runtime action rendered as a confirmation card: each card is one option, and nothing happens
+  until the user clicks Confirm. Actions the assistant cannot perform (editing task configuration,
+  dropping a target table, rerunning an external report job) are written as manual steps and are
+  never dressed up as cards.
+- When the user describes a sync-task symptom (stall, data mismatch, repeated failures, slowdown),
+  one diagnose_project call gathers task state, recent failures, active alerts, the CDC position
+  and the switches that decide whether a rebuild can help (captureStrategy, syncDeletes,
+  truncateBeforeInitialLoad, fullCompareMaxRows, deleteCompareMaxRows), plus the newest change and
+  newest successful write times — which separate "never saw a change" (read side) from "saw it and
+  the write failed" (write side).
 - It reads change-log (CDC) runtime state: connection, position, last error, skipped DDL and
   pruned-column counters, and whether the consumer runs on this node or elsewhere.
 - It can run the change-log prerequisite self-check for one project (archivelog, binlog format and
@@ -609,19 +648,17 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 - It lists the alert conditions active right now (sync failure, stuck polling, CDC stopped, drift,
   unhealthy connection, PG slot backlog, skipped DDL) and ETL task state: enabled, last run time,
   success and result line.
+- It diagnoses one ETL task (diagnose_etl_task): enabled, cron validity, whether a run is in
+  flight, both connection names, the latest result and the last 20 runs with their row counts and
+  timestamps — enough to separate "running fine with no new data" from "failing all night". A
+  non-null batchId means the task is a batch member sharing connections and scheduling with its
+  batch.
+- It lists dedicated-migration tasks (list_migrations) and diagnoses one (diagnose_migration):
+  migration type, both connection names, enabled state, latest run status, current index, documents
+  read and written, and failed-index count.
 - It reads failure history from the last 1 to 168 hours (default 24, at most 20 rows), optionally
   narrowed to one project. Alerts only cover conditions still active; this shows a short failure
   from last night that had already recovered by morning.
-- When the user describes a symptom (stall, data mismatch, repeated failures, slowdown), one
-  diagnose_project call gathers task state, recent failures, active alerts, the CDC position and
-  the switches that decide whether a rebuild can help (captureStrategy, syncDeletes,
-  truncateBeforeInitialLoad, fullCompareMaxRows, deleteCompareMaxRows), instead of querying each
-  source separately.
-- Answers follow "conclusion → evidence → recommendations → executable items". An executable item
-  is a runtime action rendered as a confirmation card: each card is one option, and nothing happens
-  until the user clicks Confirm. Actions the assistant cannot perform (editing task configuration,
-  dropping a target table, rerunning an external report job) are written as manual steps and are
-  never dressed up as cards.
 - Suggested diagnosis order: alerts and recent failures, then task status, then CDC runtime state,
   then the prerequisite self-check, then this knowledge base for prerequisites and known limits.
   For a data mismatch, check syncDeletes, the comparison limits, and whether the target or report
@@ -631,14 +668,22 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 - It searches this knowledge base for how-to answers and drafts a new task from a description, which
   the user must review before it pre-fills the form.
 - Runtime actions it can perform: start / stop a sync task, sync once now, rebuild the CDC
-  baseline, and enable / disable / run an ETL task now. The assistant only produces a confirmation
-  card and never executes directly; when you click "Confirm" the server checks the acting
-  account's role and resource ownership again — an operator can only act on resources they own,
-  an administrator on anything, and viewers never see the assistant. A baseline rebuild triggers a
-  full load and, with multiple instances, must run on the node holding the consumer lease.
+  baseline, enable / disable / run an ETL task now, and enable / disable / run / cancel a
+  dedicated-migration task. The assistant only produces a confirmation card and never executes
+  directly; when you click "Confirm" the server checks the acting account's role and resource
+  ownership again — an operator can only act on resources they own, an administrator on anything,
+  and viewers never see the assistant. A baseline rebuild triggers a full load and, with multiple
+  instances, must run on the node holding the consumer lease. Preconditions are checked before a
+  card is shown: a migration task without a usable cron cannot be enabled, one already running
+  cannot be started again, and a task with no run in flight cannot be cancelled.
 - Actions have a boundary: deletes, configuration changes, connection edits, system settings,
   external authentication, alerts, AI settings, users and audit are outside the assistant's reach,
-  and it cannot run SQL.
+  and it cannot run SQL. A change-log (CDC) project cannot "sync now"; it can only rebuild its
+  baseline, and the assistant says so instead of offering a card that is bound to be refused.
+- Tool results are a snapshot taken at query time, not a live feed: answers carry the time or the
+  minutes since then, and a fresh call is needed for a newer state. The prerequisite self-check
+  runs at most twice and the row comparison at most three times per conversation; on reaching the
+  cap the assistant says so and points to the page or a new conversation.
 - Every number must come from a tool result and is never made up; when a tool fails, explain why
   instead of retrying the same call.
 
