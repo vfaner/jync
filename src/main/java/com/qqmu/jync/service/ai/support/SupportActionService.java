@@ -8,6 +8,9 @@ import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.cdc.CdcNotHolderException;
+import com.qqmu.jync.service.cdc.CdcOperationsService;
+import com.qqmu.jync.service.cdc.CdcRestartFailedException;
 import com.qqmu.jync.service.etl.EtlTaskService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -40,13 +43,16 @@ public class SupportActionService {
     private final SupportActionStore store;
     private final ProjectService projects;
     private final EtlTaskService etlTasks;
+    private final CdcOperationsService cdcOperations;
     private final AdminAuditService audit;
 
     public SupportActionService(SupportActionStore store, ProjectService projects,
-                                EtlTaskService etlTasks, AdminAuditService audit) {
+                                EtlTaskService etlTasks, CdcOperationsService cdcOperations,
+                                AdminAuditService audit) {
         this.store = store;
         this.projects = projects;
         this.etlTasks = etlTasks;
+        this.cdcOperations = cdcOperations;
         this.audit = audit;
     }
 
@@ -71,6 +77,20 @@ public class SupportActionService {
                     pending.action(), pending.kind(), pending.resourceId(), actor.username());
             audit(pending, actor, false);
             return new Result(Outcome.DENIED, AccessGuard.DENIED_KEY);
+        } catch (CdcNotHolderException e) {
+            // A rebaseline must run on the node that holds the consumer lease. Nothing was
+            // mutated; the key tells the operator to act on the holder instead.
+            log.info("Support action '{}' on project #{} refused: {}",
+                    pending.action(), pending.resourceId(), e.getMessage());
+            audit(pending, actor, false);
+            return new Result(Outcome.FAILED, e.getMessage());
+        } catch (CdcRestartFailedException e) {
+            // The reset committed and the restart did not. Supervision retries, so this is a
+            // reportable failure with a fixed key, not a generic one.
+            log.info("Support action '{}' on project #{} reset but failed to restart",
+                    pending.action(), pending.resourceId());
+            audit(pending, actor, false);
+            return new Result(Outcome.FAILED, CdcRestartFailedException.MESSAGE_KEY);
         } catch (IllegalArgumentException | IllegalStateException e) {
             String key = e.getMessage();
             // Only i18n keys leave the service: a driver's raw SQL error stays in the log.
@@ -95,6 +115,9 @@ public class SupportActionService {
             case START -> projects.start(pending.resourceId(), actor);
             case STOP -> projects.stop(pending.resourceId(), actor);
             case SYNC_NOW -> projects.syncNow(pending.resourceId(), actor);
+            // rebaseline() is controller-invoked today; it checks the CDC strategy and the
+            // cross-node lease itself, and writes its own audit trail.
+            case REBASELINE -> cdcOperations.rebaseline(pending.resourceId());
             default -> throw new IllegalStateException("support.action.failed");
         }
     }

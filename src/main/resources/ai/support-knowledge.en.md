@@ -253,6 +253,31 @@ executes once when a worker becomes free.
 - A source DDL that leaves the target missing a column is trimmed in-stream and recorded as a todo;
   the task keeps running.
 
+## CDC stalls and rebuilding the baseline
+
+- Rebuild when the position has expired (logs archived or purged), the consumer has been parked by
+  repeated failures, or a target table was lost or damaged. Read task state and CDC runtime state
+  first, then run the prerequisite self-check to rule out connectivity and privileges.
+- A rebuild stops the consumer, deletes the position, clears every table cursor (the
+  "initial load done" flag stays set, so the target is not truncated by default), lifts the error
+  state, then restarts an enabled task with a full load. A disabled task is only reset; the next
+  start runs the full load.
+- The full load upserts by primary key: rows still present at the source are inserted or
+  overwritten, and the target is not truncated first. Extra rows already on the target do not
+  disappear because of a rebuild.
+- To remove rows the source deleted while the stream was down, enable "sync deletes" before the
+  rebuild; enabling it afterwards does not recover the missed deletes. It compares primary keys and
+  only deletes, and under log CDC it runs once when the baseline load completes — later deletes are
+  carried by the log stream itself. The table needs a primary key and must be within
+  sync.full-compare-max-rows (default 20000). Above that, raise sync.delete-compare-max-rows to
+  cover the row count (0 disables the paged comparison). A table whose primary key is rewritten by
+  a column rule can only use the in-memory comparison.
+- Still mismatched after a rebuild: report or summary tables produced outside Jync are never
+  aligned by any baseline; also check target triggers, the delete-comparison ceiling and open
+  source transactions.
+- Multiple instances: run the rebuild on the node holding the consumer lease; other nodes refuse
+  it by design. A full load of a large table is heavy, so avoid peak hours.
+
 ## ETL tasks and variables
 
 ETL runs the customer's own SELECT and copies the rows. Built-in variables include `${date}`,
@@ -530,8 +555,11 @@ name when asking for support.
   the task is flagged as stuck.
 - Row counts differ: compare COUNT(*) on both sides, then check cursor monotonicity and open
   transactions.
-- CDC lag grows: check log retention, consumer position and network; an expired position needs a
-  new baseline.
+- CDC lag grows or the stream stalls: check log retention, consumer position and network; for an
+  expired position or a parked consumer see "CDC stalls and rebuilding the baseline".
+- Row counts still differ after a rebuild: a rebuild does not delete rows; removing rows deleted
+  at the source needs "sync deletes" plus the primary-key and row-count bounds; report tables
+  produced outside Jync are not managed by any baseline.
 - Slow full load: read the query/read/write/commit shares in the throughput log, then tune that side.
 - Changes not arriving: confirm the chosen strategy and that the cursor column moves; for CDC check
   the prerequisites for the source engine.
@@ -581,17 +609,33 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 - It lists the alert conditions active right now (sync failure, stuck polling, CDC stopped, drift,
   unhealthy connection, PG slot backlog, skipped DDL) and ETL task state: enabled, last run time,
   success and result line.
-- Suggested diagnosis order: alerts, then task status, then CDC runtime state, then the prerequisite
-  self-check, then this knowledge base for prerequisites and known limits.
+- It reads failure history from the last 1 to 168 hours (default 24, at most 20 rows), optionally
+  narrowed to one project. Alerts only cover conditions still active; this shows a short failure
+  from last night that had already recovered by morning.
+- When the user describes a symptom (stall, data mismatch, repeated failures, slowdown), one
+  diagnose_project call gathers task state, recent failures, active alerts, the CDC position and
+  the switches that decide whether a rebuild can help (captureStrategy, syncDeletes,
+  truncateBeforeInitialLoad, fullCompareMaxRows, deleteCompareMaxRows), instead of querying each
+  source separately.
+- Answers follow "conclusion → evidence → recommendations → executable items". An executable item
+  is a runtime action rendered as a confirmation card: each card is one option, and nothing happens
+  until the user clicks Confirm. Actions the assistant cannot perform (editing task configuration,
+  dropping a target table, rerunning an external report job) are written as manual steps and are
+  never dressed up as cards.
+- Suggested diagnosis order: alerts and recent failures, then task status, then CDC runtime state,
+  then the prerequisite self-check, then this knowledge base for prerequisites and known limits.
+  For a data mismatch, check syncDeletes, the comparison limits, and whether the target or report
+  table is produced by another job.
 - It reads connection database metrics (1h / 24h), lists connections and projects, and compares the
   exact row count of one table on both sides.
 - It searches this knowledge base for how-to answers and drafts a new task from a description, which
   the user must review before it pre-fills the form.
-- Runtime actions it can perform: start / stop a sync task, sync once now, and enable / disable /
-  run an ETL task now. The assistant only produces a confirmation card and never executes
-  directly; when you click "Confirm" the server checks the acting account's role and resource
-  ownership again — an operator can only act on resources they own, an administrator on anything,
-  and viewers never see the assistant.
+- Runtime actions it can perform: start / stop a sync task, sync once now, rebuild the CDC
+  baseline, and enable / disable / run an ETL task now. The assistant only produces a confirmation
+  card and never executes directly; when you click "Confirm" the server checks the acting
+  account's role and resource ownership again — an operator can only act on resources they own,
+  an administrator on anything, and viewers never see the assistant. A baseline rebuild triggers a
+  full load and, with multiple instances, must run on the node holding the consumer lease.
 - Actions have a boundary: deletes, configuration changes, connection edits, system settings,
   external authentication, alerts, AI settings, users and audit are outside the assistant's reach,
   and it cannot run SQL.

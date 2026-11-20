@@ -30,7 +30,7 @@ public class ControlProjectTool implements SupportTool {
 
     private static final Set<SupportActionStore.Action> ALLOWED = Set.of(
             SupportActionStore.Action.START, SupportActionStore.Action.STOP,
-            SupportActionStore.Action.SYNC_NOW);
+            SupportActionStore.Action.SYNC_NOW, SupportActionStore.Action.REBASELINE);
 
     private final ProjectService projects;
     private final SupportActionStore actions;
@@ -45,9 +45,11 @@ public class ControlProjectTool implements SupportTool {
     }
 
     public String description() {
-        return "Prepare start, stop or a one-off sync for one sync project. Saves nothing and "
-                + "runs nothing: returns a token the user must confirm on a card. Only projects "
-                + "the caller may edit are accepted. projectId comes from list_projects.";
+        return "Prepare start, stop, a one-off sync, or a CDC baseline rebuild (REBASELINE) "
+                + "for one sync project. Saves nothing and runs nothing: returns a token the "
+                + "user must confirm on a card. REBASELINE clears the position and runs a full "
+                + "load; only suggest it for a parked or expired CDC stream. projectId comes "
+                + "from list_projects. Only projects the caller may edit are accepted.";
     }
 
     public Map<String, Object> parameters() {
@@ -55,7 +57,7 @@ public class ControlProjectTool implements SupportTool {
                 "properties", Map.of(
                         "projectId", Map.of("type", "integer"),
                         "action", Map.of("type", "string",
-                                "enum", List.of("START", "STOP", "SYNC_NOW"))),
+                                "enum", List.of("START", "STOP", "SYNC_NOW", "REBASELINE"))),
                 "required", List.of("projectId", "action"));
     }
 

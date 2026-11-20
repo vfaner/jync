@@ -32,8 +32,18 @@ public class SupportKnowledgeBase {
     public record Section(String title, String body) {
     }
 
-    /** One section's body may not flood the prompt; a retrieved excerpt is capped here. */
-    private static final int MAX_EXCERPT = 600;
+    /**
+     * One section's body may not flood the prompt; a retrieved excerpt is capped here.
+     *
+     * <p>600 was too short for the sections that matter during an incident: the CDC
+     * baseline section reaches its "does a rebuild delete rows?" answer past character 600,
+     * so the model received the setup and none of the conclusion. 1000 fixed that section
+     * but not the assistant section: its English text puts the one-call diagnosis bullets
+     * past 1000, so a question about the assistant itself was answered without them. At
+     * 2000 the default three-section answer is still about 6 KB, under the registry's 8 KB
+     * result cap.
+     */
+    private static final int MAX_EXCERPT = 2000;
 
     private static final int MAX_TOP_K = 5;
 

@@ -18,6 +18,9 @@ import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.cdc.CdcNotHolderException;
+import com.qqmu.jync.service.cdc.CdcOperationsService;
+import com.qqmu.jync.service.cdc.CdcRestartFailedException;
 import com.qqmu.jync.service.etl.EtlTaskService;
 
 /**
@@ -30,11 +33,12 @@ class SupportActionServiceTest {
     private final SupportActionStore store = new SupportActionStore();
     private final ProjectService projects = mock(ProjectService.class);
     private final EtlTaskService etlTasks = mock(EtlTaskService.class);
+    private final CdcOperationsService cdcOperations = mock(CdcOperationsService.class);
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AccessGuard ops = AccessGuard.of("ops1", UserRole.OPS);
 
     private SupportActionService service() {
-        return new SupportActionService(store, projects, etlTasks, audit);
+        return new SupportActionService(store, projects, etlTasks, cdcOperations, audit);
     }
 
     private String token(String username, SupportActionStore.Kind kind, long id,
@@ -131,6 +135,52 @@ class SupportActionServiceTest {
 
         assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.EXPIRED);
         verifyNoInteractions(projects, etlTasks, audit);
+    }
+
+    @Test
+    void aConfirmedRebaselineRunsTheCdcOperationAndIsAudited() {
+        String token = token("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.REBASELINE, "订单同步");
+        when(cdcOperations.rebaseline(7L)).thenReturn(true);
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        verify(cdcOperations).rebaseline(7L);
+        verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
+                contains("support.action.project.rebaseline"), eq("ops1"));
+    }
+
+    /**
+     * A rebaseline on a node that does not hold the consumer lease is refused before any
+     * mutation. The refusal is a conflict the operator must act on, so its message survives
+     * instead of collapsing into the generic failure sentence.
+     */
+    @Test
+    void aRebaselineRefusedByAnotherNodesLeaseKeepsItsKey() {
+        String token = token("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.REBASELINE, "订单同步");
+        when(cdcOperations.rebaseline(7L))
+                .thenThrow(new CdcNotHolderException("cdc.rebaseline.not.holder"));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.FAILED);
+        assertThat(result.messageKey()).isEqualTo("cdc.rebaseline.not.holder");
+    }
+
+    /** The reset committed; the restart did not. The operator must be told, not shown a 500. */
+    @Test
+    void aRebaselineWhoseRestartFailedKeepsItsFixedKey() {
+        String token = token("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.REBASELINE, "订单同步");
+        when(cdcOperations.rebaseline(7L))
+                .thenThrow(new CdcRestartFailedException(new RuntimeException("refused")));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.FAILED);
+        assertThat(result.messageKey()).isEqualTo(CdcRestartFailedException.MESSAGE_KEY);
     }
 
     @Test

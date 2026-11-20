@@ -89,6 +89,8 @@ class SupportWidgetViewTest {
                 .contains("/js/support.js")
                 .contains("data-action=\"/api/support/chat\"")
                 .contains("data-tool-project_status=")
+                .contains("data-tool-recent_failures=")
+                .contains("data-tool-diagnose_project=")
                 .contains("data-label-greeting=\"Hi, I")
                 .contains("placeholder=\"Type a message\"")
                 .doesNotContain("??");

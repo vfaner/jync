@@ -82,6 +82,29 @@ class SupportActionToolsTest {
         verify(projects, never()).syncNow(any(), any());
     }
 
+    /**
+     * Rebuilding the CDC baseline is the recovery path for a parked consumer or an expired
+     * position. It still stops at a card: the click is the only place a write can happen.
+     */
+    @Test
+    void aCdcRebaselineIsPreparedAsAConfirmationCard() throws Exception {
+        ProjectService projects = mock(ProjectService.class);
+        when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "订单同步", "ops1")));
+
+        var tool = new ControlProjectTool(projects, store);
+        var result = out(tool.execute(args("projectId", 7L, "REBASELINE"),
+                new ToolContext(AccessGuard.of("ops1", UserRole.OPS))));
+
+        assertThat(result.path("ok").asBoolean()).isTrue();
+        assertThat(result.path("token").asString()).isNotBlank();
+        assertThat(result.path("titleKey").asString())
+                .isEqualTo("support.action.project.rebaseline");
+        assertThat(tool.parameters().toString()).contains("REBASELINE");
+        verify(projects, never()).start(any(), any());
+        verify(projects, never()).stop(any(), any());
+        verify(projects, never()).syncNow(any(), any());
+    }
+
     @Test
     void anOperatorCannotPrepareAnActionOnAnotherOperatorsProject() throws Exception {
         ProjectService projects = mock(ProjectService.class);

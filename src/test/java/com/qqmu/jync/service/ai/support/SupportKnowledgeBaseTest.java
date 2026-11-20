@@ -71,6 +71,55 @@ class SupportKnowledgeBaseTest {
         });
     }
 
+    /**
+     * The question that follows every CDC outage: "does rebuilding the baseline also fix the
+     * rows deleted at the source?" The answer has to be in the bundled documentation, because
+     * the assistant may only answer from it.
+     */
+    @Test
+    void aChineseQuestionAboutRebaselineAndDeletesFindsTheNewSection() {
+        var hits = kb.search("zh", "重建基线 会清空目标表吗 同步删除 源端删除的行", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("CDC 停摆与重建基线");
+            assertThat(hit.body()).contains("upsert").contains("同步删除");
+        });
+    }
+
+    @Test
+    void anEnglishQuestionAboutRebaselineAndDeletesFindsTheNewSection() {
+        var hits = kb.search("en",
+                "rebuild baseline delete target rows sync deletes source deleted", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("CDC stalls and rebuilding the baseline");
+            assertThat(hit.body()).contains("upsert").contains("sync deletes");
+        });
+    }
+
+    /**
+     * An operator who asks about the assistant's own diagnostic flow must be told which call
+     * gathers the evidence and that suggested actions arrive as confirmation cards, not as
+     * already-executed changes.
+     */
+    @Test
+    void theAssistantSectionExplainsTheOneCallDiagnosisAndSelectableActions() {
+        var zh = kb.search("zh", "AI 运维助手 诊断 建议 可执行项 确认卡", 3);
+        assertThat(zh).isNotEmpty();
+        assertThat(zh).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("AI 运维助手能查什么");
+            assertThat(hit.body()).contains("diagnose_project").contains("可执行项");
+        });
+
+        var en = kb.search("en",
+                "AI support assistant diagnosis suggestions executable confirmation card", 3);
+        assertThat(en).isNotEmpty();
+        assertThat(en).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("What the AI operations assistant can do");
+            assertThat(hit.body()).contains("diagnose_project").contains("executable");
+        });
+    }
+
     @Test
     void noMatchReturnsEmptyRatherThanEverything() {
         assertThat(kb.search("zh", "zzzz qqqq", 3)).isEmpty();

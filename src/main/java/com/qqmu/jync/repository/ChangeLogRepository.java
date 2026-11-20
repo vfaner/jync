@@ -102,6 +102,19 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     List<ChangeLog> findBySuccessFalseAndOccurredAtAfter(Instant since);
 
     /**
+     * A bounded failure history for the AI support assistant.
+     *
+     * <p>The alert board only holds conditions that are still active, so a task that failed
+     * overnight and recovered before morning is invisible there. These two finders keep the
+     * read bounded (twenty rows, newest first) whether the question is about one project or
+     * the whole installation.
+     */
+    List<ChangeLog> findTop20BySuccessFalseAndOccurredAtAfterOrderByOccurredAtDesc(Instant since);
+
+    List<ChangeLog> findTop20ByProjectIdAndSuccessFalseAndOccurredAtAfterOrderByOccurredAtDesc(
+            Long projectId, Instant since);
+
+    /**
      * The project's DDL tasks that are still open.
      *
      * <p>Used to tell whether a column is already covered by an open task — a column that
