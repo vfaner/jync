@@ -231,13 +231,13 @@ public class SqlServerCdcProbe {
             String schema = st[0];
             String table = st[1];
             try (java.sql.PreparedStatement ps = conn.prepareStatement(
+                    // cdc.change_tables has no source_schema_name/source_table_name columns
+                    // (only source_object_id); the catalog functions resolve them.
                     "SELECT capture_instance FROM cdc.change_tables"
-                            + " WHERE source_schema_name = ? AND source_table_name = ?"
-                            // A re-captured table keeps its OLD change_tables row: keep the
-                            // newest instance, exactly the one the consumer streams
-                            // (discoverCaptureInstances picks the highest start_lsn too).
-                            // Without the ORDER BY the probe could green-light an instance
-                            // the consumer never reads, whose @role_name grants may differ.
+                            + " WHERE OBJECT_SCHEMA_NAME(source_object_id) = ?"
+                            + " AND OBJECT_NAME(source_object_id) = ?"
+                            // A re-captured table keeps its OLD change_tables row; newest wins
+                            // so the probe checks the instance the consumer prefers.
                             + " ORDER BY start_lsn")) {
                 ps.setString(1, schema);
                 ps.setString(2, table);

@@ -1028,10 +1028,15 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private List<CaptureInstance> discoverCaptureInstances(Connection conn) throws SQLException {
         // #2 also selects start_lsn (canonical form) — the discriminant that tells a
         // mid-flight-created CI (clamp and self-heal) from a purged one (park).
-        String sql = "SELECT source_schema_name, source_table_name, capture_instance,"
-                + " CONVERT(varchar(32), start_lsn, 1)"
+        // cdc.change_tables carries only source_object_id: the schema/table names are
+        // resolved through the catalog functions. (The previous SQL selected
+        // source_schema_name / source_table_name, which no SQL Server version has — every
+        // real discovery failed with "Invalid column name", so the consumer never saw a
+        // capture instance. Found by the chunking container IT.)
+        String sql = "SELECT OBJECT_SCHEMA_NAME(source_object_id), OBJECT_NAME(source_object_id),"
+                + " capture_instance, CONVERT(varchar(32), start_lsn, 1)"
                 + " FROM cdc.change_tables"
-                + " ORDER BY source_schema_name, source_table_name, start_lsn";
+                + " ORDER BY 1, 2, start_lsn";
         Map<String, List<CaptureInstance>> byTable = new LinkedHashMap<>();
         try (PreparedStatement ps = conn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
