@@ -102,6 +102,9 @@ public class SyncScheduler {
             try {
                 if (scheduler.checkExists(jobKey(projectId))) {
                     scheduler.deleteJob(jobKey(projectId));
+                    // A job that no longer runs must not leave the task claiming a running
+                    // project — that status is what the page and the alerts read.
+                    taskStore.markStopped(projectId);
                     log.warn("Project '{}' has a cache target without log CDC; removed its"
                             + " polling job", project.getName());
                 }

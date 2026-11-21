@@ -151,6 +151,8 @@ class DataSyncServiceCursorRecoveryTest {
         assertThat(result.isSkipped()).isTrue();
         assertThat(result.getRowsWritten()).isZero();
         assertThat(result.getSkipReason()).contains("UPDATED");
+        // Deletes are key-matched: they must keep propagating while the reload idles.
+        assertThat(result.isDeletionSyncStillValid()).isTrue();
     }
 
     /** A keyless table in the same state used to fail every cycle ("target holds rows"). */
@@ -178,6 +180,37 @@ class DataSyncServiceCursorRecoveryTest {
 
         assertThat(result.isSuccess()).isTrue();
         assertThat(result.isSkipped()).isTrue();
+        assertThat(result.getError()).isNull();
+        assertThat(result.isDeletionSyncStillValid()).isTrue();
+    }
+
+    /**
+     * A keyless table cannot be reloaded while the marker is set (the target holds the seeded
+     * rows and a re-insert would duplicate them). It must idle with the remedy in the reason,
+     * not fall back into the permanent "target already holds rows" error.
+     */
+    @Test
+    void aKeylessTableWithCursorValuesStillIdlesInsteadOfFailing() throws SQLException {
+        exec(source, "CREATE TABLE KEYLESS2 (ID BIGINT, UPDATED TIMESTAMP)");
+        exec(target, "CREATE TABLE KEYLESS2 (ID BIGINT, UPDATED TIMESTAMP)");
+        exec(source, "INSERT INTO KEYLESS2 VALUES (1, TIMESTAMP '2026-01-01 00:00:00')");
+        exec(target, "INSERT INTO KEYLESS2 VALUES (1, NULL)");
+        TableMeta keyless = new TableMeta();
+        keyless.setName("KEYLESS2");
+        keyless.getColumns().add(column("ID", Types.BIGINT));
+        keyless.getColumns().add(column("UPDATED", Types.TIMESTAMP));
+        CursorStrategy byUpdated = CursorStrategy.timestamp("UPDATED", Types.TIMESTAMP, "t");
+
+        SyncProgress progress = new SyncProgress();
+        progress.setInitialLoadDone(true);
+        progress.setFullLoadWithoutCursor(true);
+
+        DataSyncService.TableSyncResult result =
+                service.syncTable(source, target, keyless, byUpdated, progress, ctx);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.isSkipped()).isTrue();
+        assertThat(result.getSkipReason()).contains("reset the cursor");
         assertThat(result.getError()).isNull();
     }
 

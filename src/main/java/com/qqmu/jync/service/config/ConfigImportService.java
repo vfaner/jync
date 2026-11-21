@@ -666,6 +666,10 @@ public class ConfigImportService {
             progress.setCursorStrategy(dto.cursorStrategy());
             progress.setResumableLoad(dto.resumableLoad());
             progress.setInitialLoadDone(dto.initialLoadDone());
+            // Without this marker a restored row whose cursor column is all NULL looks
+            // "never loaded": keyed tables reload every poll and keyless ones fail every
+            // cycle once the target holds the seeded rows.
+            progress.setFullLoadWithoutCursor(Boolean.TRUE.equals(dto.fullLoadWithoutCursor()));
             progress.setRowsSyncedTotal(dto.rowsSyncedTotal());
             progress.setLastSyncTime(dto.lastSyncTime());
             syncProgress.save(progress);

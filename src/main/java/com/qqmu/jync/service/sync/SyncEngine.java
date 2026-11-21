@@ -925,6 +925,37 @@ public class SyncEngine {
      * the first non-null answer becomes a WARN and one change-log entry, so the skip is
      * visible both in the log and on the audit page without repeating every poll.
      */
+
+    /**
+     * The per-table deletion scan, shared by the normal path and the "row reload skipped but
+     * deletes still apply" path. Deletes are matched by primary key, not by the cursor, so a
+     * table whose cursor cannot drive an incremental window still knows which target rows the
+     * source no longer has.
+     */
+    private int syncDeletionsForTable(Connection sourceConn, Connection targetConn,
+                                      TableMeta table, SyncContext ctx,
+                                      DataSyncService.TableSyncResult tableResult,
+                                      SyncResult result) {
+        if (ctx.isCdcRepairRun() || !ctx.getConfig().isSyncDeletes()) {
+            return 0;
+        }
+        warnIfDeletionsAreSkipped(ctx, table);
+        try {
+            int deleted = dataSync.syncDeletions(sourceConn, targetConn, table, ctx);
+            if (deleted > 0) {
+                // The per-table result is what advanceCursor reads, and its "deletes count as
+                // a delivered change" branch is the only way a delete-only cycle moves the
+                // table's 上次同步. The aggregate cannot stand in for it.
+                tableResult.countDeletes(deleted);
+            }
+            return deleted;
+        } catch (SQLException e) {
+            log.warn("Deletion sync failed for {}: {}", table.getName(), e.getMessage());
+            result.addError(table.getName() + " (deletes): " + e.getMessage());
+            return 0;
+        }
+    }
+
     private void warnIfDeletionsAreSkipped(SyncContext ctx, TableMeta table) {
         String reason = dataSync.deletionDetectionSkipReason(table, ctx.getConfig());
         if (reason == null) {
@@ -1245,6 +1276,20 @@ public class SyncEngine {
                 structureSync.createDeferredIndexes(targetConn, ctx, table);
             }
             result.addSkipped(table.getName(), tableResult.getSkipReason());
+            if (tableResult.isDeletionSyncStillValid()) {
+                // The skip suppressed only the row reload (the cursor column has no value to
+                // drive a window). Deletes are matched by primary key, not by the cursor, so
+                // they must keep propagating — otherwise source deletions would silently
+                // stay on the target for as long as the table idles.
+                int deleted = syncDeletionsForTable(sourceConn, targetConn, table, ctx,
+                        tableResult, result);
+                if (deleted > 0) {
+                    result.setRowsDeleted(result.getRowsDeleted() + deleted);
+                    stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
+                            ChangeType.DELETE, deleted + " row(s) removed to match source",
+                            true, 0, deleted);
+                }
+            }
             return;
         }
 
@@ -1271,24 +1316,10 @@ public class SyncEngine {
             dataSync.reseedIdentityAfterInitialLoad(targetConn, table, ctx);
         }
 
-        int deleted = 0;
         // 修复周期不做删除检测:上一轮周期记下的删除窗口属于那张已经不存在的目标表,
         // 拿它来比对只会在刚灌回来的数据上凭空删行。全量重灌已经覆盖了源端当前的行集。
-        if (!ctx.isCdcRepairRun() && ctx.getConfig().isSyncDeletes()) {
-            warnIfDeletionsAreSkipped(ctx, table);
-            try {
-                deleted = dataSync.syncDeletions(sourceConn, targetConn, table, ctx);
-            } catch (SQLException e) {
-                log.warn("Deletion sync failed for {}: {}", table.getName(), e.getMessage());
-                result.addError(table.getName() + " (deletes): " + e.getMessage());
-            }
-            if (deleted > 0) {
-                // The per-table result is what advanceCursor reads, and its "deletes count as
-                // a delivered change" branch is the only way a delete-only cycle moves the
-                // table's 上次同步. The aggregate below cannot stand in for it.
-                tableResult.countDeletes(deleted);
-            }
-        }
+        int deleted = syncDeletionsForTable(sourceConn, targetConn, table, ctx, tableResult,
+                result);
 
         // Build the secondary indexes that were held back while the rows arrived. Repeated
         // after a resumed load (idempotent), and deliberately placed before the cursor is

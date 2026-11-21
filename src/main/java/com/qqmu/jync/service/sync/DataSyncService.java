@@ -162,7 +162,14 @@ public class DataSyncService {
         private String error;
         /** The cursor value to persist, or null to leave the cursor untouched. */
         private String newCursorValue;
+        @lombok.Setter
         private boolean initialLoad;
+        /**
+         * Set with {@code skipped} when the skip only suppresses the row reload: the deletion
+         * scan still applies this cycle. Used by the "cursor column has no value" idle state,
+         * where deletes (key-matched, not cursor-matched) must keep propagating.
+         */
+        private boolean deletionSyncStillValid;
         /**
          * Whether this table's full load is checkpointed and therefore resumable: true when the
          * keyset-chunked path ran, or when a keyless table ran as OFFSET pages; false when a
@@ -259,14 +266,25 @@ public class DataSyncService {
             // nothing an incremental window could match either, so the table idles; the
             // moment the column gains a value the stored null cursor triggers the normal
             // full reload above and the marker clears.
-            if (progress.getLastSyncValue() == null
+            boolean loadedWithoutCursor = progress.getLastSyncValue() == null
                     && Boolean.TRUE.equals(progress.getFullLoadWithoutCursor())
-                    && strategy.isIncremental()
-                    && readHighWatermark(sourceConn, table, strategy, ctx) == null) {
+                    && strategy.isIncremental();
+            if (loadedWithoutCursor
+                    && (!table.hasPrimaryKey()
+                        || readHighWatermark(sourceConn, table, strategy, ctx) == null)) {
+                // A keyed table idles only while the cursor column still has no value; once
+                // one appears the stored null cursor triggers the normal full reload and the
+                // marker clears. A keyless table cannot be reloaded this way at all (the
+                // target already holds rows and a re-insert would duplicate them), so it
+                // keeps idling with the remedy spelled out instead of erroring every cycle.
                 result.skipped = true;
-                result.skipReason = "Cursor column " + strategy.getColumn()
-                        + " has no non-NULL value yet; the one-time full load seeded the"
-                        + " target, and nothing can be delivered until it does";
+                result.deletionSyncStillValid = true;
+                result.skipReason = table.hasPrimaryKey()
+                        ? "Cursor column " + strategy.getColumn()
+                                + " has no non-NULL value yet; the one-time full load seeded"
+                                + " the target, and nothing can be delivered until it does"
+                        : "Table has no primary key and its cursor column holds no value;"
+                                + " empty the target and reset the cursor to reload it";
                 return result;
             }
             // A stored cursor the current strategy cannot parse — e.g. a full-compare "fc:"

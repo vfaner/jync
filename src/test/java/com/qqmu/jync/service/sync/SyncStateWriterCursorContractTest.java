@@ -117,6 +117,43 @@ class SyncStateWriterCursorContractTest {
     }
 
     /**
+     * A full load that produced no cursor leaves no usable position — including a stale
+     * unparseable fingerprint it was recovering from. The row must record that state, or the
+     * next cycle mistakes it for "never loaded" and re-runs the whole load every poll.
+     */
+    @Test
+    void aCursorlessFullLoadClearsAStaleCursorAndMarksTheRow() {
+        SyncProgress progress = seededProgress(904L, "orders", "fc:2");
+        DataSyncService.TableSyncResult fullLoad = new DataSyncService.TableSyncResult();
+        fullLoad.setInitialLoad(true);
+
+        writer.advanceCursor(progress, fullLoad,
+                CursorStrategy.identity("id", Types.INTEGER, "test"));
+
+        SyncProgress row = reload(904L, "orders");
+        assertThat(row.getLastSyncValue()).isNull();
+        assertThat(row.getFullLoadWithoutCursor()).isTrue();
+    }
+
+    /** The operator's reload request must clear the marker, or the idle skip swallows it. */
+    @Test
+    void clearingACursorReArmsTheReload() {
+        seededProgress(905L, "orders", null);
+        requiresNew.executeWithoutResult(status -> {
+            SyncProgress row = progressRepository
+                    .findByProjectIdAndObjectTypeAndObjectName(905L, ObjectType.TABLE, "orders")
+                    .orElseThrow(IllegalStateException::new);
+            row.setFullLoadWithoutCursor(true);
+            progressRepository.save(row);
+        });
+        SyncProgress seeded = writer.loadOrCreateProgress(905L, "orders");
+
+        writer.clearCursor(seeded);
+
+        assertThat(reload(905L, "orders").getFullLoadWithoutCursor()).isFalse();
+    }
+
+    /**
      * The bug the return value exists to prevent: ignore what {@code clearCursor} saved,
      * advance with the instance the caller already held, and the optimistic lock rejects the
      * write. {@link SyncEngine} treats this as recoverable — reload the row, advance once more —

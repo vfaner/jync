@@ -241,6 +241,7 @@ public final class ConfigPackageDtos {
                                   String cursorStrategy,
                                   Boolean resumableLoad,
                                   Boolean initialLoadDone,
+                                  Boolean fullLoadWithoutCursor,
                                   Long rowsSyncedTotal,
                                   Instant lastSyncTime) {
     }

@@ -395,8 +395,8 @@ public class ConfigExportService {
         return new ConfigPackageDtos.SyncProgressDto(progress.getProjectId(),
                 progress.getObjectType(), progress.getObjectName(), progress.getLastSyncValue(),
                 progress.getCursorColumn(), progress.getCursorStrategy(), progress.getResumableLoad(),
-                progress.getInitialLoadDone(), progress.getRowsSyncedTotal(),
-                progress.getLastSyncTime());
+                progress.getInitialLoadDone(), progress.getFullLoadWithoutCursor(),
+                progress.getRowsSyncedTotal(), progress.getLastSyncTime());
     }
 
     private static ConfigPackageDtos.CdcPositionDto toDto(CdcPosition position) {

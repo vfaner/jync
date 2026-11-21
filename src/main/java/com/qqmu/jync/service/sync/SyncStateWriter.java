@@ -82,6 +82,15 @@ public class SyncStateWriter {
             progress.setInitialLoadDone(true);
             changed = true;
         }
+        if (result.isInitialLoad() && strategy.isIncremental()
+                && result.getNewCursorValue() == null
+                && progress.getLastSyncValue() != null) {
+            // The full load produced no cursor, so no stored value is usable any more — not
+            // even the unparseable fingerprint that triggered this reload. Leaving it would
+            // hide the "loaded without a cursor" state and re-run the full load every poll.
+            progress.setLastSyncValue(null);
+            changed = true;
+        }
         if (result.isInitialLoad()) {
             // Record whether this full load produced a cursor. A null one is not "never
             // loaded": it means the cursor column (or the table) had no usable value, and
