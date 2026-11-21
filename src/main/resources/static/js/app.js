@@ -3269,6 +3269,20 @@
   }
 
   /**
+   * 看板「实时状态」徽标的时间戳：每次统计刷新成功后写上当前时间，让「这是活的」
+   * 不靠一句静态的「每 10 秒刷新」自证。模板在 data-tpl 里（服务端本地化），{0} 换时间。
+   */
+  function stampLiveUpdated() {
+    var hint = document.querySelector('[data-role="live-updated"]');
+    if (!hint) return;
+    var tpl = hint.getAttribute('data-tpl') || '{0}';
+    var d = new Date();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    hint.textContent = tpl.replace('{0}',
+        pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()));
+  }
+
+  /**
    * 看板统计卡的 10 秒刷新：只换四块卡的内容，不重跑整页。数字变了的格子跳一下，
    * 让「这是活的」看得出来；容器里没有 stat-grid 时（登录页、改密弹窗）直接不启动。
    *
@@ -3285,6 +3299,7 @@
 
     // 首屏：服务端已经把真实值写进 HTML，这里再把它们从 0 滚上去
     animateCounters(grid, null);
+    stampLiveUpdated();
 
     function refresh() {
       if (inFlight) return;
@@ -3318,6 +3333,7 @@
           if (overview && freshOverview) {
             overview.innerHTML = freshOverview.innerHTML;
           }
+          stampLiveUpdated();
         })
         .catch(function () {
           // 网络抖一下保留旧数字，下一轮再试
@@ -3864,6 +3880,19 @@
     var dateInput = modal.querySelector('[data-role="purge-date"]');
     var confirmBtn = modal.querySelector('[data-role="purge-confirm"]');
     if (!url || !dateInput || !confirmBtn) return;
+    // 快捷筹码：7/30/90 天前，一键填日期（不超过服务端给的上限）。
+    modal.querySelectorAll('[data-purge-days]').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        var days = parseInt(chip.getAttribute('data-purge-days'), 10);
+        if (!days) return;
+        var d = new Date();
+        d.setDate(d.getDate() - days);
+        var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+        var iso = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+        var max = dateInput.getAttribute('max');
+        dateInput.value = (max && iso > max) ? max : iso;
+      });
+    });
     var busy = false;
     confirmBtn.addEventListener('click', function () {
       if (busy) return;

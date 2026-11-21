@@ -10,6 +10,50 @@
             <h1 th:text="#{syslog.title}">System log</h1>
             <p class="sub" th:text="#{syslog.subtitle}">Inspect this application's own runtime log.</p>
         </div>
+        <div class="page-actions">
+            <button type="button" class="btn btn-ghost btn-warn" th:if="${isAdmin}"
+                    data-open-modal="log-purge-modal">
+                <svg class="ico"><use href="#trash"/></svg><span th:text="#{log.purge}">Delete by date</span></button>
+        </div>
+    </div>
+
+    <!--/* 只删已滚动的历史归档（文件名带日期），正在写入的 jync.log 与 .tmp 不碰；
+           保留期由 logging.logback.rollingpolicy.max-history 自动兜底。 */-->
+    <div class="modal" id="log-purge-modal" aria-hidden="true" role="dialog" aria-modal="true"
+         th:if="${isAdmin}" th:attr="data-purge-url=@{/system-logs/purge}">
+        <div class="modal-mask" data-close-modal="log-purge-modal"></div>
+        <div class="modal-dialog" style="max-width:460px">
+            <button type="button" class="modal-close" data-close-modal="log-purge-modal"
+                    th:aria-label="#{common.cancel}">×</button>
+            <div class="modal-head">
+                <h3 th:text="#{log.purge.title}">Delete logs</h3>
+            </div>
+            <div class="preview-body" style="text-align:left;border:none;">
+                <p class="help small muted" th:text="#{log.purge.hint}">Deletes records on or
+                    before the selected date; today is always kept.</p>
+                <p class="help small muted" th:text="#{log.purge.sysHint}">Only rolled archive
+                    files are deleted; the live log is untouched.</p>
+                <div class="field">
+                    <label for="purge-date" th:text="#{log.purge.date}">Cutoff date</label>
+                    <input type="date" id="purge-date" class="input" data-role="purge-date"
+                           th:max="${purgeMaxDate}">
+                </div>
+                <div class="purge-quick">
+                    <button type="button" class="chip-btn" data-purge-days="7"
+                            th:text="#{log.purge.quick(7)}">7 days ago</button>
+                    <button type="button" class="chip-btn" data-purge-days="30"
+                            th:text="#{log.purge.quick(30)}">30 days ago</button>
+                    <button type="button" class="chip-btn" data-purge-days="90"
+                            th:text="#{log.purge.quick(90)}">90 days ago</button>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-ghost btn-sm"
+                        data-close-modal="log-purge-modal" th:text="#{common.cancel}">Cancel</button>
+                <button type="button" class="btn btn-warn btn-sm" data-role="purge-confirm"
+                        th:text="#{log.purge.confirm}">Delete</button>
+            </div>
+        </div>
     </div>
 
     <div class="card">

@@ -42,7 +42,7 @@ import com.qqmu.jync.util.LogPurgeDates;
  * picker capped at yesterday), operators get nothing on the change log and no audit page at
  * all, and the purge endpoints answer JSON the modal can toast — including a refused date.
  */
-@WebMvcTest({ChangeLogController.class, AuditController.class})
+@WebMvcTest({ChangeLogController.class, AuditController.class, SystemLogController.class})
 @Import(GlobalModelAdvice.class)
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
 class LogPurgeViewTest {
@@ -52,6 +52,7 @@ class LogPurgeViewTest {
     @MockitoBean private ProjectService projectService;
     @MockitoBean private AdminAuditService auditService;
     @MockitoBean private AuditDetailRenderer detailRenderer;
+    @MockitoBean private com.qqmu.jync.service.log.SystemLogService logService;
 
     private final LocalDate yesterday = LocalDate.now(ZoneId.systemDefault()).minusDays(1);
 
@@ -72,6 +73,10 @@ class LogPurgeViewTest {
         when(projectService.findAll()).thenReturn(List.of());
         when(auditService.count()).thenReturn(0L);
         when(auditService.page(anyInt(), anyInt())).thenReturn(Page.empty());
+        when(logService.listFiles()).thenReturn(List.of());
+        when(logService.query(any(), any(), any())).thenReturn(
+                new com.qqmu.jync.service.log.SystemLogService.LogQueryResult(
+                        List.of(), 0, false, null));
     }
 
     @Test
@@ -84,6 +89,7 @@ class LogPurgeViewTest {
         assertThat(logs).contains("data-open-modal=\"log-purge-modal\"")
                 .contains("data-purge-url=\"/change-logs/purge\"")
                 .contains("max=\"" + yesterday + "\"")
+                .contains("data-purge-days=\"30\"")
                 .doesNotContain("/change-logs/clear");
 
         String audits = mvc.perform(get("/audits").with(asRole(UserRole.ADMIN)))
@@ -132,6 +138,34 @@ class LogPurgeViewTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message")
                         .value("The cutoff date must be yesterday or earlier"));
+    }
+
+    @Test
+    void adminGetsThePurgeModalOnTheSystemLogPageToo() throws Exception {
+        stubLists();
+
+        String page = mvc.perform(get("/system-logs").with(asRole(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(page).contains("data-open-modal=\"log-purge-modal\"")
+                .contains("data-purge-url=\"/system-logs/purge\"")
+                .contains("max=\"" + yesterday + "\"");
+
+        String ops = mvc.perform(get("/system-logs").with(asRole(UserRole.OPS)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(ops).doesNotContain("log-purge-modal");
+    }
+
+    @Test
+    void theSystemLogPurgeAnswersJsonWithTheLocalizedCount() throws Exception {
+        when(logService.purgeBefore(yesterday)).thenReturn(2);
+
+        mvc.perform(post("/system-logs/purge").with(asRole(UserRole.ADMIN)).with(csrf())
+                        .param("date", yesterday.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.message").value("Deleted 2 record(s)"));
     }
 
     @Test

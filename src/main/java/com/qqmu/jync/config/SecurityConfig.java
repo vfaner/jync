@@ -185,7 +185,7 @@ public class SecurityConfig {
             "/system-config/**", "/external-auth/**", "/alert-settings/**",
             "/ai/**", "/api/ai/**",
             "/api/upgrade/**", "/api/diagnostics/**",
-            "/change-logs/purge", "/audits/purge",
+            "/change-logs/purge", "/audits/purge", "/system-logs/purge",
             "/api/version/ignore", "/api/version/artifact/dismiss"
     };
 

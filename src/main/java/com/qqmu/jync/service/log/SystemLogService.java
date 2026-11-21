@@ -6,6 +6,7 @@ import java.io.InputStreamReader;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -52,6 +53,10 @@ public class SystemLogService {
     static final String ERROR_FILE = "syslog.error.file";
     static final String ERROR_READ = "syslog.error.read";
 
+    /** Rolling archive suffix: a date, an index, and the optional gzip extension. */
+    private static final Pattern ROLLED_NAME =
+            Pattern.compile("^(\\d{4}-\\d{2}-\\d{2})\\.\\d+(\\.gz)?$");
+
     private static final Pattern LEVEL_TOKEN =
             Pattern.compile("\\s(TRACE|DEBUG|INFO|WARN|ERROR)\\s");
     /** Filter values the page offers; also the only accepted {@code level} parameters. */
@@ -91,6 +96,70 @@ public class SystemLogService {
         } catch (IOException ex) {
             log.warn("Cannot list the log directory {}: {}", dir, ex.toString());
             return List.of();
+        }
+    }
+
+    /**
+     * Deletes rolled archive files dated on or before {@code day} (the selected day included).
+     * The live file and {@code .tmp} intermediates are never touched: the live log is still
+     * being written, and a partial rewrite of it would race the appender. Names that do not
+     * carry a rolling date are left alone too — only the rolling policy's own archives are
+     * removable, the same whitelist the reader uses.
+     *
+     * @return how many archive files were deleted
+     * @throws IllegalArgumentException {@code log.purge.date.invalid} for a null/too-new day
+     */
+    public int purgeBefore(java.time.LocalDate day) {
+        com.qqmu.jync.util.LogPurgeDates.cutoffFor(day);
+        Path dir = logDir();
+        String base = baseName();
+        if (!Files.isDirectory(dir)) {
+            return 0;
+        }
+        int removed = 0;
+        try (Stream<Path> stream = Files.list(dir)) {
+            List<Path> candidates = stream.filter(Files::isRegularFile).toList();
+            for (Path path : candidates) {
+                String name = path.getFileName().toString();
+                if (name.equals(base) || name.endsWith(".tmp")) {
+                    continue;
+                }
+                LocalDate fileDay = rolledDate(name, base);
+                if (fileDay == null || fileDay.isAfter(day)) {
+                    continue;
+                }
+                // Same containment proof as the read path: a symlink must not delete outside.
+                Path real = resolveInsideLogDir(name);
+                if (real == null) {
+                    continue;
+                }
+                try {
+                    if (Files.deleteIfExists(real)) {
+                        removed++;
+                    }
+                } catch (IOException ex) {
+                    log.warn("Cannot delete rolled log {}: {}", name, ex.toString());
+                }
+            }
+        } catch (IOException ex) {
+            log.warn("Cannot list the log directory {} for purge: {}", dir, ex.toString());
+        }
+        return removed;
+    }
+
+    /** The rolling date in {@code base.YYYY-MM-DD.N[.gz]}, or null for any other shape. */
+    private static LocalDate rolledDate(String name, String base) {
+        if (!name.startsWith(base + ".")) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = ROLLED_NAME.matcher(name.substring(base.length() + 1));
+        if (!matcher.matches()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(matcher.group(1));
+        } catch (java.time.format.DateTimeParseException ex) {
+            return null;
         }
     }
 

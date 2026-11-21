@@ -573,7 +573,11 @@ date purges of either log, dedicated migration and ETL writes, config-package im
 diagnostics exports and AI assistant questions, each with time, user, action and detail. Filter by
 action or user to reconstruct who changed what. Logs → Change log offers the same date-based
 deletion scoped to the current filter (project / errors only); open DDL tasks are pending work and
-are never deleted, and sync.change-log-retention-days prunes automatically as a backstop.
+are never deleted. Logs → System log lets administrators delete rolled archive files by date as
+well; the live jync.log and .tmp intermediates are untouched. Retention defaults: change log and
+audit log 180 days each (sync.change-log-retention-days / sync.audit-retention-days, hourly
+auto-prune, 0 disables); system log rolls with a 30-day history
+(logging.logback.rollingpolicy.max-history, plus 10MB per file and a 500MB total cap).
 
 ## Diagnostics bundle
 

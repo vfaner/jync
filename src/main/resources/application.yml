@@ -370,6 +370,8 @@ logging:
   logback:
     rollingpolicy:
       max-file-size: 10MB
-      max-history: 14
+      # 系统日志保留 30 天：它是排障用的运行日志，价值随时间衰减最快；审计与变更日志
+      # 默认保留 180 天（sync.audit-retention-days / sync.change-log-retention-days）。
+      max-history: 30
       total-size-cap: 500MB
       clean-history-on-start: true

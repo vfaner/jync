@@ -289,7 +289,14 @@ public class SyncProperties {
     private String cryptoSalt = DEFAULT_CRYPTO_SALT;
 
     /** Days of change-log history to keep; 0 disables pruning. */
-    private int changeLogRetentionDays = 30;
+    private int changeLogRetentionDays = 180;
+
+    /**
+     * Days of audit history kept before the hourly pruner trims it. The audit trail is read
+     * far more often than it is written during investigations, so it defaults to the same
+     * long window as the change log; zero or less disables the cleanup.
+     */
+    private int auditRetentionDays = 180;
 
     /** Pushes the configured metadata timeout to readers once binding is done. */
     @jakarta.annotation.PostConstruct

@@ -78,6 +78,15 @@ class DashboardLiveViewTest {
     }
 
     @Test
+    void theLivePillShowsStatusAndADynamicUpdateStamp() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("实时状态")
+                .contains("data-role=\"live-updated\"")
+                .contains("更新于 ");
+    }
+
+    @Test
     void theStatisticsPollTheirOwnFragmentEndpoint() throws Exception {
         String html = dashboard(Locale.SIMPLIFIED_CHINESE);
 

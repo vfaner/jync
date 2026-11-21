@@ -11,9 +11,13 @@
     <div class="dash-bar">
         <div class="live-pill">
             <span class="live-dot"></span>
-            <span th:text="#{dashboard.live}">Live</span>
+            <span th:text="#{dashboard.live}">Live status</span>
             <span class="live-sep">·</span>
-            <span class="live-hint" th:text="#{dashboard.liveHint(10)}">Every 10s</span>
+            <!--/* 动态徽标：文案是「实时状态」，后半截随每次 10 秒刷新写上最新更新时间，
+                   模板留在 data-tpl 里供 app.js 替换 {0}。 */-->
+            <span class="live-hint" data-role="live-updated"
+                  th:data-tpl="#{dashboard.liveHint('{0}')}"
+                  th:text="#{dashboard.liveHint(${#temporals.format(#temporals.createNow(), 'HH:mm:ss')})}">Updated …</span>
         </div>
         <!--/* 没有刷新按钮：统计卡、概览表、趋势图、活动流各自按自己的节奏轮询，整页
                重画一遍只是把它们刚拿到的数字再画一次。 */-->

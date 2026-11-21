@@ -25,8 +25,10 @@ class LoggingRollingPolicyConfigTest {
         assertThat(yaml.getProperty("logging.file.name")).isEqualTo("./logs/jync.log");
         assertThat(yaml.getProperty("logging.logback.rollingpolicy.max-file-size"))
                 .isEqualTo("10MB");
+        // 系统日志保留 30 天：运行日志价值衰减最快；审计/变更日志默认 180 天
+        // （sync.audit-retention-days / sync.change-log-retention-days）。
         assertThat(yaml.getProperty("logging.logback.rollingpolicy.max-history"))
-                .isEqualTo(14);
+                .isEqualTo(30);
         assertThat(yaml.getProperty("logging.logback.rollingpolicy.total-size-cap"))
                 .isEqualTo("500MB");
         assertThat(yaml.getProperty("logging.logback.rollingpolicy.clean-history-on-start"))
