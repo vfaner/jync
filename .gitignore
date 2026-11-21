@@ -120,3 +120,8 @@ venv/
 # ============================================
 docs/superpowers/
 docs/task-book-*.md
+
+# ============================================
+# 头脑风暴 mockup / Brainstorm visual companion
+# ============================================
+.superpowers/

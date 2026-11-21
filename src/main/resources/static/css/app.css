@@ -1894,9 +1894,17 @@ table.tbl a.truncate { display: block; }
 .process-head .seg { margin-left: auto; }
 .process-stats { margin-bottom: 14px; }
 /* 整机资源环的小标题行，与进程资源标题同款；标题在环片段之外，刷新不重画。 */
-.server-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin: 18px 0 10px; }
+.server-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 18px 0 10px; }
 .server-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .server-head .hint, .process-head .hint { font-size: 12.5px; color: var(--ink-mute); font-weight: 400; }
+/* 区块标题胶囊徽标头：品牌色图标 + 柔和标题 + 实时呼吸点（复用 live-dot），
+   服务器信息 / Jync 进程资源 / 同步趋势 统一组件感。 */
+.sec-pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--bg);
+  box-shadow: 0 1px 2px rgba(20,24,40,.04); }
+.sec-pill .ico { width: 15px; height: 15px; color: var(--brand); }
+.sec-pill h2 { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink-soft); letter-spacing: .2px; }
+.sec-pill .live-dot { width: 7px; height: 7px; }
 /* 异常任务数并进统计卡副标题：与「正在运行」隔一点，红字由 .text-danger 给。 */
 .stat-x .stat-err { margin-left: 6px; white-space: nowrap; }
 /* 列清洗卡：紧跟配置大表单（非相邻卡片），自己补上边距；内容用正常内边距不贴边。 */

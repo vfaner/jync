@@ -83,7 +83,11 @@
     <!--/* 整机资源的小标题：交代这块监控的是本机 CPU/内存/磁盘，吃紧时该清理或扩容。
            标题在环片段之外，5 秒刷新只换环、不重画标题。 */-->
     <div class="server-head">
-        <h2 th:text="#{dashboard.server.title}">Server resources</h2>
+        <div class="sec-pill">
+            <svg class="ico"><use href="#hdd-network-fill"/></svg>
+            <h2 th:text="#{dashboard.server.title}">Server resources</h2>
+            <span class="live-dot" aria-hidden="true"></span>
+        </div>
         <span class="hint" th:text="#{dashboard.server.hint}">Monitor this machine's resources</span>
     </div>
 
@@ -138,7 +142,11 @@
     <section class="process-row" id="process-block"
              th:attr="data-metrics-url=@{/dashboard/process-metrics}" data-range="24h">
         <div class="process-head">
-            <h2 th:text="#{metrics.process.title}">Process resources</h2>
+            <div class="sec-pill">
+                <svg class="ico"><use href="#activity"/></svg>
+                <h2 th:text="#{metrics.process.title}">Process resources</h2>
+                <span class="live-dot" aria-hidden="true"></span>
+            </div>
             <span class="hint" th:text="#{metrics.process.hint}">Shared by every task on this server</span>
             <span class="small muted">
                 <span th:text="#{metrics.lastSample}">Last sample</span>:
@@ -212,7 +220,11 @@
                       data-sync-label=#{dashboard.syncLabel},
                       data-etl-label=#{dashboard.etlLabel}">
             <div class="card-head">
-                <h2 th:text="#{dashboard.trend}">Activity trend</h2>
+                <div class="sec-pill">
+                    <svg class="ico"><use href="#graph-up"/></svg>
+                    <h2 th:text="#{dashboard.trend}">Activity trend</h2>
+                    <span class="live-dot" aria-hidden="true"></span>
+                </div>
                 <div class="card-head-tools">
                     <div class="seg" role="group" th:attr="aria-label=#{dashboard.trend}">
                         <button type="button" class="seg-btn is-active" data-metric="changes"
