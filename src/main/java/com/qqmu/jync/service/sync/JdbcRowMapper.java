@@ -59,15 +59,16 @@ public final class JdbcRowMapper {
      * becomes invalid once the result set advances, and rows are buffered into batches
      * before being written.
      */
+    /** Without the per-column type name: same read, for callers that have none. */
     public static Map<String, Object> readRow(ResultSet rs, List<String> columns,
                                               List<Integer> types) throws SQLException {
         return readRow(rs, columns, types, null);
     }
 
     /**
-     * As {@link #readRow(ResultSet, List, List)} but with the database type name per column,
-     * so columns whose JDBC type misreports the value (MySQL YEAR and DATETIME) can be read
-     * by their real type.
+     * Reads one row into a column-name keyed map, with the database type name per column so
+     * columns whose JDBC type misreports the value (MySQL YEAR and DATETIME) can be read by
+     * their real type.
      */
     public static Map<String, Object> readRow(ResultSet rs, List<String> columns,
                                               List<Integer> types, List<String> typeNames)
@@ -622,14 +623,18 @@ public final class JdbcRowMapper {
      * those ({@code viaUtcCalendar}) the same fields go through {@code setTimestamp} with a
      * UTC calendar, which the driver renders literally.
      */
+    private static final ThreadLocal<java.util.Calendar> UTC_CALENDAR =
+            ThreadLocal.withInitial(() -> java.util.Calendar.getInstance(
+                    java.util.TimeZone.getTimeZone("UTC")));
+
     public static void bindWallClock(PreparedStatement ps, int idx, LocalDateTime value,
                                      boolean viaUtcCalendar) throws SQLException {
         if (viaUtcCalendar) {
-            // Calendar is mutable; one per bind call keeps it off shared state.
-            java.util.Calendar utc = java.util.Calendar.getInstance(
-                    java.util.TimeZone.getTimeZone("UTC"));
+            // Calendar is mutable, but setTimestamp consumes it synchronously on this thread,
+            // so one per thread is safe — and a 10M-row load with two timestamp columns no
+            // longer allocates 20M GregorianCalendars for the GC to collect.
             ps.setTimestamp(idx, Timestamp.from(value.toInstant(java.time.ZoneOffset.UTC)),
-                    utc);
+                    UTC_CALENDAR.get());
             return;
         }
         try {

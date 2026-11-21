@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
-import java.util.regex.Pattern;
 
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.lob.LobBinder;
@@ -167,61 +166,10 @@ public final class CdcEventApplier {
      * wrong place.
      */
     static boolean isMissingTable(SQLException failure) {
-        for (SQLException e = failure; e != null;
-                e = e.getNextException() == e ? null : e.getNextException()) {
-            String state = e.getSQLState();
-            int code = e.getErrorCode();
-            if ("42S02".equals(state)      // MySQL, H2 (non-empty db), SQL Server, DM
-                    || "42S04".equals(state) // H2: table not found because the database is empty
-                    || "42P01".equals(state) // PostgreSQL family
-                    || "S0002".equals(state) // SQL Server
-                    || "42704".equals(state)) { // DB2
-                return true;
-            }
-            if (code == 1146      // MySQL ER_NO_SUCH_TABLE
-                    || code == 942 // Oracle/DM ORA-00942
-                    || code == 208 // SQL Server invalid object name
-                    || code == -204 // DB2 undefined name
-                    || code == 42102 // H2 table not found
-                    || code == 42104) { // H2 table not found in an empty database
-                return true;
-            }
-            String message = e.getMessage();
-            if (message != null) {
-                String lower = message.toLowerCase(Locale.ROOT);
-                for (String marker : MISSING_TABLE_MARKERS) {
-                    if (lower.contains(marker)) {
-                        return true;
-                    }
-                }
-                if (TABLE_DOES_NOT_EXIST.matcher(lower).find()) {
-                    return true;
-                }
-            }
-        }
-        return false;
+        // One detection model for the whole product: the ETL loader's probe knows every
+        // family the repair path can create a table for, TDengine's vendor code included.
+        return com.qqmu.jync.service.etl.EtlSqlSupport.isMissingTable(failure);
     }
-
-    /**
-     * The analytic engines' and HANA's "no such table" wording, none of which carries a
-     * state the check above knows. Every family words a permission fault differently, so a
-     * match means the object is absent.
-     */
-    private static final String[] MISSING_TABLE_MARKERS = {
-            "table not found", "no such table", "unknown table",
-            "invalid object name", "invalid table name", "invalid table or view name",
-            "无效的表或视图名", "表或视图不存在"};
-
-    /**
-     * The analytic engines' "&lt;table&gt; does not exist" wording. The noun must sit right
-     * next to the phrase: Hive says "Database does not exist" and ClickHouse "Database foo
-     * doesn't exist", and reading either as a missing table would create a table in a schema
-     * that is itself absent.
-     */
-    private static final Pattern TABLE_DOES_NOT_EXIST = Pattern.compile(
-            "(?:table|relation|view|object|entity|collection|表|视图)"
-                    + "[^\\n]{0,80}?(?:does not exist|doesn't exist|不存在)",
-            Pattern.CASE_INSENSITIVE);
 
     /**
      * Source columns the target actually has.

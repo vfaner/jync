@@ -403,11 +403,33 @@ public class ContentAuditService {
             excluded.add(column.toUpperCase(Locale.ROOT));
         }
         for (ColumnMeta column : table.getColumns()) {
-            if (isLargeType(column.getJdbcType())) {
+            if (isLargeType(column.getJdbcType()) || isUnboundedDeclaration(column)) {
                 excluded.add(column.getName().toUpperCase(Locale.ROOT));
             }
         }
         return excluded;
+    }
+
+    /**
+     * PostgreSQL {@code text} and SQL Server {@code varchar(max)} report {@code Types.VARCHAR},
+     * not a LOB type, so the type switch alone misses them — and the audit reads with no LOB
+     * policy on an autocommit connection, where pgjdbc buffers the whole sampled result set.
+     * A character/binary column whose declared size is absent or above the inline LOB budget
+     * is the same "not worth materialising for a spot check" family as CLOB/BLOB.
+     */
+    private boolean isUnboundedDeclaration(ColumnMeta column) {
+        int jdbcType = column.getJdbcType();
+        if (jdbcType != Types.VARCHAR && jdbcType != Types.NVARCHAR
+                && jdbcType != Types.VARBINARY && jdbcType != Types.NCHAR
+                && jdbcType != Types.CHAR) {
+            return false;
+        }
+        Integer size = column.getSize();
+        long inlineMax = properties.getLob().getInlineMaxBytes();
+        // Unknown size keeps the previous behaviour: a declared VARCHAR that the metadata
+        // build did not size is usually a plain bounded column, and excluding it blindly
+        // would drop it from every audit.
+        return size != null && (size <= 0 || size > inlineMax);
     }
 
     private static boolean isLargeType(int jdbcType) {

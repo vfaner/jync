@@ -525,6 +525,62 @@ class DataSyncServiceDeletionsTest {
                 });
     }
 
+    /**
+     * A temporal primary key read straight from the driver is a vendor-private object on
+     * Oracle (oracle.sql.TIMESTAMP) and SQL Server (microsoft.sql.DateTimeOffset). Raw, its
+     * toString differs from the normalized form the other side renders, every target key
+     * looks "deleted at source" and deletion sync empties the table. The key read must go
+     * through the same value reader the copy path wrote from.
+     */
+    @Test
+    void vendorTemporalKeysAreNormalizedBeforeComparison() throws Exception {
+        microsoft.sql.DateTimeOffset vendor = microsoft.sql.DateTimeOffset.valueOf(
+                Timestamp.valueOf("2026-01-01 00:00:00"), 0);
+        ResultSet rs = vendorKeyResultSet(vendor);
+
+        Object read = DataSyncService.keyColumn(rs, 1, DatabaseType.SQLSERVER);
+
+        // Portable temporal, not the driver's own DateTimeOffset object.
+        assertThat(read).isInstanceOf(java.sql.Timestamp.class);
+        assertThat(DataSyncService.keyPartOf(read))
+                .isEqualTo(DataSyncService.keyPartOf(
+                        Timestamp.valueOf("2026-01-01 00:00:00")));
+    }
+
+    private static ResultSet vendorKeyResultSet(Object value) throws SQLException {
+        ResultSetMetaData meta = (ResultSetMetaData) Proxy.newProxyInstance(
+                ResultSetMetaData.class.getClassLoader(),
+                new Class<?>[] {ResultSetMetaData.class},
+                (proxy, method, args) -> {
+                    if ("getColumnType".equals(method.getName())) {
+                        return Types.TIMESTAMP_WITH_TIMEZONE;
+                    }
+                    if ("getColumnTypeName".equals(method.getName())) {
+                        return "DATETIMEOFFSET";
+                    }
+                    if ("getColumnCount".equals(method.getName())) {
+                        return 1;
+                    }
+                    return null;
+                });
+        return (ResultSet) Proxy.newProxyInstance(
+                ResultSet.class.getClassLoader(), new Class<?>[] {ResultSet.class},
+                (proxy, method, args) -> {
+                    if ("getObject".equals(method.getName())) {
+                        // The driver's own object: what the bug used to hand to the renderer.
+                        return value;
+                    }
+                    if ("getTimestamp".equals(method.getName())) {
+                        // What the JDBC timestamp getter answers for DATETIMEOFFSET.
+                        return ((microsoft.sql.DateTimeOffset) value).getTimestamp();
+                    }
+                    if ("getMetaData".equals(method.getName())) {
+                        return meta;
+                    }
+                    return null;
+                });
+    }
+
     private TableMeta table(String name, String pk, long approximateRows) {
         return table(name, List.of(pk), approximateRows);
     }

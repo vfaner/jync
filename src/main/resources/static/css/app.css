@@ -2202,28 +2202,7 @@ a.type-card:focus-visible {
   a.type-card:hover { transform: none; }
 }
 
-/* 预检每一行的语义色，与 .alert-ok/.alert-warn/.alert-danger 同一套取值。 */
-.precheck-ok {
-  background: var(--fb-ok-10); border-color: var(--fb-ok-28);
-  background: color-mix(in srgb, var(--ok) 10%, transparent);
-  border-color: color-mix(in srgb, var(--ok) 28%, transparent);
-  color: #047857;
-}
-.precheck-warn {
-  background: var(--fb-warn-11); border-color: var(--fb-warn-30);
-  background: color-mix(in srgb, var(--warn) 11%, transparent);
-  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
-  color: #b45309;
-}
-.precheck-error {
-  background: var(--fb-danger-09); border-color: var(--fb-danger-28);
-  background: color-mix(in srgb, var(--danger) 9%, transparent);
-  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
-  color: #b91c1c;
-}
-[data-theme="dark"] .precheck-ok    { color: #34d399; }
-[data-theme="dark"] .precheck-warn  { color: #fbbf24; }
-[data-theme="dark"] .precheck-error { color: #f87171; }
+
 
 /* ==========================================================================
    AI 运维助手悬浮窗

@@ -165,7 +165,7 @@ public final class EtlSqlSupport {
      * <p>SQLSTATE alone is not enough: Oracle and DM keep SQLSTATE 42000 for everything and
      * distinguish by vendor code, while DB2 and SQL Server use their own states.
      */
-    private static boolean isMissingTable(SQLException failure) {
+    public static boolean isMissingTable(SQLException failure) {
         for (SQLException e = failure; e != null;
                 e = e.getNextException() == e ? null : e.getNextException()) {
             String state = e.getSQLState();

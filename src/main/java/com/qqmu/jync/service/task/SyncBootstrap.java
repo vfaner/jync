@@ -8,6 +8,8 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 
@@ -35,12 +37,17 @@ public class SyncBootstrap {
     private final ProjectRepository projectRepository;
     private final SyncScheduler scheduler;
     private final CdcConsumerManager cdcManager;
+    private final SyncTaskStore taskStore;
+    private final SyncLockService lockService;
 
     public SyncBootstrap(ProjectRepository projectRepository, SyncScheduler scheduler,
-                         CdcConsumerManager cdcManager) {
+                         CdcConsumerManager cdcManager, SyncTaskStore taskStore,
+                         SyncLockService lockService) {
         this.projectRepository = projectRepository;
         this.scheduler = scheduler;
         this.cdcManager = cdcManager;
+        this.taskStore = taskStore;
+        this.lockService = lockService;
     }
 
     /**
@@ -53,6 +60,7 @@ public class SyncBootstrap {
     @EventListener(ApplicationReadyEvent.class)
     @Order(100)
     public void onReady() {
+        healPhantomRunning();
         List<Project> enabled = projectRepository.findByEnabledTrue();
         if (enabled.isEmpty()) {
             log.info("No enabled projects to resume");
@@ -87,5 +95,39 @@ public class SyncBootstrap {
         log.info("Resumed {} of {} enabled project(s); each continues from its stored cursor"
                         + " ({} CDC consumer(s) handed to CdcConsumerManager)",
                 resumed, enabled.size(), consumers);
+    }
+
+    /**
+     * A kill -9 mid-cycle leaves {@code sync_task.status = RUNNING} behind. Enabled projects
+     * self-heal on their next fire, but a stopped project synced by hand never fires again,
+     * so its page and the dashboard would claim "syncing" forever. The lease is the truth
+     * about whether a cycle is actually in flight: no live holder means nobody is running,
+     * whatever the status column says. ERROR hats are preserved — a parked project must not
+     * be silently unparked by a restart.
+     */
+    private void healPhantomRunning() {
+        List<SyncTask> running;
+        try {
+            running = taskStore.findByStatus(TaskStatus.RUNNING);
+        } catch (RuntimeException e) {
+            log.warn("Could not read running tasks at startup: {}", e.toString());
+            return;
+        }
+        int healed = 0;
+        for (SyncTask task : running) {
+            try {
+                if (lockService.isLeaseHeldByAnotherLiveOwner(task.getProjectId())) {
+                    continue;   // another node is genuinely mid-cycle
+                }
+                taskStore.markStoppedUnlessError(task.getProjectId());
+                healed++;
+            } catch (RuntimeException e) {
+                log.warn("Could not heal stale RUNNING status for project {}: {}",
+                        task.getProjectId(), e.toString());
+            }
+        }
+        if (healed > 0) {
+            log.info("Reset {} stale RUNNING task status(es) left by a previous process", healed);
+        }
     }
 }

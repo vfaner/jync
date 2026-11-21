@@ -526,12 +526,8 @@ public class OracleDialect extends AbstractSqlDialect {
     }
 
     private String stripTrailingSemicolon(String sql) {
-        if (sql == null) {
-            return null;
-        }
-        String s = sql.trim();
         // Oracle rejects a trailing semicolon on a plain DDL statement submitted via JDBC.
-        return s.endsWith(";") ? s.substring(0, s.length() - 1) : s;
+        return com.qqmu.jync.util.JdbcUtil.stripTrailingSemicolon(sql);
     }
 
     /**
@@ -543,16 +539,7 @@ public class OracleDialect extends AbstractSqlDialect {
      * gets created.
      */
     private String stripTrailingSlash(String sql) {
-        String s = sql.trim();
-        while (!s.isEmpty()) {
-            int lastBreak = s.lastIndexOf('\n');
-            String lastLine = (lastBreak < 0 ? s : s.substring(lastBreak + 1)).trim();
-            if (!"/".equals(lastLine)) {
-                break;
-            }
-            s = lastBreak < 0 ? "" : s.substring(0, lastBreak).trim();
-        }
-        return s;
+        return com.qqmu.jync.util.JdbcUtil.stripTrailingSlash(sql);
     }
 
     /**

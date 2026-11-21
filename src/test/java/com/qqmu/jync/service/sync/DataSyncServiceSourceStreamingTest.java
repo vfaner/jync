@@ -114,9 +114,25 @@ class DataSyncServiceSourceStreamingTest {
         assertThat(reallySource.getAutoCommit()).isTrue();
     }
 
+    /**
+     * The master LOB switch is about how LOB values are read, not about row streaming:
+     * gating the read transaction on it as well silently turned off pgjdbc result-set
+     * streaming, so the documented 1.7.7-compat knob made large PostgreSQL loads buffer the
+     * whole table. Only {@code enable-source-streaming} is the hatch for the transaction.
+     */
     @Test
-    void theMasterStreamingSwitchAlsoLeavesTheSourceAlone() throws SQLException {
+    void theMasterStreamingSwitchKeepsTheSourceReadTransaction() throws SQLException {
         properties.getLob().setStreamingEnabled(false);
+        insert(1, "body");
+
+        assertThat(sync().isSuccess()).isTrue();
+
+        assertThat(recorder.transactionCalls()).isNotEmpty();
+    }
+
+    @Test
+    void theSourceStreamingHatchLeavesTheSourceAlone() throws SQLException {
+        properties.getLob().setEnableSourceStreaming(false);
         insert(1, "body");
 
         assertThat(sync().isSuccess()).isTrue();

@@ -1148,7 +1148,8 @@ public class DataSyncService {
             collectMissingKeys(sourceConn, targetConn, sourceDialect, targetDialect,
                     ctx.getSourceSchema(), table.getName(), ctx.getTargetSchema(),
                     ctx.getConfig().targetTableName(table.getName()), pkColumns, strategy, bound,
-                    range, pageSize, missingKeys);
+                    range, pageSize, missingKeys,
+                    ctx.effectiveSourceType(), ctx.effectiveTargetType());
             if (missingKeys.size() > ceiling) {
                 return RowDriftRepair.unhandled(missingKeys.size() + " missing row(s) found"
                         + " is above the targeted-repair ceiling of " + ceiling);
@@ -1234,7 +1235,8 @@ public class DataSyncService {
                                     String sourceSchema, String sourceTable, String targetSchema,
                                     String targetTable, List<String> pkColumns,
                                     CursorStrategy strategy, Object bound, KeyRange range,
-                                    int pageSize, List<List<Object>> missingKeys)
+                                    int pageSize, List<List<Object>> missingKeys,
+                                    DatabaseType sourceType, DatabaseType targetType)
             throws SQLException {
         // The lower edge moves page by page; the range's own upper edge always bounds it.
         List<Object> lastPk = range.lower;
@@ -1243,7 +1245,7 @@ public class DataSyncService {
             String sql = KeysetChunker.keyPageSql(sourceDialect, sourceSchema, sourceTable,
                     pkColumns, lastPk, range.upper, strategy, bound, pageSize, params);
             List<List<Object>> sourceKeys = readKeys(sourceConn, sourceDialect, sql, params,
-                    pkColumns.size());
+                    pkColumns.size(), sourceType);
             if (sourceKeys.isEmpty()) {
                 return;
             }
@@ -1253,7 +1255,7 @@ public class DataSyncService {
                     pkColumns, lastPk, pageEnd, strategy, bound, pageSize, targetParams);
             Set<String> present = new HashSet<>();
             for (List<Object> key : readKeys(targetConn, targetDialect, targetSql, targetParams,
-                    pkColumns.size())) {
+                    pkColumns.size(), targetType)) {
                 present.add(normalizedKey(key));
             }
             for (List<Object> key : sourceKeys) {
@@ -1270,7 +1272,8 @@ public class DataSyncService {
 
     /** Reads a key projection, one {@code List} per row, in result-column order. */
     private List<List<Object>> readKeys(Connection conn, SqlDialect dialect, String sql,
-                                        List<Object> params, int arity) throws SQLException {
+                                        List<Object> params, int arity, DatabaseType type)
+            throws SQLException {
         List<List<Object>> keys = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
@@ -1281,7 +1284,7 @@ public class DataSyncService {
                 while (rs.next()) {
                     List<Object> key = new ArrayList<>(arity);
                     for (int i = 1; i <= arity; i++) {
-                        key.add(rs.getObject(i));
+                        key.add(keyColumn(rs, i, type));
                     }
                     keys.add(key);
                 }
@@ -1799,17 +1802,21 @@ public class DataSyncService {
                 // An INSERT has no match clause, so the key columns only decide that shape —
                 // the cursor and replay logic above keeps using the real key list.
                 List<String> statementKeys = insertFirst ? List.of() : pkColumns;
-                // One dictionary read per table per pass; the native upsert and the emulated
-                // fallback take the same answer for the same reason (see the method's javadoc).
-                boolean canGuard = canGuardUnchangedRows(targetConn, ctx, targetTable, columns,
-                        pkColumns);
-                String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
-                        columns, statementKeys, typeByColumn, canGuard, declarationByColumn);
-                List<String> bindOrder = targetDialect.upsertBindOrder(columns, statementKeys);
-
                 boolean emulateUpsert = pkColumns.isEmpty()
                         || (targetDialect instanceof GenericSqlDialect
                             && !((GenericSqlDialect) targetDialect).supportsNativeUpsert());
+                boolean emulated = emulateUpsert && !pkColumns.isEmpty();
+                // One dictionary read per table per pass — and none at all when the answer
+                // cannot be used: insert-first ignores the guard (empty statement keys), and
+                // an emulated full load never guards replayed rows. Oracle/MySQL dictionary
+                // queries are ms-scale; a 50-table 2s poll used to pay ~25 of them a second
+                // for answers thrown away.
+                boolean canGuard = !insertFirst && !(emulated && !guardReplayedRows)
+                        && canGuardUnchangedRows(targetConn, ctx, targetTable, columns,
+                                pkColumns);
+                String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
+                        columns, statementKeys, typeByColumn, canGuard, declarationByColumn);
+                List<String> bindOrder = targetDialect.upsertBindOrder(columns, statementKeys);
 
                 if (pkColumns.isEmpty()) {
                     // Without a key there is no way to identify an existing row, so repeated
@@ -1822,7 +1829,6 @@ public class DataSyncService {
 
                 ColumnCleanser cleanser = ColumnCleanser.forTable(
                         ctx.getConfig(), table.getName());
-                boolean emulated = emulateUpsert && !pkColumns.isEmpty();
                 LobReadPolicy lobPolicy = buildLobPolicy(table, columns, md,
                         pkColumns, pkTrack, cleanser, emulated,
                         !ctx.getSourceDialect().streamsValidAcrossColumns());
@@ -2050,15 +2056,19 @@ public class DataSyncService {
     }
 
     /**
-     * Whether the source copy should run inside an explicit read transaction. Both LOB
-     * switches gate it: turning streaming off must restore the 1.7.7 connection behaviour
-     * as well as the read path, and {@code enable-source-streaming} is the narrow escape
-     * hatch for a PostgreSQL source where the long read transaction costs too much.
+     * Whether the source copy should run inside an explicit read transaction. Only the
+     * narrow {@code enable-source-streaming} escape hatch and the dialect gate it: the LOB
+     * master switch ({@code streaming-enabled}) is about how LOB values are read, and
+     * gating the read transaction on it as well meant the documented 1.7.7-compat knob
+     * silently turned off PostgreSQL result-set streaming — pgjdbc then buffers the whole
+     * table in driver heap regardless of the fetch size. Row streaming and inline LOB reads
+     * are independent concerns; the hatch remains for sources where the long read
+     * transaction itself costs too much.
      */
     private boolean needsSourceTransaction(SyncContext ctx) {
         SyncProperties.Lob lob = properties.getLob();
         SqlDialect sourceDialect = ctx.getSourceDialect();
-        return lob != null && lob.isStreamingEnabled() && lob.isEnableSourceStreaming()
+        return lob != null && lob.isEnableSourceStreaming()
                 && sourceDialect != null
                 && sourceDialect.requiresTransactionalSourceForStreaming();
     }
@@ -4018,10 +4028,12 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
             try (ResultSet rs = st.executeQuery(targetSql)) {
                 while (rs.next()) {
-                    if (!sourceKeys.contains(keyOf(rs, pk.size(), ctx.getTargetType()))) {
+                    if (!sourceKeys.contains(keyOf(rs, pk.size(), ctx.effectiveTargetType()))) {
                         List<Object> values = new ArrayList<>(pk.size());
                         for (int i = 1; i <= pk.size(); i++) {
-                            values.add(rs.getObject(i));
+                            // Portable values for the DELETE bind: a vendor-private temporal
+                            // object cannot be bound against another product's driver.
+                            values.add(keyColumn(rs, i, ctx.effectiveTargetType()));
                         }
                         toDelete.add(values);
                     }
@@ -4131,7 +4143,8 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             while (true) {
                 List<Object[]> chunk = readTargetPage(targetConn, targetDialect,
-                        lastKey == null ? firstPage : nextPage, pk, chunkKeys, lastKey);
+                        lastKey == null ? firstPage : nextPage, pk, chunkKeys, lastKey,
+                        ctx.effectiveTargetType());
                 if (chunk.isEmpty()) {
                     break;
                 }
@@ -4200,7 +4213,8 @@ public class DataSyncService {
 
     /** One page of target keys, in primary-key order, after {@code lastKey} when given. */
     private List<Object[]> readTargetPage(Connection conn, SqlDialect dialect, String sql,
-                                          List<String> pk, int chunkKeys, Object[] lastKey)
+                                          List<String> pk, int chunkKeys, Object[] lastKey,
+                                          DatabaseType type)
             throws SQLException {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             // setMaxRows is portable where LIMIT / TOP / FETCH FIRST are not.
@@ -4221,7 +4235,7 @@ public class DataSyncService {
                 while (rs.next()) {
                     Object[] row = new Object[pk.size()];
                     for (int i = 0; i < row.length; i++) {
-                        row[i] = rs.getObject(i + 1);
+                        row[i] = keyColumn(rs, i + 1, type);
                     }
                     rows.add(row);
                 }
@@ -4340,11 +4354,13 @@ public class DataSyncService {
      * would look "deleted at source" and deletion detection would empty the table. The
      * shared reader is exactly what the copy path wrote from, so keys are read through it.
      */
-    private static Object keyColumn(ResultSet rs, int oneBasedIndex, DatabaseType type)
+    static Object keyColumn(ResultSet rs, int oneBasedIndex, DatabaseType type)
             throws SQLException {
-        if (type != DatabaseType.TDENGINE) {
-            return rs.getObject(oneBasedIndex);
-        }
+        // Every source, not just TDengine: Oracle answers getObject with oracle.sql.TIMESTAMP
+        // and SQL Server with microsoft.sql.DateTimeOffset for temporal keys. Raw, those
+        // render as identity-ish toString on one side and epoch millis on the other, every
+        // target key looks "deleted at source" and deletion sync empties the table. The
+        // shared reader is exactly what the copy path wrote from.
         ResultSetMetaData meta = rs.getMetaData();
         return JdbcRowMapper.readValue(rs, oneBasedIndex, meta.getColumnType(oneBasedIndex),
                 meta.getColumnTypeName(oneBasedIndex), type);
