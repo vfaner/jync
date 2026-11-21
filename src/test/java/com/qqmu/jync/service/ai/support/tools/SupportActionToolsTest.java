@@ -12,6 +12,8 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.dto.SyncConfig;
+import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.EtlTask;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.UserRole;
@@ -39,6 +41,12 @@ class SupportActionToolsTest {
         p.setName(name);
         p.setOwnerUsername(owner);
         return p;
+    }
+
+    private static SyncConfig cdcConfig() {
+        SyncConfig config = new SyncConfig();
+        config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        return config;
     }
 
     private static EtlTask etlTask(long id, String name, String owner, Long batchId) {
@@ -90,6 +98,7 @@ class SupportActionToolsTest {
     void aCdcRebaselineIsPreparedAsAConfirmationCard() throws Exception {
         ProjectService projects = mock(ProjectService.class);
         when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "订单同步", "ops1")));
+        when(projects.loadConfig(any())).thenReturn(cdcConfig());
 
         var tool = new ControlProjectTool(projects, store);
         var result = out(tool.execute(args("projectId", 7L, "REBASELINE"),
@@ -103,6 +112,42 @@ class SupportActionToolsTest {
         verify(projects, never()).start(any(), any());
         verify(projects, never()).stop(any(), any());
         verify(projects, never()).syncNow(any(), any());
+    }
+
+    /**
+     * syncNow() refuses a CDC project with {@code error.project.cdc.use.rebaseline} at click
+     * time. The tool must not hand the model a card that is guaranteed to fail: the prompt
+     * already tells it to offer REBASELINE instead, and this keeps the two honest.
+     */
+    @Test
+    void syncNowOnACdcProjectIsRefusedWithTheKeyTheClickWouldReturn() throws Exception {
+        ProjectService projects = mock(ProjectService.class);
+        when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "订单同步", "ops1")));
+        when(projects.loadConfig(any())).thenReturn(cdcConfig());
+
+        var tool = new ControlProjectTool(projects, store);
+        var result = out(tool.execute(args("projectId", 7L, "SYNC_NOW"),
+                new ToolContext(AccessGuard.of("ops1", UserRole.OPS))));
+
+        assertThat(result.path("ok").asBoolean()).isFalse();
+        assertThat(result.path("error").asString()).isEqualTo("error.project.cdc.use.rebaseline");
+        assertThat(result.path("token").isMissingNode()).isTrue();
+        verify(projects, never()).syncNow(any(), any());
+    }
+
+    /** The card for a polling project still works: the guard only rejects the impossible ones. */
+    @Test
+    void syncNowOnAPollingProjectStillProducesACard() throws Exception {
+        ProjectService projects = mock(ProjectService.class);
+        when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "订单同步", "ops1")));
+        when(projects.loadConfig(any())).thenReturn(new SyncConfig());
+
+        var tool = new ControlProjectTool(projects, store);
+        var result = out(tool.execute(args("projectId", 7L, "SYNC_NOW"),
+                new ToolContext(AccessGuard.of("ops1", UserRole.OPS))));
+
+        assertThat(result.path("ok").asBoolean()).isTrue();
+        assertThat(result.path("token").asString()).isNotBlank();
     }
 
     @Test

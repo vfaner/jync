@@ -120,6 +120,29 @@ class SupportKnowledgeBaseTest {
         });
     }
 
+    /**
+     * The English assistant section used to be cut at 2,000 characters, dropping the
+     * diagnosis-order and row-count bullets — the model then answered "what can the assistant
+     * do" from the opening paragraphs only. The excerpt must reach those later bullets, and
+     * the confirmation-card boundary now lives in its own section so it survives the cut.
+     */
+    @Test
+    void theEnglishAssistantSectionKeepsItsLaterBullets() {
+        var en = kb.search("en",
+                "AI support assistant diagnosis suggestions executable confirmation card", 3);
+        String all = en.stream().map(SupportKnowledgeBase.Section::body)
+                .reduce("", String::concat);
+        assertThat(all).contains("Suggested diagnosis order").contains("confirmation card");
+    }
+
+    /** The per-section cap times topK must still fit the registry's result cap. */
+    @Test
+    void excerptsStayWithinTheTotalBudget() {
+        var hits = kb.search("en", "sync task failure connection timeout retry baseline", 5);
+        int total = hits.stream().mapToInt(hit -> hit.body().length()).sum();
+        assertThat(total).isLessThanOrEqualTo(6001);
+    }
+
     @Test
     void noMatchReturnsEmptyRatherThanEverything() {
         assertThat(kb.search("zh", "zzzz qqqq", 3)).isEmpty();

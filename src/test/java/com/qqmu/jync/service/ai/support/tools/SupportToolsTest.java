@@ -242,6 +242,65 @@ class SupportToolsTest {
                 .contains("\"progress\"");
     }
 
+    /**
+     * docs/security-data-boundary.md promises that checkpoint values are not sent to the
+     * external model — only whether one exists. A cursor is often a business value (account
+     * number, timestamp) and the previous version shipped it verbatim in the tool result.
+     */
+    @Test
+    void projectStatusDoesNotSendTheCursorValueToTheModel() throws Exception {
+        ProjectService projects = mock(ProjectService.class);
+        SyncProgressRepository progressRows = mock(SyncProgressRepository.class);
+        ChangeLogRepository changes = mock(ChangeLogRepository.class);
+        MetricsQueryService metrics = mock(MetricsQueryService.class);
+
+        when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "orders")));
+        when(projects.isRunning(any())).thenReturn(true);
+        when(projects.activeCycle(7L)).thenReturn(null);
+        when(progressRows.findByProjectId(7L)).thenReturn(List.of(progressRow("orders")));
+        when(changes.findFirstByProjectIdAndSuccessFalseOrderByOccurredAtDesc(7L))
+                .thenReturn(Optional.empty());
+        when(metrics.projectCurrent(7L)).thenReturn(Map.of());
+
+        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
+        var args = mapper.createObjectNode();
+        args.put("projectId", 7);
+
+        String json = mapper.writeValueAsString(tool.execute(args, ctx));
+        assertThat(json).doesNotContain("2026-11-18 10:00:00");
+        assertThat(json).contains("\"hasSyncValue\":true");
+    }
+
+    /** A driver error in the change log must not carry a URL credential to the provider. */
+    @Test
+    void theLastErrorSummaryIsRedactedBeforeItLeaves() throws Exception {
+        ProjectService projects = mock(ProjectService.class);
+        SyncProgressRepository progressRows = mock(SyncProgressRepository.class);
+        ChangeLogRepository changes = mock(ChangeLogRepository.class);
+        MetricsQueryService metrics = mock(MetricsQueryService.class);
+
+        com.qqmu.jync.model.ChangeLog failure = new com.qqmu.jync.model.ChangeLog();
+        failure.setProjectId(7L);
+        failure.setErrorDetail("connect reset while talking to "
+                + "jdbc:mysql://root:hunter2@db.internal:3306/x?password=hunter2 then retry");
+
+        when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "orders")));
+        when(projects.isRunning(any())).thenReturn(false);
+        when(projects.activeCycle(7L)).thenReturn(null);
+        when(progressRows.findByProjectId(7L)).thenReturn(List.of());
+        when(changes.findFirstByProjectIdAndSuccessFalseOrderByOccurredAtDesc(7L))
+                .thenReturn(Optional.of(failure));
+        when(metrics.projectCurrent(7L)).thenReturn(Map.of());
+
+        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
+        var args = mapper.createObjectNode();
+        args.put("projectId", 7);
+
+        String json = mapper.writeValueAsString(tool.execute(args, ctx));
+        assertThat(json).doesNotContain("hunter2");
+        assertThat(json).contains("<redacted>");
+    }
+
     @Test
     void projectStatusSurvivesAnUnreadableCycle() throws Exception {
         ProjectService projects = mock(ProjectService.class);

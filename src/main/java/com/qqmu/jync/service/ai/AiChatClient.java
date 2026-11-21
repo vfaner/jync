@@ -582,9 +582,17 @@ public class AiChatClient {
                         servedModel(root), System.currentTimeMillis() - start);
             }
             List<ToolCall> calls = new ArrayList<>();
-            partials.forEach((index, call) -> calls.add(new ToolCall(
-                    call.id.isEmpty() ? "call_" + index : call.id,
-                    call.name, call.args.toString())));
+            partials.forEach((index, call) -> {
+                // A nameless call cannot be executed, and echoing it back in the assistant
+                // turn makes the next request invalid (both providers require a name), which
+                // would end the conversation with a 400 instead of a readable tool error.
+                if (call.name == null || call.name.isBlank()) {
+                    log.warn("Dropping a tool call with no name from the OpenAI stream");
+                    return;
+                }
+                calls.add(new ToolCall(call.id.isEmpty() ? "call_" + index : call.id,
+                        call.name, call.args.toString()));
+            });
             return ToolChatResult.success(text.toString(), calls, served[0],
                     System.currentTimeMillis() - start);
         } catch (InterruptedException e) {
@@ -973,9 +981,16 @@ public class AiChatClient {
                 watchdog.cancel(false);
             }
             List<ToolCall> calls = new ArrayList<>();
-            partials.forEach((index, call) -> calls.add(new ToolCall(
-                    call.id.isEmpty() ? "toolu_" + index : call.id,
-                    call.name, call.args.toString())));
+            partials.forEach((index, call) -> {
+                // Same rule as the OpenAI path: a nameless tool_use cannot be answered and
+                // would make the next request invalid.
+                if (call.name == null || call.name.isBlank()) {
+                    log.warn("Dropping a tool call with no name from the Anthropic stream");
+                    return;
+                }
+                calls.add(new ToolCall(call.id.isEmpty() ? "toolu_" + index : call.id,
+                        call.name, call.args.toString()));
+            });
             return ToolChatResult.success(text.toString(), calls, served[0],
                     System.currentTimeMillis() - start);
         } catch (InterruptedException e) {
@@ -1091,13 +1106,17 @@ public class AiChatClient {
                     }
                     for (JsonNode call : chunk.path("message").path("tool_calls")) {
                         JsonNode fn = call.path("function");
+                        String name = fn.path("name").asString("");
+                        if (name.isBlank()) {
+                            log.warn("Dropping a tool call with no name from the Ollama stream");
+                            continue;
+                        }
                         // Native responses give an object; a proxy in between may hand back a
                         // string. Both must end up as the JSON text the registry parses.
                         String argsJson = fn.path("arguments").isObject()
                                 ? fn.path("arguments").toString()
                                 : fn.path("arguments").asString("");
-                        calls.add(new ToolCall("call_" + calls.size(),
-                                fn.path("name").asString(""), argsJson));
+                        calls.add(new ToolCall("call_" + calls.size(), name, argsJson));
                     }
                     if (chunk.path("done").asBoolean(false)) {
                         break;

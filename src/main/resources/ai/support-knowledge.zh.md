@@ -181,7 +181,9 @@ Cron 用 Quartz 语法，6 段或 7 段，秒在最前，保存与启动时都�
 3. 源库必须为 ARCHIVELOG，开启库级 SUPPLEMENTAL LOG DATA，选中的每张表都要有
    SUPPLEMENTAL LOG DATA (ALL) COLUMNS。
 4. 保存后到任务详情页把同步策略切换为日志 CDC，选择表并启动。
-5. 多租户 CDB 环境要确保挖掘账号有权访问目标 PDB 的归档日志；归档保留建议 ≥ 24 小时。
+5. Oracle 11g+（12c 起的挖掘角色检查按版本自适应）。
+6. 多租户 CDB 环境必须在 CDB$ROOT 里执行 DBMS_LOGMNR，并确保挖掘账号有权访问目标 PDB 的
+   归档日志；归档保留建议 ≥ 24 小时。
 6. 行外 LOB 在 LogMiner 里只有占位符：按 sync.cdc.logminer.missing-lob-policy 处理——
    skip（默认）跳过这类变更并限流告警，目标保留旧值，需要对该表补一次全量追平；
    fail 在首条此类变更处停车且不推进位点。状态面板可见 skippedMissingLob 与 missingLobByTable。
@@ -189,7 +191,9 @@ Cron 用 Quartz 语法，6 段或 7 段，秒在最前，保存与启动时都�
 ## MySQL CDC 前提
 
 - MySQL 5.7+；log_bin=ON、binlog_format=ROW、binlog_row_image=FULL。
-- 账号需 REPLICATION SLAVE 与 REPLICATION CLIENT。
+- 账号需 REPLICATION SLAVE 与 REPLICATION CLIENT（MariaDB 10.5 起该权限名为 BINLOG MONITOR）。
+- 任何 MySQL 线协议内核（MariaDB、TiDB、OceanBase、GBase，或声明为 MySQL 的自定义连接）都能
+  通过 MySQL 系列校验，但连接测试必须真的解出一条 binlog 事件才算通过。
 - binlog 保留 ≥ 24 小时；位点是 binlog 文件 + 偏移（含 GTID）。
 - 每个任务用 server_id = sync.cdc.server-id-offset（默认 612000）+ 项目 ID；
   同一源库上不要让两个实例的同一项目 ID 同时消费，否则会互相踢下线。
@@ -203,23 +207,31 @@ Cron 用 Quartz 语法，6 段或 7 段，秒在最前，保存与启动时都�
 
 ## PostgreSQL 逻辑解码前提
 
-- PostgreSQL 11+，以及 openGauss、GaussDB、Kingbase、Highgo、Vastbase 等 PG 系内核。
+- PostgreSQL 11+，以及 openGauss、GaussDB、Kingbase、Highgo、Vastbase、Oscar、RaseSQL、
+  SeaBoxSQL 等 PG 系内核（声明为 POSTGRES 的自定义连接也走同一系列校验，连接测试会实测复制槽）。
 - wal_level=logical；账号需 REPLICATION（openGauss 不要求）；openGauss 建议 enable_slot_log=on。
 - 每张表 REPLICA IDENTITY 不能是 NOTHING。
 - 位点是 LSN；复制槽滞留 WAL 超过 4GiB 会在面板告警。
 
 ## SQL Server CDC 前提
 
-- SQL Server 2012+；库级执行 sp_cdc_enable_db；SQL Server Agent 必须运行。
-- 账号加入 cdc_Admin / cdc_reader。
+- SQL Server 2012+；库级执行 sp_cdc_enable_db，并逐表执行 sp_cdc_enable_table（消费者会一直
+  轮询，直到捕获实例出现；只开库级不会捕获任何行）。
+- SQL Server Agent 必须运行（捕获作业归它管）；Azure SQL Database 没有 Agent，不支持本模式。
+- 账号加入 cdc_Admin / cdc_reader；缺少 VIEW SERVER STATE 时连接自检只能给警告，不阻断。
 - 位点是 LSN；真空闲时默认每 1 秒轮询一次。
 
 ## 崖山 YStream 前提
 
 - YashanDB 23.4+；ARCHIVELOG 且连接主库；走 YStream，不走 LogMiner。
 - 账号需 CREATE SESSION、SELECT ANY TABLE、YSTREAM_CAPTURE、SELECT ANY DICTIONARY。
-- 每张选中的表执行 ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS；缺补充日志的 DML 会静默不进流。
-- 必须显式选表；每个实例最多 32 个 YStream 服务；位点是五元组。
+- 每张选中的表执行 ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS；缺补充日志的 DML 会静默不进流
+  （DBA_LOG_GROUPS 里没有类型为 ALL 的组就是没开）。新建的表尤其容易漏，加组后同一条插入立刻可见。
+- 必须显式选表；每个实例最多 32 个 YStream 服务。
+- 位点是五元组（commitScn / instanceId / groupLsn / groupOffset / batchRowId）。Jync 自己存的
+  位点是权威：服务端 checkpoint 只反映它最近一次周期落盘，不能用来决定从哪继续。
+- 回滚到 savepoint 的行不会出现在流里（服务端解析 redo 时已过滤，23.4.7 实测不发 savepoint 事件）；
+  带 chunked LOB 的行无法拼装，会让任务进入停车状态，需排除该表或改用轮询。
 
 ## CDC 位点、租约与多实例
 
@@ -436,6 +448,9 @@ MongoDB 外，驱动随包内置。这些厂商需要自备 JDBC jar 并在连�
 - 目标库的配置与状态表必须为空；用户按用户名合并，导入后必须至少还有一个管理员。
 - 包用 AES-256-GCM 加密，口令至少 8 位，单包 ≤ 20MB；包里携带旧加密密钥，导入后请销毁。
 - 不进包：变更日志、审计、性能采样、运行历史、分块断点、TLS 证书。
+- 导入会重新分配项目 id，且不恢复「基线已完成」标记：CDC 项目首次启动会重新做一次全量加载。
+  PG 复制槽名只含 project id、YStream 服务名带随机后缀，换库后旧槽/旧服务必须手工清理，
+  否则新实例可能接到仍在运行的旧槽上；迁移前先停掉旧实例的 CDC。
 
 ## 备份、升级与数据目录
 
@@ -447,7 +462,8 @@ MongoDB 外，驱动随包内置。这些厂商需要自备 JDBC jar 并在连�
 
 ## 告警通知
 
-「告警通知」支持同步失败、轮询卡死、项目未运行、CDC 停摆、数据漂移、连接健康、PG slot 积压。
+「告警通知」支持同步失败、轮询卡死、项目未运行、CDC 停摆、数据漂移、连接健康、PG slot 积压、
+DDL 被跳过（CDC 遇到无法自动执行的 DDL）、CDC 目标端已修复。
 支持通用 JSON、钉钉、企业微信、飞书；可设置冷却时间与恢复通知。Webhook 地址加密存储。
 默认拒绝指向本机或内网的 Webhook（alert.webhook.allow-private=false），发到内网聊天服务时再打开。
 
@@ -491,6 +507,9 @@ MongoDB 外，驱动随包内置。这些厂商需要自备 JDBC jar 并在连�
 - 连接测试失败：确认端口、账号权限与防火墙；自备驱动时确认 jar 路径与驱动类名。
 - 全量慢：先看吞吐日志的 query/read/write/commit 占比，再按对应方向调参。
 - 页面 403：多为开了强制 HTTPS 但请求仍是明文，检查代理头与 trusted-proxies。
+- 保存证书后 HTTPS 页面打不开：连接器只在启动时加载证书，重启 Jync 并确认 HTTPS 端口已放行。
+- 开启 SSO 后登录循环：/login/local 本地登录仍可用；配置改坏了可用 JYN_RESET_LOGIN=true 启动
+  恢复，恢复后立即改回。
 
 ## AI 配置
 
@@ -499,7 +518,8 @@ MongoDB 外，驱动随包内置。这些厂商需要自备 JDBC jar 并在连�
 - 协议：OpenAI 兼容（自建与多数国产端点）、Anthropic、Ollama（兼容层）、Ollama（原生接口）；
   保存前可「探测连通性」，尽早发现填错。
 - 参数：Base URL、模型名、最大 token（长存储过程要留足）、超时秒数、深度思考（默认跟随；
-  本地推理模型不关会把预算花在思考上，正文可能为空）。
+  本地推理模型不关会把预算花在思考上，正文可能为空）。最大 token 与深度思考主要影响
+  「存储过程转换」；运维助手每次回答使用固定的短回复预算，不读这里的最大 token 设置。
 - 用途一：存储过程转换的 AI 草稿。用途二：悬浮运维助手，只在存在启用供应商时出现。
 - 探测与转换都会请求你配置的端点，转换还会带上存储过程源码；内网或有合规要求的部署请优先接
   本地/自建端点。没有启用供应商时不产生任何外部请求；sync.ai.enabled=false 彻底移除该功能。

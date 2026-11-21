@@ -25,7 +25,6 @@ import tools.jackson.databind.JsonNode;
 public class ProjectStatusTool implements SupportTool {
 
     private static final int MAX_PROGRESS_ROWS = 10;
-    private static final int MAX_ERROR_CHARS = 200;
 
     private final ProjectService projects;
     private final SyncProgressRepository progressRows;
@@ -97,9 +96,7 @@ public class ProjectStatusTool implements SupportTool {
                     ? null : lastError.getOccurredAt().toString());
             String detail = lastError.getErrorDetail() != null
                     ? lastError.getErrorDetail() : lastError.getDetails();
-            detail = detail == null ? "" : detail;
-            e.put("summary", detail.length() > MAX_ERROR_CHARS
-                    ? detail.substring(0, MAX_ERROR_CHARS) : detail);
+            e.put("summary", ToolText.safe(detail, ToolText.MAX_SUMMARY));
             out.put("lastError", e);
         }
 
@@ -111,7 +108,8 @@ public class ProjectStatusTool implements SupportTool {
             Map<String, Object> p = new LinkedHashMap<>();
             p.put("object", row.getObjectName());
             p.put("strategy", row.getCursorStrategy());
-            p.put("lastSyncValue", row.getLastSyncValue());
+            // 断点水位值是业务值（账号、时间戳等），数据边界文档承诺只发“是否存在”。
+            p.put("hasSyncValue", row.getLastSyncValue() != null);
             p.put("updatedAt", row.getLastSyncTime() == null
                     ? null : row.getLastSyncTime().toString());
             progress.add(p);

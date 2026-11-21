@@ -8,6 +8,7 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.support.SupportActionStore;
 import com.qqmu.jync.service.ai.support.SupportArgs;
@@ -79,6 +80,27 @@ public class ControlProjectTool implements SupportTool {
         }
         if (!ctx.actor().canEdit(project.getOwnerUsername())) {
             return error("error.accessDenied");
+        }
+        // A card the click is guaranteed to refuse is worse than a sentence in the chat: the
+        // service re-checks these same preconditions when the user confirms. Mirror them
+        // here so the assistant can explain instead of producing a dead button.
+        var config = projects.loadConfig(project);
+        if (config != null) {
+            if (action == SupportActionStore.Action.REBASELINE
+                    && !config.getCaptureStrategyOrDefault().isLogCdc()) {
+                return error("error.project.cdc.not.cdc");
+            }
+            if (action == SupportActionStore.Action.SYNC_NOW) {
+                if (config.getCaptureStrategyOrDefault().isLogCdc()) {
+                    return error("error.project.cdc.use.rebaseline");
+                }
+                if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+                    return error("error.project.redis.cdcOnly");
+                }
+                if (config.hasNoSyncObjects()) {
+                    return error("error.project.no.objects");
+                }
+            }
         }
 
         String token = actions.put(ctx.actor().username(), SupportActionStore.Kind.PROJECT,

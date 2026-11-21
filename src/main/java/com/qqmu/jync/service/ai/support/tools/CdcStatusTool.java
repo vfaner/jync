@@ -103,11 +103,17 @@ public class CdcStatusTool implements SupportTool {
         return out;
     }
 
-    /** Instants become ISO strings; the registry's mapper must not guess a date format. */
+    /**
+     * Instants become ISO strings; the registry's mapper must not guess a date format.
+     * Free text (the consumer's last error) is masked and capped before it leaves the
+     * process — a driver error can carry a JDBC URL or a password assignment.
+     */
     private Map<String, Object> textify(Map<String, Object> snapshot) {
         Map<String, Object> out = new LinkedHashMap<>();
-        snapshot.forEach((key, value) ->
-                out.put(key, value instanceof Instant instant ? instant.toString() : value));
+        snapshot.forEach((key, value) -> out.put(key,
+                value instanceof Instant instant ? instant.toString()
+                        : value instanceof String text
+                                ? ToolText.safe(text, ToolText.MAX_SUMMARY) : value));
         return out;
     }
 

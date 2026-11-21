@@ -41,16 +41,27 @@ public final class SupportArgs {
     }
 
     public static Long requireLong(JsonNode args, String field) {
+        Long value = optionalLong(args, field);
+        if (value == null || value <= 0) {
+            throw new IllegalArgumentException(BAD_ARGS);
+        }
+        return value;
+    }
+
+    /**
+     * An optional integer. A present value must be an integral number: {@code 7.9} used to be
+     * silently truncated to 7 and query the wrong row, and a string {@code "12"} silently fell
+     * back to a default. Both are model mistakes the tool should report, not repair.
+     */
+    public static Long optionalLong(JsonNode args, String field) {
         JsonNode node = args.path(field);
-        if (!node.isNumber()) {
+        if (node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isIntegralNumber()) {
             throw new IllegalArgumentException(BAD_ARGS);
         }
         return node.asLong();
-    }
-
-    public static Long optionalLong(JsonNode args, String field) {
-        JsonNode node = args.path(field);
-        return node.isNumber() ? node.asLong() : null;
     }
 
     /** Parses a control action, refusing anything outside the tool's allowed set. */

@@ -199,14 +199,19 @@ executes once when a worker becomes free.
 3. The source needs ARCHIVELOG and database-level SUPPLEMENTAL LOG DATA; each selected table needs
    (ALL) COLUMNS.
 4. Switch to log CDC on the task detail page, select tables and start.
-5. In a CDB the mining user must read the target PDB's archives; keep at least 24 hours.
-6. Out-of-line LOBs appear as placeholders: missing-lob-policy=skip warns and keeps the old target
+5. Oracle 11g+ (the mining-role check adapts to the server version).
+6. In a CDB, DBMS_LOGMNR must run in CDB$ROOT and the mining user must read the target PDB's
+   archives; keep at least 24 hours.
+7. Out-of-line LOBs appear as placeholders: missing-lob-policy=skip warns and keeps the old target
    value (run a full sync to catch up); fail parks at the first one.
 
 ## MySQL CDC prerequisites
 
 - MySQL 5.7+; log_bin=ON, binlog_format=ROW, binlog_row_image=FULL.
-- The account needs REPLICATION SLAVE and REPLICATION CLIENT.
+- The account needs REPLICATION SLAVE and REPLICATION CLIENT (named BINLOG MONITOR from MariaDB
+  10.5 on).
+- Any MySQL-wire kernel (MariaDB, TiDB, OceanBase, GBase, or a CUSTOM connection declared as MySQL)
+  passes the family gate, but the connection test must decode one real binlog event to pass.
 - Keep binlog for at least 24 hours; the position is binlog file + offset (including GTID).
 - Each task uses server_id = sync.cdc.server-id-offset (default 612000) + project id; never let two
   instances consume the same project id against one source, or they will disconnect each other.
@@ -221,7 +226,9 @@ executes once when a worker becomes free.
 
 ## PostgreSQL logical decoding prerequisites
 
-- PostgreSQL 11+, plus PG-family kernels such as openGauss, GaussDB, Kingbase, Highgo and Vastbase.
+- PostgreSQL 11+, plus PG-family kernels such as openGauss, GaussDB, Kingbase, Highgo, Vastbase,
+  Oscar, RaseSQL and SeaBoxSQL (a CUSTOM connection declared as POSTGRES goes through the same
+  family gate and the live probe tests the slot for real).
 - wal_level=logical; the account needs REPLICATION (openGauss does not require it); openGauss
   should set enable_slot_log=on.
 - Every table's REPLICA IDENTITY must not be NOTHING.
@@ -229,8 +236,13 @@ executes once when a worker becomes free.
 
 ## SQL Server CDC prerequisites
 
-- SQL Server 2012+; run sp_cdc_enable_db at database level; SQL Server Agent must be running.
-- The account must be in cdc_Admin / cdc_reader.
+- SQL Server 2012+; run sp_cdc_enable_db at database level AND sys.sp_cdc_enable_table per table
+  (the consumer keeps polling until the capture instance appears; database-level alone captures
+  nothing).
+- SQL Server Agent must be running (the capture job runs under it); Azure SQL Database has no
+  Agent and is not supported.
+- The account must be in cdc_Admin / cdc_reader; without VIEW SERVER STATE the connection probe
+  degrades to a warning instead of failing.
 - The position is the LSN; the consumer polls every 1 second when idle.
 
 ## YashanDB YStream prerequisites
@@ -238,9 +250,15 @@ executes once when a worker becomes free.
 - YashanDB 23.4+; ARCHIVELOG mode and a connection to the primary; uses YStream, not LogMiner.
 - The account needs CREATE SESSION, SELECT ANY TABLE, YSTREAM_CAPTURE and SELECT ANY DICTIONARY.
 - Run ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS on every selected table; without it DML silently
-  misses the stream.
-- Tables must be selected explicitly; each instance allows at most 32 YStream services; the
-  position is a five-part tuple.
+  misses the stream (the table has no ALL-type group in DBA_LOG_GROUPS). Newly created tables are
+  the usual gap; once the group exists the same insert appears in the stream immediately.
+- Tables must be selected explicitly; each instance allows at most 32 YStream services.
+- The position is a five-part tuple (commitScn / instanceId / groupLsn / groupOffset /
+  batchRowId). Jync's own stored position is the authority: the server checkpoint only reflects
+  its last periodic flush and must not decide where to resume.
+- Rows rolled back to a savepoint never appear in the stream (the server filters them while
+  parsing redo; 23.4.7 was measured not to emit savepoint LCRs). A row carrying a chunked LOB
+  cannot be assembled and parks the project: exclude that table or switch it to polling.
 
 ## CDC positions, leases and multiple instances
 
@@ -520,6 +538,10 @@ External users keep only a session; they are not written to app_user and have no
 - The AES-256-GCM package needs an 8+ character password, is limited to 20MB, and carries the
   old keys — destroy it after import.
 - Not included: change logs, audit, metrics, run history, checkpoints, TLS files.
+- Import reallocates project ids and does NOT restore the "baseline done" flag, so a CDC project
+  runs a full load again on first start. PG slot names contain only the project id and YStream
+  service names carry a random suffix: stop the old instance's CDC and clean old slots/services
+  before importing, or a new task can attach to a slot that is still running.
 
 ## Backup, upgrade and data directory
 
@@ -533,8 +555,9 @@ External users keep only a session; they are not written to app_user and have no
 
 ## Alerts
 
-Alerts cover sync failures, stalled polling, idle projects, stopped CDC, drift, connection health
-and PG slot backlog. Generic JSON, DingTalk, WeCom and Feishu are supported, with cooldown and
+Alerts cover sync failures, stalled polling, idle projects, stopped CDC, drift, connection health,
+PG slot backlog, skipped DDL (a CDC statement that could not be applied automatically) and a
+repaired CDC target table. Generic JSON, DingTalk, WeCom and Feishu are supported, with cooldown and
 recovery notices. Webhook URLs are stored encrypted. Webhooks pointing at localhost or private
 networks are rejected by default (alert.webhook.allow-private=false); enable it for internal chat
 services.
@@ -609,7 +632,9 @@ Settings → AI providers holds model endpoints; one is enabled at a time and ke
 like database passwords. Uses: AI drafts for procedure conversion and the floating assistant.
 - Protocols: OpenAI-compatible, Anthropic, Ollama compatible and native.
 - Fields: base URL, model, max tokens (long procedures need room), timeout and reasoning (follow
-  by default; local reasoning models may return no body).
+  by default; local reasoning models may return no body). Max tokens and reasoning mainly govern
+  procedure conversion; the operations assistant uses a fixed short reply budget and does not read
+  this setting.
 - Probes and drafts call your endpoint and send procedure source; prefer a local endpoint. With no
   provider there is no external request; sync.ai.enabled=false removes the feature.
 
@@ -667,6 +692,9 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   exact row count of one table on both sides.
 - It searches this knowledge base for how-to answers and drafts a new task from a description, which
   the user must review before it pre-fills the form.
+
+## Assistant actions and confirmation cards
+
 - Runtime actions it can perform: start / stop a sync task, sync once now, rebuild the CDC
   baseline, enable / disable / run an ETL task now, and enable / disable / run / cancel a
   dedicated-migration task. The assistant only produces a confirmation card and never executes
@@ -680,6 +708,9 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   external authentication, alerts, AI settings, users and audit are outside the assistant's reach,
   and it cannot run SQL. A change-log (CDC) project cannot "sync now"; it can only rebuild its
   baseline, and the assistant says so instead of offering a card that is bound to be refused.
+
+## Assistant limits and data boundary
+
 - Tool results are a snapshot taken at query time, not a live feed: answers carry the time or the
   minutes since then, and a fresh call is needed for a newer state. The prerequisite self-check
   runs at most twice and the row comparison at most three times per conversation; on reaching the

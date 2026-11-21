@@ -38,12 +38,20 @@ public class SupportKnowledgeBase {
      * <p>600 was too short for the sections that matter during an incident: the CDC
      * baseline section reaches its "does a rebuild delete rows?" answer past character 600,
      * so the model received the setup and none of the conclusion. 1000 fixed that section
-     * but not the assistant section: its English text puts the one-call diagnosis bullets
-     * past 1000, so a question about the assistant itself was answered without them. At
-     * 2000 the default three-section answer is still about 6 KB, under the registry's 8 KB
-     * result cap.
+     * but not the assistant section, whose English text puts its later bullets past 1000.
+     * 3000 covers the longest surviving section ("When data stops arriving", ~2.1 KB) with
+     * room to spare; the total across sections is still bounded by
+     * {@link #TOTAL_EXCERPT_BUDGET}, well under the registry's 8 KB result cap.
      */
-    private static final int MAX_EXCERPT = 2000;
+    private static final int MAX_EXCERPT = 3000;
+
+    /**
+     * Total body characters across one search result. Three maximal sections would be 9 KB,
+     * which the tool registry would silently cut at 8 KB — losing the last section entirely
+     * instead of shortening each. The budget gives the first (best-scoring) sections most of
+     * the space and drops the tail section rather than truncating the JSON.
+     */
+    private static final int TOTAL_EXCERPT_BUDGET = 6000;
 
     private static final int MAX_TOP_K = 5;
 
@@ -119,15 +127,26 @@ public class SupportKnowledgeBase {
         hits.sort(Comparator.comparingInt(Scored::score).reversed());
 
         List<Section> result = new ArrayList<>();
+        int budget = TOTAL_EXCERPT_BUDGET;
         for (Scored hit : hits) {
-            if (result.size() >= limit) {
+            if (result.size() >= limit || budget <= 0) {
                 break;
             }
             String body = hit.section().body();
-            result.add(new Section(hit.section().title(),
-                    body.length() > MAX_EXCERPT ? body.substring(0, MAX_EXCERPT) + "…" : body));
+            int cap = Math.min(MAX_EXCERPT, budget);
+            if (body.length() > cap) {
+                body = cutAtLine(body, cap) + "…";
+            }
+            result.add(new Section(hit.section().title(), body));
+            budget -= Math.min(body.length(), cap + 1);
         }
         return result;
+    }
+
+    /** Cut on a line boundary so a bullet is never cut mid-sentence; fall back near the cap. */
+    private static String cutAtLine(String body, int cap) {
+        int cut = body.lastIndexOf('\n', cap);
+        return cut > cap / 2 ? body.substring(0, cut) : body.substring(0, cap);
     }
 
     private record Scored(Section section, int score) {

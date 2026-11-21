@@ -33,7 +33,6 @@ public class RecentFailuresTool implements SupportTool {
 
     static final int DEFAULT_HOURS = 24;
     static final int MAX_HOURS = 168;
-    private static final int MAX_SUMMARY = 200;
 
     private final ChangeLogRepository changes;
     private final ProjectRepository projects;
@@ -107,9 +106,6 @@ public class RecentFailuresTool implements SupportTool {
     }
 
     private String clamp(String detail) {
-        if (detail == null) {
-            return null;
-        }
-        return detail.length() > MAX_SUMMARY ? detail.substring(0, MAX_SUMMARY) : detail;
+        return ToolText.safe(detail, ToolText.MAX_SUMMARY);
     }
 }

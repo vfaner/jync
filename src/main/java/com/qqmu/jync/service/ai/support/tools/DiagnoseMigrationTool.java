@@ -213,6 +213,6 @@ public class DiagnoseMigrationTool implements SupportTool {
     }
 
     private String clamp(String value, int max) {
-        return value == null || value.length() <= max ? value : value.substring(0, max);
+        return ToolText.safe(value, max);
     }
 }

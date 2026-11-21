@@ -52,6 +52,15 @@ public class DiagnosticRedactor {
                     + "|authorization|credential)\\b(\\s*[=:]\\s*)(?!<redacted>)\\S+");
 
     public String redact(String input) {
+        return redactText(input);
+    }
+
+    /**
+     * The same transform without Spring wiring, for callers that only have a free-text value
+     * and no bean at hand — the AI support tools forward driver and user error text to an
+     * external model and must run it through this first.
+     */
+    public static String redactText(String input) {
         if (input == null || input.isEmpty()) {
             return "";
         }
