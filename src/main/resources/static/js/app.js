@@ -3331,7 +3331,20 @@
 
           var freshOverview = fresh.getElementById('project-overview');
           if (overview && freshOverview) {
+            // 变动的数字格跳一下，和统计卡同一套「这是活的」语言。
+            var beforeNums = overview.querySelectorAll('td.num');
+            var previousNums = [];
+            for (var n = 0; n < beforeNums.length; n++) {
+              previousNums.push(beforeNums[n].textContent);
+            }
             overview.innerHTML = freshOverview.innerHTML;
+            var afterNums = overview.querySelectorAll('td.num');
+            for (var m = 0; m < afterNums.length; m++) {
+              if (previousNums[m] !== undefined
+                  && previousNums[m] !== afterNums[m].textContent) {
+                afterNums[m].className += ' is-bump';
+              }
+            }
           }
           stampLiveUpdated();
         })

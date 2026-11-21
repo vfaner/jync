@@ -1909,6 +1909,28 @@ table.tbl a.truncate { display: block; }
 /* 只剩一块时别再留一条空列：内存趋势退场后，活动趋势独占这一行。 */
 .dash-grid.is-single { grid-template-columns: 1fr; }
 
+/* 看板底部双卡（概览 + 活动流）：与统计卡同款顶部渐变条、与整机/进程资源同款胶囊标题，
+   整页徽标语言统一；并排布局不动，只改展现。 */
+.dash-panel { position: relative; overflow: hidden; }
+.dash-panel::before {
+  content: ""; position: absolute; top: 0; right: 0; left: 0; height: 3px;
+  background: linear-gradient(90deg, var(--brand), var(--accent));
+}
+.feed-card.dash-panel::before { background: linear-gradient(90deg, var(--info), #38bdf8); }
+/* 概览卡行少时下半截空：合计条钉在底边，把空间用起来并与活动流密度平衡。 */
+.overview-card { display: flex; flex-direction: column; }
+.overview-card .card-body { flex: 1; }
+.overview-foot { display: flex; align-items: center; }
+/* 概览表扫读：斑马纹 + 运行中行左缘绿条 + 等宽数字；刷新时变动的数字跳一下。 */
+#project-overview table.tbl tbody tr:nth-child(even) { background: var(--bg-soft); }
+#project-overview table.tbl tbody tr:hover {
+  background: var(--fb-brand-06);
+  background: color-mix(in srgb, var(--brand) 6%, transparent);
+}
+#project-overview table.tbl td.num { font-variant-numeric: tabular-nums; }
+#project-overview table.tbl tr.is-running td:first-child { box-shadow: inset 3px 0 0 var(--ok); }
+#project-overview td.num.is-bump { animation: stat-bump .7s ease; }
+
 /* 进程资源块里的四条曲线：两列排布；卡片里的 .chart-slot 原本是给整行大图用的高度。 */
 .chart-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .chart-tile-title { font-size: 13px; font-weight: 600; color: var(--ink-soft); }
@@ -2047,7 +2069,8 @@ table.tbl a.truncate { display: block; }
   .feed-body { max-height: 460px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .live-dot, .feed-live li.is-new, .stat-n.is-bump { animation: none; }
+  .live-dot, .feed-live li.is-new, .stat-n.is-bump,
+  #project-overview td.num.is-bump { animation: none; }
   .feed-body { scroll-behavior: auto; }
   .feed-live, .feed-live li { transition: none; }
 }

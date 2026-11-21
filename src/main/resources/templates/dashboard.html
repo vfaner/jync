@@ -263,9 +263,13 @@
     <!--/* 第二行：项目概览 + 最新活动并排。 */-->
     <div class="dash-grid">
             <!-- 项目概览 -->
-            <div class="card" id="project-overview" th:fragment="projectOverview">
+            <div class="card dash-panel overview-card" id="project-overview" th:fragment="projectOverview">
                 <div class="card-head">
-                    <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
+                    <div class="sec-pill">
+                        <svg class="ico"><use href="#diagram-3"/></svg>
+                        <h2 th:text="#{dashboard.projectOverview}">Project overview</h2>
+                        <span class="live-dot" aria-hidden="true"></span>
+                    </div>
                     <a class="btn btn-ghost btn-xs" th:href="@{/projects}">
                         <span th:text="#{common.all}">All</span><svg class="ico"><use href="#chevron-right"/></svg>
                     </a>
@@ -300,7 +304,8 @@
                             </tr>
                             </thead>
                             <tbody>
-                            <tr th:each="s : ${stats.projectSummaries}">
+                            <tr th:each="s : ${stats.projectSummaries}"
+                                th:classappend="${s.statusName() == 'RUNNING'} ? 'is-running' : ''">
                                 <td>
                                     <a style="font-weight:600"
                                        th:href="@{/projects/{id}(id=${s.project.id})}"
@@ -327,14 +332,25 @@
                         </table>
                     </div>
                 </div>
+                <!--/* 行少时卡片下半截是空的：用一条随刷新更新的合计条把空间用起来，
+                       也与右侧活动流的密度平衡。 */-->
+                <div class="card-foot overview-foot">
+                    <span class="small muted"
+                          th:text="#{dashboard.overviewSummary(${stats.projectCount},
+                                   ${stats.enabledProjectCount}, ${stats.errorTaskCount})}">0 tasks</span>
+                </div>
             </div>
 
         <!--/* 实时活动流：10 秒换一次内容，新条目滑入；条目多到超出视口时按行轮播——
                首行淡出、下一行升上来，循环往复，悬停即停，尊重系统「减少动态效果」偏好。 */-->
-        <div class="card feed-card" id="activity-feed"
+        <div class="card dash-panel feed-card" id="activity-feed"
              th:attr="data-refresh-url=@{/dashboard/activity-feed}">
             <div class="card-head">
-                <h2 th:text="#{dashboard.recentActivity}">Recent activity</h2>
+                <div class="sec-pill">
+                    <svg class="ico"><use href="#clock-history"/></svg>
+                    <h2 th:text="#{dashboard.recentActivity}">Recent activity</h2>
+                    <span class="live-dot" aria-hidden="true"></span>
+                </div>
                 <a class="btn btn-ghost btn-xs" th:href="@{/change-logs}">
                     <span th:text="#{project.viewAllLogs}">Full log</span><svg class="ico"><use href="#chevron-right"/></svg>
                 </a>

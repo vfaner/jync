@@ -78,6 +78,23 @@ class DashboardLiveViewTest {
     }
 
     @Test
+    void theBottomPanelsShareTheBadgeLanguageAndKeepTheirSideBySideRow() throws Exception {
+        String html = dashboard(Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("card dash-panel overview-card")
+                .contains("card dash-panel feed-card")
+                .contains("overview-foot")
+                .contains("共 3 个任务");
+        // 并排布局是硬要求：样式优化不得把双卡改成上下堆叠。
+        String css = java.nio.file.Files.readString(
+                java.nio.file.Path.of("src/main/resources/static/css/app.css"),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(css).contains(".dash-grid {\n  display: grid; grid-template-columns: 1.62fr 1fr;");
+        assertThat(css).contains(".dash-panel::before")
+                .contains("#project-overview table.tbl tr.is-running td:first-child");
+    }
+
+    @Test
     void theLivePillShowsStatusAndADynamicUpdateStamp() throws Exception {
         String html = dashboard(Locale.SIMPLIFIED_CHINESE);
 
