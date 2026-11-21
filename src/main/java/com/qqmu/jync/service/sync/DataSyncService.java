@@ -3299,7 +3299,7 @@ public class DataSyncService {
                         // (oracle.sql.TIMESTAMP / microsoft.sql.DateTimeOffset) cannot be
                         // serialized into a keyset boundary, so read through the JDBC type.
                         key.add(JdbcRowMapper.readValue(rs, i, md.getColumnType(i),
-                                md.getColumnTypeName(i), ctx.getSourceType()));
+                                md.getColumnTypeName(i), ctx.effectiveSourceType()));
                     }
                     boundaries.add(key);
                 }
@@ -3969,7 +3969,7 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(st, properties.getQueryTimeoutSeconds());
             try (ResultSet rs = st.executeQuery(sourceSql)) {
                 while (rs.next()) {
-                    sourceKeys.add(cleansedKeyOf(cleanser, pk, rs, ctx.getSourceType()));
+                    sourceKeys.add(cleansedKeyOf(cleanser, pk, rs, ctx.effectiveSourceType()));
                 }
             }
         }
@@ -4023,23 +4023,35 @@ public class DataSyncService {
             }
             targetConn.commit();
         } catch (SQLException e) {
-            targetConn.rollback();
+            rollbackQuietly(targetConn, targetTable);
             throw e;
         } catch (RuntimeException e) {
             // 与 copyRows 同一条纪律:锁租约丢失、或驱动在 commit 里抛未检查异常时,
             // finally 恢复自动提交会让驱动提交本应放弃的这批删除。
-            try {
-                targetConn.rollback();
-            } catch (SQLException rollbackError) {
-                log.error("Rollback after an unchecked failure failed for {}: {}",
-                        targetTable, rollbackError.getMessage());
-            }
+            rollbackQuietly(targetConn, targetTable);
             throw e;
         } finally {
-            targetConn.setAutoCommit(originalAutoCommit);
+            try {
+                targetConn.setAutoCommit(originalAutoCommit);
+            } catch (SQLException e) {
+                // The original failure (when there is one) must stay the reported cause: a
+                // dead connection cannot be restored, and the pool discards it anyway.
+                log.warn("Could not restore auto-commit on the target for {}: {}",
+                        targetTable, e.getMessage());
+            }
         }
         log.info("Deleted {} row(s) from {} that no longer exist in source", deleted, targetTable);
         return deleted;
+    }
+
+    /** Best-effort rollback: a failing rollback must never replace the original exception. */
+    private void rollbackQuietly(Connection connection, String table) {
+        try {
+            connection.rollback();
+        } catch (SQLException e) {
+            log.error("Rollback after a failed delete on {} also failed: {}", table,
+                    e.getMessage());
+        }
     }
 
     /**
@@ -4088,7 +4100,7 @@ public class DataSyncService {
                     break;
                 }
                 java.util.Set<String> stillInSource = sourceKeysOf(sourceConn, sourceRef,
-                        sourceColumns, pk, sourceDialect, ctx.getSourceType(), chunk);
+                        sourceColumns, pk, sourceDialect, ctx.effectiveSourceType(), chunk);
                 for (Object[] row : chunk) {
                     if (stillInSource.contains(renderKey(row))) {
                         continue;

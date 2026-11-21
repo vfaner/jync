@@ -22,6 +22,9 @@ public interface SyncTaskRepository extends JpaRepository<SyncTask, Long> {
 
     List<SyncTask> findByStatus(TaskStatus status);
 
+    /** Row count by status; the dashboard needs the number, not the rows (and their LOBs). */
+    long countByStatus(TaskStatus status);
+
     // Bulk, not a derived delete: a derived delete loads each entity before removing it.
     // Project deletion needs only the row gone.
     @Modifying

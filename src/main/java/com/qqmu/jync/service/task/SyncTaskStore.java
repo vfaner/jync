@@ -157,7 +157,14 @@ public class SyncTaskStore {
             task.setProjectId(project.getId());
             task.setStatus(TaskStatus.STOPPED);
             task.setConsecutiveFailures(0);
-            return taskRepository.save(task);
+            try {
+                return taskRepository.save(task);
+            } catch (org.springframework.dao.DataIntegrityViolationException e) {
+                // project_id is unique; two nodes reconciling at startup (or a scheduled
+                // fire racing a manual click) can both miss the row and both insert. The
+                // loser reads the winner's row instead of failing the cycle.
+                return taskRepository.findByProjectId(project.getId()).orElseThrow(() -> e);
+            }
         });
     }
 
@@ -215,6 +222,14 @@ public class SyncTaskStore {
     @Transactional(readOnly = true)
     public List<SyncTask> findByStatus(TaskStatus status) {
         return taskRepository.findByStatus(status);
+    }
+
+    /**
+     * Number of tasks in one status. The dashboard only shows the count; loading the rows
+     * pulled every ERROR task's {@code last_sync_result} LOB on each refresh.
+     */
+    public long countByStatus(TaskStatus status) {
+        return taskRepository.countByStatus(status);
     }
 
     @Transactional

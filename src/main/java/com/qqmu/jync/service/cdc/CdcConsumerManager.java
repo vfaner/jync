@@ -272,6 +272,17 @@ public class CdcConsumerManager {
      */
     public void ensureStarted(Project project) {
         Long projectId = project.getId();
+        // The lease is a row of sync_task. The config package deliberately carries no
+        // runtime state, so an imported project has none: the lease UPDATE would match
+        // zero rows and the consumer would silently never start — a restored CDC project
+        // looks configured but never resumes. Idempotent for the normal paths, where the
+        // scheduler already created the row. Runs outside the monitor: it touches the DB.
+        try {
+            taskStore.ensureTask(project);
+        } catch (RuntimeException e) {
+            log.warn("Could not ensure the sync-task row for CDC project {}: {}",
+                    projectId, e.getMessage());
+        }
         long stopGeneration;
         SyncLockService.LockHandle lock;
         synchronized (this) {

@@ -160,7 +160,7 @@ public class RedisBaselineService {
                     List<String> typeNames = JdbcRowMapper.columnTypeNames(md);
                     while (rs.next()) {
                         Map<String, Object> row = JdbcRowMapper.readRow(rs, columns, types,
-                                typeNames, ctx.getSourceType());
+                                typeNames, ctx.effectiveSourceType());
                         // The next page's keyset predicate binds against the RAW source keys,
                         // so the boundary is captured before the cleanser rewrites them. A
                         // rule on a key column (LOWER on an uppercase key, say) otherwise

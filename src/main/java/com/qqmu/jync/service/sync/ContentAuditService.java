@@ -277,12 +277,12 @@ public class ContentAuditService {
 
         String targetTable = ctx.getConfig().targetTableName(tableName);
         Map<String, String> targetNames = TargetTableVerifier.columnNamesByUpperName(targetConn,
-                ctx.getTargetSchema(), targetTable, ctx.getTargetType());
+                ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType());
         if (targetNames.isEmpty()) {
             return TableContentAudit.skipped(tableName, "target-missing", elapsed(started));
         }
         if (!TargetTableVerifier.missingColumns(targetConn, ctx.getTargetSchema(), targetTable,
-                table, ctx.getTargetType()).isEmpty()) {
+                table, ctx.effectiveTargetType()).isEmpty()) {
             return TableContentAudit.skipped(tableName, "target-missing-columns",
                     elapsed(started));
         }
@@ -399,7 +399,7 @@ public class ContentAuditService {
             String targetTable, List<String> candidates, SyncContext ctx) throws SQLException {
         Set<String> excluded = new HashSet<>();
         for (String column : TargetTableVerifier.uncomparableColumns(targetConn,
-                ctx.getTargetSchema(), targetTable, ctx.getTargetType(), candidates)) {
+                ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType(), candidates)) {
             excluded.add(column.toUpperCase(Locale.ROOT));
         }
         for (ColumnMeta column : table.getColumns()) {

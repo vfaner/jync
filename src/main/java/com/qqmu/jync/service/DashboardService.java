@@ -136,7 +136,7 @@ public class DashboardService {
         stats.setRowsToday(changeLogRepository.sumAffectedRowsBetween(windowStart, now)
                 + etlRunRepository.sumAffectedRowsBetween(windowStart, now));
 
-        stats.setErrorTaskCount(taskStore.findByStatus(TaskStatus.ERROR).size());
+        stats.setErrorTaskCount(taskStore.countByStatus(TaskStatus.ERROR));
         stats.setRecentChanges(recentChanges());
 
         // Only the rows actually shown (the first five) need per-project data, so slice first

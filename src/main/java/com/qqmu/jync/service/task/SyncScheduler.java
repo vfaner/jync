@@ -93,6 +93,24 @@ public class SyncScheduler {
             return;
         }
         Long projectId = project.getId();
+        if (project.getTargetKindOrDefault() == com.qqmu.jync.model.SyncTargetKind.REDIS) {
+            // A cache target has no JDBC endpoint, so a polling job would fail on every fire
+            // (SyncContextFactory refuses to build a context) while the page still showed the
+            // project as running. start() refuses this combination, but a project whose
+            // target was switched while enabled — or an older row — can still reach here;
+            // drop any registered job instead of letting it churn failures.
+            try {
+                if (scheduler.checkExists(jobKey(projectId))) {
+                    scheduler.deleteJob(jobKey(projectId));
+                    log.warn("Project '{}' has a cache target without log CDC; removed its"
+                            + " polling job", project.getName());
+                }
+            } catch (SchedulerException e) {
+                throw new IllegalStateException("Could not unschedule project " + projectId
+                        + ": " + e.getMessage(), e);
+            }
+            return;
+        }
         SyncTask task = taskStore.ensureTask(project);
 
         // Capture the previous registration so a failed replacement can be rolled back:
