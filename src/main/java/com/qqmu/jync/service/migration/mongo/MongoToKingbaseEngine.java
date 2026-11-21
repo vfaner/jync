@@ -241,6 +241,26 @@ final class MongoToKingbaseEngine {
         }
     }
 
+    /** Approximate heap one batch may hold before an early flush (OOM guard). */
+    private static final long MAX_BATCH_BYTES = 8L * 1024 * 1024;
+
+    /**
+     * Rough heap size of one rendered value: a String is UTF-16 on the heap (2 bytes/char),
+     * a byte[] is its length. Only the batch total needs bounding, not an exact size.
+     */
+    private static long estimateBytes(Object value) {
+        if (value == null) {
+            return 8;
+        }
+        if (value instanceof byte[] bytes) {
+            return bytes.length;
+        }
+        if (value instanceof String text) {
+            return (long) text.length() * 2;
+        }
+        return 16;
+    }
+
     private static void copyDocuments(MongoToKingbaseOptions options,
                                       MongoMigrationGateway sourceGateway,
                                       KingbaseTableWriter writer,
@@ -254,23 +274,32 @@ final class MongoToKingbaseEngine {
              KingbaseTableWriter.BatchWriter batch = writer.openBatch(targetName, table,
                      options.isUpsertOnId())) {
             int pendingRows = 0;
+            long pendingBytes = 0;
             while (cursor.hasNext()) {
                 Document document = cursor.next();
-                if (pendingRows >= options.getBatchSize()) {
+                // Flush on row count OR byte budget: 1000 rows of 1MB documents would hold
+                // ~2GB in the pgjdbc batch and OOM the process. MongoToMongo already caps
+                // bytes; this path only capped rows.
+                if (pendingRows >= options.getBatchSize() || pendingBytes >= MAX_BATCH_BYTES) {
                     counters.written += batch.flush();
                     pendingRows = 0;
+                    pendingBytes = 0;
                     cancellation.check();
                     progress.onProgress(sourceName, counters.read, counters.written);
                 }
                 // A fresh list per row: the writer binds values immediately, and a batch
                 // cursor that retained the list would re-bind the last row's values.
                 List<Object> row = new ArrayList<>(columns.size());
+                long rowBytes = 0;
                 for (EtlSourceColumn column : columns) {
-                    row.add(MongoValueRenderer.render(column, document.get(column.name())));
+                    Object value = MongoValueRenderer.render(column, document.get(column.name()));
+                    row.add(value);
+                    rowBytes += estimateBytes(value);
                 }
                 batch.add(row);
                 counters.read++;
                 pendingRows++;
+                pendingBytes += rowBytes;
             }
             if (pendingRows > 0) {
                 counters.written += batch.flush();

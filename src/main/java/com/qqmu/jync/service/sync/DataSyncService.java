@@ -118,6 +118,14 @@ public class DataSyncService {
     private final Set<Long> windowFunctionNotices =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /**
+     * Tables whose NULL-cursor COUNT already ran this process: the probe is a full scan of a
+     * keyless table and its verdict does not change cycle to cycle, so re-scanning every poll
+     * only to repeat the same WARN is pure source load.
+     */
+    private final Set<String> nullCursorChecked =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     public DataSyncService(SyncProperties properties) {
         this(properties, null);
     }
@@ -836,6 +844,11 @@ public class DataSyncService {
                                     CursorStrategy strategy, SyncContext ctx) {
         if (strategy.isPseudoColumn()) {
             // ORA_ROWSCN is never NULL; counting NULLs would be a pointless full scan.
+            return;
+        }
+        // Report once per table/column per process: the COUNT(*) is a full scan on a keyless
+        // table and a clean/dirty verdict does not change cycle to cycle.
+        if (!nullCursorChecked.add(table.getName() + ':' + strategy.getColumn())) {
             return;
         }
         if (bookkeepingCountWouldScan(sourceConn, table, strategy, ctx, "NULL-cursor probe")) {
