@@ -176,6 +176,19 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     private long lastNextPosition;
 
     /**
+     * Seeds the binlog file a DDL is filed under before the first ROTATE arrives. A consumer
+     * that restarts mid-file gets no ROTATE for the current file, so without the seed every
+     * skipped DDL carries {@code file=null}: the stored task cannot bound the window in which
+     * the new column's values are not replicated, and a reconnect replays the same statement
+     * without recognising it.
+     */
+    void seedCurrentFile(String file) {
+        if (currentFile == null && file != null && !file.isBlank()) {
+            currentFile = file;
+        }
+    }
+
+    /**
      * Serial-XA state. MySQL 8.0.30+ writes a prepared branch (XA START, its rows, XA END
      * and XA PREPARE) to the binlog at PREPARE time, and the branch may stay prepared for
      * a long while — other sessions' transactions commit meanwhile and their events land

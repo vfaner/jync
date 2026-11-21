@@ -623,6 +623,13 @@ public class CdcDdlTaskService {
             }
         }
 
+        // The target structure just changed underneath a live consumer. Its cached
+        // target-column set survives up to 30 s and would keep projecting the new column
+        // away (values not replicated while the position advances) unless it is dropped now.
+        CdcRuntimeStats liveStats = statsFor(entry.getProjectId());
+        if (liveStats != null) {
+            liveStats.invalidateTargetColumns();
+        }
         entry.setTargetDdlSql(statement);
         entry.setDdlExecuted(true);
         entry.setErrorDetail(null);

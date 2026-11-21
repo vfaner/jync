@@ -295,7 +295,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 // 目标表被删:重建并重灌这一张(或这几张)表,位点不动。修复成功就立刻
                 // 重放同一笔事务;修复没成功才停机,并把修复给出的原因带进 ERROR。
                 CdcTargetRepairService.Outcome repair = CdcTargetRepairGate.attempt(
-                        targetRepair, ctx, failure);
+                        targetRepair, ctx, failure, stats);
                 if (repair != null) {
                     if (repair.repaired()) {
                         deserializationFailures.set(0);
@@ -565,6 +565,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 // The run's cache lives on the target factory; the spiller reads the same
                 // compiled column rules instead of rebuilding them per transaction.
                 targetTransactions.writePlans(ctx)::cleanser);
+        handler.seedCurrentFile(lastFile);   // mid-file resume: no ROTATE for this file
         handler.attachClient(client);                            // R1:choke 时自行断连
         // A committed transaction that touched no tracked table still moves the log
         // forward. Advancing the stored position with it is loss-free (nothing was applied

@@ -299,7 +299,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                 // 目标表被删:重建并重灌这一张(或这几张)表,位点不动。修复成功就立刻
                 // 重放同一笔事务;修复没成功才停机,并把修复给出的原因带进 ERROR。
                 CdcTargetRepairService.Outcome repair = CdcTargetRepairGate.attempt(
-                        targetRepair, ctx, failure);
+                        targetRepair, ctx, failure, stats);
                 if (repair != null) {
                     if (repair.repaired()) {
                         applyFailures.set(0);

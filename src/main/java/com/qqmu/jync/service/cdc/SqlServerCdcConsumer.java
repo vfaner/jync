@@ -133,6 +133,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     private volatile boolean running = true;
     private volatile Connection currentSource;
+    /**
+     * The change-function statement currently executing. {@code requestStop()} cancels it so
+     * a stop cannot sit behind a slow/hung scan of a large LSN window.
+     */
+    private volatile Statement activeStatement;
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
     /** F-13: consecutive failed drain cycles; reset to 0 on every successful flush. */
@@ -283,6 +288,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     stats.setConnected(false);
                 } finally {
                     closeQuietly(currentSource);
+                    activeStatement = null;
                     currentSource = null;
                     // Cycle boundary: the position throttle may still hold the newest
                     // committed LSN; write it before the connection goes away.
@@ -305,7 +311,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 // 目标表被删:重建并重灌这一张(或这几张)表,位点不动。修复成功就立刻
                 // 重放同一笔事务;修复没成功才停机,并把修复给出的原因带进 ERROR。
                 CdcTargetRepairService.Outcome repair = CdcTargetRepairGate.attempt(
-                        targetRepair, ctx, failure);
+                        targetRepair, ctx, failure, stats);
                 if (repair != null) {
                     if (repair.repaired()) {
                         applyFailures.set(0);
@@ -367,6 +373,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             }
         } finally {
             closeQuietly(currentSource);
+            activeStatement = null;
             currentSource = null;
             windowLogger.close();
             lock.close();
@@ -727,6 +734,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, fromBind);
             ps.setString(2, toLsn);
+            activeStatement = ps;
             try (ResultSet rs = ps.executeQuery()) {
                 // Cache the real column set of the CT row ONCE per ci, on the first row
                 // (an empty window must not cost a metadata read) — RowReader consults it
@@ -963,19 +971,23 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     /**
      * Discover every enabled capture instance on this DB and filter to the tables the
-     * project actually wants. When a source table has MULTIPLE capture instances (schema
-     * change → disable/enable), keep only the one with the highest start_lsn — the
-     * others are historical and would double-apply the same row events.
+     * project actually wants.
+     *
+     * <p>A source table may have TWO capture instances at once: creating a new instance
+     * ({@code sp_cdc_enable_table @capture_instance=...}) does not disable the old one.
+     * Changes between the stored watermark and the new instance's {@code start_lsn} exist
+     * only in the old instance, so keeping just the newest silently lost them. Both are
+     * scanned; their rows share one binding (keyed by schema.table), so the fold merges the
+     * duplicate events instead of applying them twice.
      */
     private List<CaptureInstance> discoverCaptureInstances(Connection conn) throws SQLException {
-        // ORDER BY start_lsn ASC lets the per-table loop pick the LAST (newest) one.
         // #2 also selects start_lsn (canonical form) — the discriminant that tells a
         // mid-flight-created CI (clamp and self-heal) from a purged one (park).
         String sql = "SELECT source_schema_name, source_table_name, capture_instance,"
                 + " CONVERT(varchar(32), start_lsn, 1)"
                 + " FROM cdc.change_tables"
                 + " ORDER BY source_schema_name, source_table_name, start_lsn";
-        Map<String, CaptureInstance> byTable = new LinkedHashMap<>();
+        Map<String, List<CaptureInstance>> byTable = new LinkedHashMap<>();
         try (PreparedStatement ps = conn.prepareStatement(sql);
              ResultSet rs = ps.executeQuery()) {
             while (rs.next()) {
@@ -993,10 +1005,12 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     continue;
                 }
                 String key = (schema + "." + table).toLowerCase(Locale.ROOT);
-                byTable.put(key, new CaptureInstance(schema, table, ci, startLsn)); // last one wins
+                byTable.computeIfAbsent(key, k -> new ArrayList<>())
+                        .add(new CaptureInstance(schema, table, ci, startLsn));
             }
         }
-        List<CaptureInstance> found = new ArrayList<>(byTable.values());
+        List<CaptureInstance> found = new ArrayList<>();
+        byTable.values().forEach(found::addAll);
         noteCaptureInstanceChanges(found);
         return found;
     }
@@ -1289,9 +1303,18 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     public void requestStop() {
         // Do NOT close the source connection here: ps.executeQuery() would throw
         // "Connection closed" mid-drain, which classify() might bucket as PERMANENT
-        // and park the project in ERROR over a deliberate stop. Just flip the flag —
-        // the next slice of sleepWhileRunning / drain's running-check exits cleanly.
+        // and park the project in ERROR over a deliberate stop. Cancel the statement
+        // instead: the drain's own error path handles it, and it unblocks a scan that is
+        // stuck in the driver on a large window.
         running = false;
+        Statement active = activeStatement;
+        if (active != null) {
+            try {
+                active.cancel();
+            } catch (SQLException | RuntimeException ignored) {
+                // Already closed, or cancel unsupported — the stop flag still applies.
+            }
+        }
     }
 
     private static final class CaptureInstance {

@@ -107,6 +107,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     private volatile boolean running = true;
     private volatile Connection currentSource;
     /**
+     * The source statement currently blocked in the driver. {@code requestStop()} cancels it
+     * so a hung poll (a huge transaction being decoded, a network black hole) cannot keep a
+     * stop — and the re-baseline waiting behind it — waiting for the driver's own timeout.
+     */
+    private volatile Statement activeStatement;
+    /**
      * Server dialect, decided per connection from what the server's catalog can do (the
      * product name is only the fallback — see {@link PgLogicalDialect#detectLive}).
      * Defaults to vanilla PostgreSQL so a failed capability read can only reproduce the
@@ -321,6 +327,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     stats.setConnected(false);
                 } finally {
                     closeQuietly(currentSource);
+                    activeStatement = null;
                     currentSource = null;
                     // Cycle boundary: the position throttle may still hold the newest
                     // committed LSN; write it before the connection goes away.
@@ -345,7 +352,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 // 目标表被删:重建并重灌这一张(或这几张)表,位点不动。修复成功就立刻
                 // 重放同一笔事务;修复没成功才停机,并把修复给出的原因带进 ERROR。
                 CdcTargetRepairService.Outcome repair = CdcTargetRepairGate.attempt(
-                        targetRepair, ctx, failure);
+                        targetRepair, ctx, failure, stats);
                 if (repair != null) {
                     if (repair.repaired()) {
                         parseFailures.set(0);
@@ -413,6 +420,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             }
         } finally {
             closeQuietly(currentSource);
+            activeStatement = null;
             currentSource = null;
             windowLogger.close();
             lock.close();
@@ -488,6 +496,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     ps.setString(1, slotName);
                     ps.setLong(2, batchSize);
                     ps.setFetchSize(batchSize);
+                    activeStatement = ps;
                     try (ResultSet rs = ps.executeQuery()) {
                         while (running && !Thread.currentThread().isInterrupted() && rs.next()) {
                             String lsn = rs.getString(1);
@@ -1203,7 +1212,19 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         running = false;
         // Do not close the source connection here: it will be closed in the finally block
         // after the drain loop exits. Closing it mid-flight causes "Connection closed"
-        // exceptions that are misclassified as fatal when stopping normally.
+        // exceptions that are misclassified as fatal when stopping normally. Cancelling the
+        // statement is different: the drain's own error path handles it, and without it a
+        // poll blocked in the driver would keep the stop (and a waiting re-baseline) parked
+        // until the driver's socket timeout.
+        Statement active = activeStatement;
+        if (active != null) {
+            try {
+                active.cancel();
+            } catch (SQLException | RuntimeException ignored) {
+                // Already closed, or the driver does not support cancel — the stop flag
+                // still takes effect as soon as the call returns.
+            }
+        }
     }
 
     /**

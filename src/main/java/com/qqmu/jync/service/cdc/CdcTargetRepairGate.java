@@ -22,7 +22,8 @@ final class CdcTargetRepairGate {
      *     whether it may continue replaying.
      */
     static CdcTargetRepairService.Outcome attempt(CdcTargetRepairService service,
-                                                  SyncContext ctx, Throwable failure) {
+                                                  SyncContext ctx, Throwable failure,
+                                                  CdcRuntimeStats stats) {
         if (failure == null || CdcFailureClassifier.classify(failure)
                 != CdcFailureClassifier.Kind.TARGET_TABLE_MISSING) {
             return null;
@@ -34,6 +35,13 @@ final class CdcTargetRepairGate {
                     CdcTargetRepairService.Status.NOT_APPLICABLE, java.util.List.of(),
                     "targeted repair is not wired on this engine");
         }
-        return service.repair(ctx, failure);
+        CdcTargetRepairService.Outcome outcome = service.repair(ctx, failure);
+        if (outcome.repaired() && stats != null) {
+            // The rebuilt table carries the source's current structure; the consumer's
+            // cached target-column set predates it and would project the new columns away
+            // for up to its TTL. Drop it before the replayed transaction is applied.
+            stats.invalidateTargetColumns();
+        }
+        return outcome;
     }
 }
