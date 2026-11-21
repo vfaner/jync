@@ -5,6 +5,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -152,11 +153,13 @@ class RoleRenderingTest {
         ChangeLog entry = skippedDdl(alices.getId());
 
         for (String action : List.of("execute", "retry", "dismiss")) {
+            // These endpoints answer JSON: a refusal must reach the AJAX caller as JSON,
+            // not as an HTML redirect it cannot parse.
             mvc.perform(post("/change-logs/" + entry.getId() + "/" + action)
                             .param("sql", "ALTER TABLE t ADD COLUMN c INT")
                             .with(asOps("bob")).with(csrf()))
-                    .andExpect(status().is3xxRedirection())
-                    .andExpect(redirectedUrl("/?denied"));
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.success").value(false));
         }
     }
 

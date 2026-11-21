@@ -646,7 +646,20 @@ public class ProjectController {
     @ResponseBody
     public ResponseEntity<Map<String, Object>> saveConfigAjax(
             @PathVariable Long id, @ModelAttribute SyncConfigForm form) {
-        ConfigSaveOutcome outcome = applyConfig(id, form);
+        ConfigSaveOutcome outcome;
+        try {
+            outcome = applyConfig(id, form);
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            // The AJAX caller cannot read the HTML redirect the security filter would send;
+            // answer in the shape it parses so the page shows "permission denied" instead
+            // of a generic network error.
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "ok", false, "message", localize("error.forbidden"), "reload", false));
+        } catch (RuntimeException e) {
+            log.warn("Background config save for project {} failed: {}", id, e.toString());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                    "ok", false, "message", localize("error.unexpected"), "reload", false));
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", outcome.error() == null);
         String key = outcome.error() != null ? outcome.error() : outcome.message();

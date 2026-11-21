@@ -212,7 +212,9 @@ class OwnershipMatrixTest {
                 .param("sourceDbId", bobSrc.getId().toString())
                 .param("targetDbId", bobDst.getId().toString()));
         denied(post("/projects/" + id + "/config").with(asOps("bob")).with(csrf()));
-        denied(post("/projects/" + id + "/config").with(asOps("bob")).with(csrf())
+        // The AJAX variant answers JSON: a denial is a 403 body the page can render, not
+        // the HTML redirect the form variant gets.
+        forbidden(post("/projects/" + id + "/config").with(asOps("bob")).with(csrf())
                 .header("X-Jync-Ajax", "1"));
         denied(post("/projects/" + id + "/column-rules").with(asOps("bob")).with(csrf())
                 .param("tableName", "orders").param("columnName", "name")

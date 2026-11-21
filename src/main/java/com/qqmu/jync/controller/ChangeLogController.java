@@ -28,8 +28,11 @@ import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.cdc.CdcDdlTaskService;
 
+import lombok.extern.slf4j.Slf4j;
+
 /** Paged, filterable view of the change log. */
 @Controller
+@Slf4j
 public class ChangeLogController {
 
     private final ChangeLogService changeLogService;
@@ -137,6 +140,12 @@ public class ChangeLogController {
                             ? "" : outcome.affectedTables());
         } catch (IllegalArgumentException | IllegalStateException e) {
             return Map.of("success", false, "message", text(e.getMessage()));
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            // The AJAX caller cannot read an HTML redirect: return a JSON refusal instead.
+            return Map.of("success", false, "message", text("error.forbidden"));
+        } catch (RuntimeException e) {
+            log.warn("DDL task action failed unexpectedly: {}", e.toString());
+            return Map.of("success", false, "message", text("error.unexpected"));
         }
     }
 
@@ -156,6 +165,12 @@ public class ChangeLogController {
             return Map.of("success", true, "message", text("msg.ddl.replayed"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return Map.of("success", false, "message", text(e.getMessage()));
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            // The AJAX caller cannot read an HTML redirect: return a JSON refusal instead.
+            return Map.of("success", false, "message", text("error.forbidden"));
+        } catch (RuntimeException e) {
+            log.warn("DDL task action failed unexpectedly: {}", e.toString());
+            return Map.of("success", false, "message", text("error.unexpected"));
         }
     }
 
@@ -175,6 +190,12 @@ public class ChangeLogController {
             return Map.of("success", true, "message", text("msg.ddl.dismissed"));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return Map.of("success", false, "message", text(e.getMessage()));
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            // The AJAX caller cannot read an HTML redirect: return a JSON refusal instead.
+            return Map.of("success", false, "message", text("error.forbidden"));
+        } catch (RuntimeException e) {
+            log.warn("DDL task action failed unexpectedly: {}", e.toString());
+            return Map.of("success", false, "message", text("error.unexpected"));
         }
     }
 
