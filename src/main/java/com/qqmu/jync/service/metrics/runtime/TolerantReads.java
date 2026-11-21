@@ -44,7 +44,14 @@ final class TolerantReads {
     /** A statement with a query timeout, for readers that build their own SQL. */
     static Statement timedStatement(Connection connection) throws SQLException {
         Statement statement = connection.createStatement();
-        statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+        try {
+            statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+        } catch (SQLException e) {
+            // A driver that rejects the timeout is left at its default; still hand the
+            // statement back — throwing here would drop every runtime metric for this
+            // connection AND leak the already-created Statement. Same tolerance as
+            // JdbcUtil.applyQueryTimeout.
+        }
         return statement;
     }
 

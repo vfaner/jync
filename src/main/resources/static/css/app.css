@@ -2105,9 +2105,14 @@ table.tbl a.truncate { display: block; }
   font-size: 27px; font-weight: 800; letter-spacing: -1px; line-height: 1.1;
   padding: 0; background: none; border-radius: 0; font-family: inherit;
   -webkit-text-fill-color: currentColor;
+  word-break: normal; white-space: nowrap;
 }
 .stat-n .chip.chip-ok { color: var(--ok); }
 .stat-n .chip.chip-danger { color: var(--danger); }
+@media (max-width: 560px) {
+  /* 窄屏跟随邻卡数字缩小，否则 27px 固定字号会把状态卡撑得比同排卡片高，状态字也不该断行。 */
+  .stat-n .chip { font-size: 22px; }
+}
 
 /* ─── 专属迁移：类型卡片与预检结果 ────────────────────────
    首页按迁移类型铺卡片；可用类型是可点击的 <a>，未实现的类型保持同样布局但禁用。

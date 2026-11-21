@@ -479,7 +479,8 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         }
     }
 
-    /** Contract 4: full row maps; the applier binds only the PK columns of each. */
+    /** Contract 4: PK-only maps (a delete binds primary keys only); decoding every column
+     *  would waste the decoder on values that are never applied. */
     private void onDelete(DeleteRowsEventData data) {
         CdcTableBinding binding = bindings.get(data.getTableId());
         if (binding == null) {
