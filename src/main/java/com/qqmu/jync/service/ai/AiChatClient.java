@@ -440,21 +440,43 @@ public class AiChatClient {
     public ToolChatResult converseStream(AiProvider provider, String apiKey, String system,
                                          List<Turn> turns, List<ToolSpec> tools, int maxTokens,
                                          java.util.function.Consumer<String> sink) {
+        return converseStream(provider, apiKey, system, turns, tools, maxTokens, sink,
+                FIRST_LINE_CEILING_MS);
+    }
+
+    /**
+     * The same call with an explicit first-line ceiling. The support assistant has a total
+     * budget of a couple of minutes; the default ten-minute ceiling meant one stuck stream
+     * could outlive the whole request (and the page) before the watchdog fired.
+     */
+    public ToolChatResult converseStream(AiProvider provider, String apiKey, String system,
+                                         List<Turn> turns, List<ToolSpec> tools, int maxTokens,
+                                         java.util.function.Consumer<String> sink,
+                                         long firstLineCeilingMs) {
         AiProtocol protocol = provider.getProtocol() == null
                 ? AiProtocol.OPENAI : provider.getProtocol();
         if (protocol == AiProtocol.ANTHROPIC) {
-            return converseAnthropic(provider, apiKey, system, turns, tools, maxTokens, sink);
+            return converseAnthropic(provider, apiKey, system, turns, tools, maxTokens, sink,
+                    firstLineCeilingMs);
         }
         if (protocol == AiProtocol.OLLAMA_NATIVE) {
-            return converseOllamaNative(provider, apiKey, system, turns, tools, maxTokens, sink);
+            return converseOllamaNative(provider, apiKey, system, turns, tools, maxTokens, sink,
+                    firstLineCeilingMs);
         }
-        return converseOpenAi(provider, protocol, apiKey, system, turns, tools, maxTokens, sink);
+        return converseOpenAi(provider, protocol, apiKey, system, turns, tools, maxTokens, sink,
+                firstLineCeilingMs);
+    }
+
+    /** The first-line watchdog budget: never longer than the caller's remaining time. */
+    private static long firstLineBudget(long ceilingMs) {
+        return Math.max(1_000L, Math.min(FIRST_LINE_CEILING_MS, ceilingMs));
     }
 
     private ToolChatResult converseOpenAi(AiProvider provider, AiProtocol protocol,
                                           String apiKey, String system, List<Turn> turns,
                                           List<ToolSpec> tools, int maxTokens,
-                                          java.util.function.Consumer<String> sink) {
+                                          java.util.function.Consumer<String> sink,
+                                          long firstLineCeilingMs) {
         String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
         String model = provider.getModel() == null ? "" : provider.getModel().trim();
         long start = System.currentTimeMillis();
@@ -490,7 +512,8 @@ public class AiChatClient {
             AtomicBoolean firstLineSeen = new AtomicBoolean(false);
             long tickMs = Math.max(200L, Math.min(1000L, timeout.toMillis() / 4));
             ScheduledFuture<?> watchdog = STALL_WATCHDOG.scheduleAtFixedRate(() -> {
-                long budget = firstLineSeen.get() ? timeout.toMillis() : FIRST_LINE_CEILING_MS;
+                long budget = firstLineSeen.get() ? timeout.toMillis()
+                        : firstLineBudget(firstLineCeilingMs);
                 if (System.currentTimeMillis() - lastActivity.get() > budget
                         && stalledFor.compareAndSet(null,
                                 "Stream stalled for over " + (budget / 1000) + "s")) {
@@ -882,7 +905,8 @@ public class AiChatClient {
     private ToolChatResult converseAnthropic(AiProvider provider, String apiKey, String system,
                                              List<Turn> turns, List<ToolSpec> tools,
                                              int maxTokens,
-                                             java.util.function.Consumer<String> sink) {
+                                             java.util.function.Consumer<String> sink,
+                                          long firstLineCeilingMs) {
         AiProtocol protocol = AiProtocol.ANTHROPIC;
         String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
         String model = provider.getModel() == null ? "" : provider.getModel().trim();
@@ -919,7 +943,8 @@ public class AiChatClient {
             AtomicBoolean firstLineSeen = new AtomicBoolean(false);
             long tickMs = Math.max(200L, Math.min(1000L, timeout.toMillis() / 4));
             ScheduledFuture<?> watchdog = STALL_WATCHDOG.scheduleAtFixedRate(() -> {
-                long budget = firstLineSeen.get() ? timeout.toMillis() : FIRST_LINE_CEILING_MS;
+                long budget = firstLineSeen.get() ? timeout.toMillis()
+                        : firstLineBudget(firstLineCeilingMs);
                 if (System.currentTimeMillis() - lastActivity.get() > budget
                         && stalledFor.compareAndSet(null,
                                 "Stream stalled for over " + (budget / 1000) + "s")) {
@@ -1048,7 +1073,8 @@ public class AiChatClient {
     private ToolChatResult converseOllamaNative(AiProvider provider, String apiKey, String system,
                                                 List<Turn> turns, List<ToolSpec> tools,
                                                 int maxTokens,
-                                                java.util.function.Consumer<String> sink) {
+                                                java.util.function.Consumer<String> sink,
+                                          long firstLineCeilingMs) {
         AiProtocol protocol = AiProtocol.OLLAMA_NATIVE;
         String endpoint = protocol.resolveEndpoint(provider.getBaseUrl());
         String model = provider.getModel() == null ? "" : provider.getModel().trim();
@@ -1085,7 +1111,8 @@ public class AiChatClient {
             AtomicBoolean firstLineSeen = new AtomicBoolean(false);
             long tickMs = Math.max(200L, Math.min(1000L, timeout.toMillis() / 4));
             ScheduledFuture<?> watchdog = STALL_WATCHDOG.scheduleAtFixedRate(() -> {
-                long budget = firstLineSeen.get() ? timeout.toMillis() : FIRST_LINE_CEILING_MS;
+                long budget = firstLineSeen.get() ? timeout.toMillis()
+                        : firstLineBudget(firstLineCeilingMs);
                 if (System.currentTimeMillis() - lastActivity.get() > budget
                         && stalledFor.compareAndSet(null,
                                 "Stream stalled for over " + (budget / 1000) + "s")) {

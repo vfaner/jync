@@ -293,9 +293,14 @@ public class SupportAssistantService {
                     return;
                 }
                 RoundText answer = new RoundText(sink);
+                // The first-line watchdog must not outlive the whole request: with the
+                // default ten-minute ceiling one stuck stream kept a 150-second answer (and
+                // its single-flight lock) alive long after the page had given up.
                 AiChatClient.ToolChatResult result = chat.converseStream(provider,
                         providers.decryptKey(provider), SYSTEM_PROMPT, turns, tools, 1_024,
-                        answer::onDelta);
+                        answer::onDelta,
+                        Math.max(1_000L, TOTAL_BUDGET_MS
+                                - (System.currentTimeMillis() - started)));
                 if (!result.success() && result.toolUnsupported() && toolMode) {
                     // Degrade: retry once without tools. Tool-shaped turns from an earlier
                     // round cannot be sent to a model that has no concept of tools, but the
@@ -414,7 +419,9 @@ public class SupportAssistantService {
                             turns, List.of(), 1_024, text -> {
                                 finalStreamed[0] = true;
                                 sink.delta(text);
-                            });
+                            },
+                            Math.max(1_000L, TOTAL_BUDGET_MS
+                                    - (System.currentTimeMillis() - started)));
                     if (!summary.success()) {
                         log.warn("Support AI synthesis failed: {}", summary.message());
                         sink.error("error.ai.requestFailed", summary.message());

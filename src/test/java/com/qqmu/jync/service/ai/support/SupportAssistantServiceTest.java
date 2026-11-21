@@ -3,6 +3,7 @@ package com.qqmu.jync.service.ai.support;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -77,7 +78,7 @@ class SupportAssistantServiceTest {
     void aToolRoundIsExecutedAndItsResultFedBack() {
         AiChatClient.ToolCall call =
                 new AiChatClient.ToolCall("call_1", "project_status", "{\"projectId\":7}");
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(true, "OK", "我先查", List.of(call),
                                 "", 1, false),
@@ -106,7 +107,7 @@ class SupportAssistantServiceTest {
                 new AiChatClient.ToolCall("call_1", "project_status", "{\"projectId\":7}");
         java.util.concurrent.atomic.AtomicInteger rounds =
                 new java.util.concurrent.atomic.AtomicInteger();
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenAnswer(inv -> {
                     java.util.function.Consumer<String> stream = inv.getArgument(6);
                     if (rounds.getAndIncrement() == 0) {
@@ -137,7 +138,7 @@ class SupportAssistantServiceTest {
     void aLongAnswerStillStreamsThroughInFull() {
         String first = "一".repeat(200);
         String second = "二".repeat(200);
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenAnswer(inv -> {
                     java.util.function.Consumer<String> stream = inv.getArgument(6);
                     stream.accept(first);
@@ -167,7 +168,7 @@ class SupportAssistantServiceTest {
         List<AiChatClient.ToolCall> calls = List.of(
                 new AiChatClient.ToolCall("c1", "project_status", "{\"projectId\":1}"),
                 new AiChatClient.ToolCall("c2", "alerts", "{}"));
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(true, "OK", "", calls, "", 1, false),
                         new AiChatClient.ToolChatResult(true, "OK", "查完了", List.of(),
@@ -193,7 +194,7 @@ class SupportAssistantServiceTest {
     void aToolThatReturnsAnErrorIsReportedAsFailed() {
         AiChatClient.ToolCall call =
                 new AiChatClient.ToolCall("c1", "project_status", "{\"projectId\":7}");
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(true, "OK", "", List.of(call),
                                 "", 1, false),
@@ -219,7 +220,7 @@ class SupportAssistantServiceTest {
     void aProviderFailureCarriesItsOwnReasonToTheSink() {
         String reason = "HTTP 400 — Your account (2132700169) does not have a valid "
                 + "AgentPlan subscription, or your subscription has expired.";
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(new AiChatClient.ToolChatResult(
                         false, reason, "", List.of(), "", 1, false));
 
@@ -235,7 +236,7 @@ class SupportAssistantServiceTest {
      */
     @Test
     void theSystemPromptRoutesQuestionsToTheRightTool() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(new AiChatClient.ToolChatResult(
                         true, "OK", "hi", List.of(), "", 1, false));
 
@@ -243,7 +244,7 @@ class SupportAssistantServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
-        verify(chat).converseStream(any(), any(), system.capture(), any(), any(), anyInt(), any());
+        verify(chat).converseStream(any(), any(), system.capture(), any(), any(), anyInt(), any(), anyLong());
         assertThat(system.getValue())
                 .contains("project_status")
                 .contains("database_metrics")
@@ -278,7 +279,7 @@ class SupportAssistantServiceTest {
      */
     @Test
     void aPastedLogKeepsItsHeadAndTailAndSaysWhatWasOmitted() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(new AiChatClient.ToolChatResult(
                         true, "OK", "已分析", List.of(), "", 1, false));
         String log = "H".repeat(6_000) + "M".repeat(3_000) + "T".repeat(2_000);
@@ -288,7 +289,7 @@ class SupportAssistantServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
-        verify(chat).converseStream(any(), any(), any(), turns.capture(), any(), anyInt(), any());
+        verify(chat).converseStream(any(), any(), any(), turns.capture(), any(), anyInt(), any(), anyLong());
         String sent = turns.getValue().get(0).content();
         assertThat(sent).startsWith("HHHH").endsWith("TTTT")
                 .contains("已省略")
@@ -300,7 +301,7 @@ class SupportAssistantServiceTest {
 
     @Test
     void theSystemPromptExplainsHowToUseAPastedLog() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(new AiChatClient.ToolChatResult(
                         true, "OK", "hi", List.of(), "", 1, false));
 
@@ -308,7 +309,7 @@ class SupportAssistantServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
-        verify(chat).converseStream(any(), any(), system.capture(), any(), any(), anyInt(), any());
+        verify(chat).converseStream(any(), any(), system.capture(), any(), any(), anyInt(), any(), anyLong());
         assertThat(system.getValue())
                 .contains("粘贴")
                 .contains("已省略")
@@ -323,7 +324,7 @@ class SupportAssistantServiceTest {
     void aControlToolProducesAConfirmationCardInsteadOfExecuting() {
         AiChatClient.ToolCall call = new AiChatClient.ToolCall(
                 "c1", "control_project", "{\"projectId\":7,\"action\":\"STOP\"}");
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(true, "OK", "我来准备", List.of(call),
                                 "", 1, false),
@@ -361,7 +362,7 @@ class SupportAssistantServiceTest {
         int budget = SupportAssistantService.MAX_ROUNDS;
         java.util.concurrent.atomic.AtomicInteger calls =
                 new java.util.concurrent.atomic.AtomicInteger();
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenAnswer(inv -> calls.getAndIncrement() < budget ? toolRound : summary);
         when(registry.execute(any(), any(), any())).thenReturn("{}");
 
@@ -372,7 +373,7 @@ class SupportAssistantServiceTest {
         ArgumentCaptor<List<AiChatClient.ToolSpec>> tools =
                 ArgumentCaptor.forClass(List.class);
         verify(chat, times(budget + 1)).converseStream(any(), any(), any(), any(),
-                tools.capture(), anyInt(), any());
+                tools.capture(), anyInt(), any(), anyLong());
         assertThat(tools.getAllValues().get(budget)).isEmpty();
         assertThat(sink.events).contains("delta:汇总");
         assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
@@ -389,7 +390,7 @@ class SupportAssistantServiceTest {
                 true, "OK", "", List.of(call), "", 1, false);
         AiChatClient.ToolChatResult answer = new AiChatClient.ToolChatResult(
                 true, "OK", "已确认结论", List.of(), "", 1, false);
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(toolRound, toolRound, toolRound, toolRound, toolRound, toolRound,
                         answer);
         when(registry.execute(any(), any(), any())).thenReturn("{}");
@@ -408,7 +409,7 @@ class SupportAssistantServiceTest {
      */
     @Test
     void aPlanOnlyAnswerIsNudgedOnceAndContinued() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(true, "OK", "我先核对任务，再取证据。",
                                 List.of(), "", 1, false),
@@ -421,7 +422,7 @@ class SupportAssistantServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
         verify(chat, times(2)).converseStream(any(), any(), any(), turns.capture(), any(),
-                anyInt(), any());
+                anyInt(), any(), anyLong());
         assertThat(turns.getAllValues().get(1))
                 .extracting(AiChatClient.Turn::content)
                 .contains("我先核对任务，再取证据。")
@@ -439,7 +440,7 @@ class SupportAssistantServiceTest {
     @Test
     void aPlanOnlySentenceAfterAToolRoundIsNudgedInsteadOfEnding() {
         AiChatClient.ToolCall call = new AiChatClient.ToolCall("c1", "search_docs", "{}");
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(true, "OK", "", List.of(call),
                                 "", 1, false),
@@ -455,7 +456,7 @@ class SupportAssistantServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
         verify(chat, times(3)).converseStream(any(), any(), any(), turns.capture(), any(),
-                anyInt(), any());
+                anyInt(), any(), anyLong());
         assertThat(turns.getAllValues().get(2))
                 .extracting(AiChatClient.Turn::content)
                 .anyMatch(text -> text != null && text.contains("不要只说明计划"));
@@ -471,19 +472,19 @@ class SupportAssistantServiceTest {
     void anEmptyReplyIsNudgedOnceAndThenReported() {
         AiChatClient.ToolChatResult blank = new AiChatClient.ToolChatResult(
                 true, "OK", "", List.of(), "", 1, false);
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(blank, blank);
 
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("hi"), sink);
 
-        verify(chat, times(2)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+        verify(chat, times(2)).converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong());
         assertThat(sink.events).contains("error:error.support.noAnswer");
     }
 
     @Test
     void anEmptyReplyFollowedByAnAnswerSucceeds() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(
                                 true, "OK", "", List.of(), "", 1, false),
@@ -507,7 +508,7 @@ class SupportAssistantServiceTest {
                 true, "OK", "", List.of(call), "", 1, false);
         java.util.concurrent.atomic.AtomicInteger calls =
                 new java.util.concurrent.atomic.AtomicInteger();
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenAnswer(inv -> calls.getAndIncrement() < SupportAssistantService.MAX_ROUNDS
                         ? toolRound
                         : new AiChatClient.ToolChatResult(
@@ -524,25 +525,25 @@ class SupportAssistantServiceTest {
     void aSecondPlanOnlyAnswerIsAcceptedWithoutASecondNudge() {
         AiChatClient.ToolChatResult plan = new AiChatClient.ToolChatResult(
                 true, "OK", "我先核对任务，再取证据。", List.of(), "", 1, false);
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(plan, plan);
 
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("现在有告警吗"), sink);
 
-        verify(chat, times(2)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+        verify(chat, times(2)).converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong());
         assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
     }
 
     @Test
     void aSubstantiveAnswerIsNotNudged() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(new AiChatClient.ToolChatResult(
                         true, "OK", "当前没有告警。", List.of(), "", 1, false));
 
         service().ask(actor, "zh", ask("现在有告警吗"), new Recorder());
 
-        verify(chat, times(1)).converseStream(any(), any(), any(), any(), any(), anyInt(), any());
+        verify(chat, times(1)).converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong());
     }
 
     /**
@@ -577,7 +578,7 @@ class SupportAssistantServiceTest {
         for (int i = 1; i <= 5; i++) {
             calls.add(new AiChatClient.ToolCall("c" + i, "search_docs", "{}"));
         }
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(true, "OK", "", calls, "", 1, false),
                         new AiChatClient.ToolChatResult(true, "OK", "汇总", List.of(),
@@ -590,7 +591,7 @@ class SupportAssistantServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
         verify(chat, times(2)).converseStream(any(), any(), any(), turns.capture(), any(),
-                anyInt(), any());
+                anyInt(), any(), anyLong());
         List<AiChatClient.Turn> results = turns.getAllValues().get(1).stream()
                 .filter(turn -> "tool".equals(turn.role())).toList();
         assertThat(results).extracting(AiChatClient.Turn::toolCallId)
@@ -602,7 +603,7 @@ class SupportAssistantServiceTest {
 
     @Test
     void toolUnsupportedRetriesOnceWithoutTools() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(
                         new AiChatClient.ToolChatResult(false, "HTTP 400", "", List.of(),
                                 "", 1, true),
@@ -627,7 +628,7 @@ class SupportAssistantServiceTest {
 
     @Test
     void historyIsTruncatedToTheLastTwelveMessages() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(new AiChatClient.ToolChatResult(
                         true, "OK", "ok", List.of(), "", 1, false));
 
@@ -635,7 +636,7 @@ class SupportAssistantServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<AiChatClient.Turn>> turns = ArgumentCaptor.forClass(List.class);
-        verify(chat).converseStream(any(), any(), any(), turns.capture(), any(), anyInt(), any());
+        verify(chat).converseStream(any(), any(), any(), turns.capture(), any(), anyInt(), any(), anyLong());
         // 12 条历史 + 当前问题。
         assertThat(turns.getValue()).hasSize(13);
     }
@@ -711,7 +712,7 @@ class SupportAssistantServiceTest {
         int budget = SupportAssistantService.MAX_ROUNDS;
         java.util.concurrent.atomic.AtomicInteger calls =
                 new java.util.concurrent.atomic.AtomicInteger();
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenAnswer(inv -> calls.getAndIncrement() < budget ? toolRound : summary);
         when(registry.execute(any(), any(), any())).thenReturn("{}");
 
@@ -719,7 +720,7 @@ class SupportAssistantServiceTest {
 
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
         verify(chat, times(budget + 1)).converseStream(any(), any(), system.capture(), any(),
-                any(), anyInt(), any());
+                any(), anyInt(), any(), anyLong());
         assertThat(system.getAllValues().get(budget))
                 .startsWith(SupportAssistantService.SYSTEM_PROMPT)
                 .contains("本轮请直接给出最终回答");
@@ -729,7 +730,7 @@ class SupportAssistantServiceTest {
 
     @Test
     void aFailedModelCallIsReportedAndAudited() {
-        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any()))
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
                 .thenReturn(new AiChatClient.ToolChatResult(
                         false, "HTTP 500", "", List.of(), "", 1, false));
         when(actor.username()).thenReturn("ops1");
