@@ -12,6 +12,8 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
@@ -77,7 +79,15 @@ public class ProjectPerformanceController {
         }
         AccessGuard.current().requireEditable(project.getOwnerUsername());
         ProjectMetricsView view = metricsQueryService.project(id, MetricsRange.parse(range));
-        return ResponseEntity.ok(view);
+        // 与列表/详情同一条口径：ERROR 帽优先，否则 enabled ? RUNNING : STOPPED。不读采样里
+        // 残留的 task.status RUNNING——干净停机后采样停更，最后一条仍是 RUNNING，会误显"正在运行"。
+        SyncTask task = projectService.findTask(id).orElse(null);
+        boolean err = task != null && task.getStatus() == TaskStatus.ERROR;
+        String status = err ? TaskStatus.ERROR.name()
+                : (Boolean.TRUE.equals(project.getEnabled())
+                        ? TaskStatus.RUNNING.name() : TaskStatus.STOPPED.name());
+        return ResponseEntity.ok(new ProjectMetricsView(view.lastSample(), status,
+                view.series(), view.current(), view.changeShare(), view.hotObjects()));
     }
 
     private DatabaseConfig connection(Long connectionId) {

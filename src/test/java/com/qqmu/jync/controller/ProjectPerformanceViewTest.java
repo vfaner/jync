@@ -30,6 +30,8 @@ import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
@@ -173,13 +175,53 @@ class ProjectPerformanceViewTest {
                 .andReturn().getResponse().getContentAsString();
     }
 
+    /** 干净停机后采样停更、最后一条残留 RUNNING；状态须按 enabled 判 STOPPED，不显"正在运行"。 */
+    @Test
+    void aStoppedProjectShowsStoppedEvenIfTheLastSampleSaysRunning() throws Exception {
+        givenProject(false);
+        SyncTask task = new SyncTask();
+        task.setStatus(TaskStatus.RUNNING);
+        when(projectService.findTask(1L)).thenReturn(Optional.of(task));
+
+        mvc.perform(get("/projects/1/metrics?range=1h").with(as(UserRole.ADMIN)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("STOPPED"));
+    }
+
+    @Test
+    void anEnabledProjectShowsRunning() throws Exception {
+        givenProject(true);
+        SyncTask task = new SyncTask();
+        task.setStatus(TaskStatus.RUNNING);
+        when(projectService.findTask(1L)).thenReturn(Optional.of(task));
+
+        mvc.perform(get("/projects/1/metrics?range=1h").with(as(UserRole.ADMIN)))
+                .andExpect(jsonPath("$.status").value("RUNNING"));
+    }
+
+    @Test
+    void anErroredTaskShowsErrorEvenWhenEnabled() throws Exception {
+        givenProject(true);
+        SyncTask task = new SyncTask();
+        task.setStatus(TaskStatus.ERROR);
+        when(projectService.findTask(1L)).thenReturn(Optional.of(task));
+
+        mvc.perform(get("/projects/1/metrics?range=1h").with(as(UserRole.ADMIN)))
+                .andExpect(jsonPath("$.status").value("ERROR"));
+    }
+
     private void givenProject() {
+        givenProject(true);
+    }
+
+    private void givenProject(boolean enabled) {
         Project project = new Project();
         project.setId(1L);
         project.setName("orders-sync");
         project.setOwnerUsername("ops");
         project.setSourceDbId(2L);
         project.setTargetDbId(3L);
+        project.setEnabled(enabled);
         when(projectService.findById(1L)).thenReturn(Optional.of(project));
         when(databaseConfigService.findById(2L)).thenReturn(Optional.of(connection(2L, "src")));
         when(databaseConfigService.findById(3L)).thenReturn(Optional.of(connection(3L, "tgt")));

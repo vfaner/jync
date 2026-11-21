@@ -2099,6 +2099,15 @@ table.tbl a.truncate { display: block; }
 
 .chip.chip-ok { color: var(--ok); background: var(--fb-ok-13); }
 .chip.chip-danger { color: var(--danger); background: var(--fb-danger-13); }
+/* 状态卡的大字标签：与邻卡数字同字号（27px/800），去掉小徽章胶囊感，实心红/绿。
+   currentColor 覆盖 stat-n 继承的透明 text-fill，让状态字可见。 */
+.stat-n .chip {
+  font-size: 27px; font-weight: 800; letter-spacing: -1px; line-height: 1.1;
+  padding: 0; background: none; border-radius: 0; font-family: inherit;
+  -webkit-text-fill-color: currentColor;
+}
+.stat-n .chip.chip-ok { color: var(--ok); }
+.stat-n .chip.chip-danger { color: var(--danger); }
 
 /* ─── 专属迁移：类型卡片与预检结果 ────────────────────────
    首页按迁移类型铺卡片；可用类型是可点击的 <a>，未实现的类型保持同样布局但禁用。

@@ -521,8 +521,15 @@
       // 露出 "RUNNING"。
       var label = code ? status.getAttribute('data-' + code.toLowerCase()) : null;
       status.textContent = label || code || '—';
-      status.className = 'chip' + (code === 'RUNNING' ? ' chip-ok'
-        : code === 'ERROR' ? ' chip-danger' : '');
+      // 运行绿、停止/错误红：状态徽章与整张卡片色调一起随状态切换，停止不再误显绿色。
+      var tone = code === 'RUNNING' ? 'ok'
+        : (code === 'ERROR' || code === 'STOPPED') ? 'danger' : 'ok';
+      status.className = 'chip' + (tone === 'danger' ? ' chip-danger' : ' chip-ok');
+      var card = status.closest('.stat');
+      if (card) {
+        card.classList.remove('is-ok', 'is-warn', 'is-danger');
+        card.classList.add('is-' + tone);
+      }
     }
   }
 
