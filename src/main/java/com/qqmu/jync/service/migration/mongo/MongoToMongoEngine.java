@@ -1,6 +1,5 @@
 package com.qqmu.jync.service.migration.mongo;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -346,8 +345,59 @@ final class MongoToMongoEngine {
      * here, except for binary values, which JSON inflates rather than shrinks. The 8 MB
      * default leaves ample room below the 48 MB command limit.
      */
+    /**
+     * Approximate heap size of one document for the batch guard. Serialising each document to
+     * JSON only to measure it allocated a full copy on every row — the guard exists to bound
+     * memory, so it must not be one of the larger allocations itself. Nesting is charged down
+     * to a fixed depth and anything deeper costs a flat floor; the total only has to be within
+     * the right order of magnitude.
+     */
     private static long estimateBytes(Document document) {
-        return document.toJson().getBytes(StandardCharsets.UTF_8).length;
+        return 32L + estimateMap(document, 4);
+    }
+
+    private static long estimateMap(Map<?, ?> map, int depth) {
+        long bytes = 0;
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            bytes += String.valueOf(entry.getKey()).length() * 2L + 8;
+            bytes += estimateValue(entry.getValue(), depth);
+        }
+        return bytes;
+    }
+
+    private static long estimateValue(Object value, int depth) {
+        if (value == null) {
+            return 8;
+        }
+        if (value instanceof String text) {
+            return text.length() * 2L;
+        }
+        if (value instanceof byte[] raw) {
+            return raw.length;
+        }
+        if (value instanceof Number || value instanceof java.util.Date) {
+            return 8;
+        }
+        if (value instanceof Boolean) {
+            return 2;
+        }
+        if (value instanceof org.bson.types.ObjectId) {
+            return 12;
+        }
+        if (depth <= 0) {
+            return 64;
+        }
+        if (value instanceof Map<?, ?> nested) {
+            return estimateMap(nested, depth - 1);
+        }
+        if (value instanceof Iterable<?> items) {
+            long bytes = 16;
+            for (Object item : items) {
+                bytes += estimateValue(item, depth - 1);
+            }
+            return bytes;
+        }
+        return 64;
     }
 
     private static void closeQuietly(MongoMigrationGateway gateway) {

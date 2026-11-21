@@ -334,14 +334,22 @@ final class MongoToKingbaseEngine {
                                     EtlSourceColumn idColumn) throws SQLException {
         List<Document> sample = sourceGateway.sample(sourceName, options.getVerifySampleSize());
         ColumnMeta idMeta = table.column(idColumn.name()).orElseThrow();
+        // One IN query instead of one probe per sampled id. Ids that render to NULL cannot be
+        // in the target at all, so they count as missing without a round trip; duplicates in
+        // the sample collapse, which makes the count "distinct ids absent" — the same verdict
+        // with one query instead of a hundred.
+        java.util.LinkedHashSet<Object> ids = new java.util.LinkedHashSet<>();
         int missing = 0;
         for (Document document : sample) {
             Object id = MongoValueRenderer.render(idColumn, document.get(idColumn.name()));
-            if (id == null || !writer.idExists(targetName, idMeta, id)) {
+            if (id == null) {
                 missing++;
+            } else {
+                ids.add(id);
             }
         }
-        return missing;
+        int present = writer.countExistingIds(targetName, idMeta, new ArrayList<>(ids));
+        return missing + Math.max(0, ids.size() - present);
     }
 
     private static EtlSourceColumn idColumn(List<EtlSourceColumn> columns) {

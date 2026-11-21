@@ -140,6 +140,37 @@ public class KingbaseTableWriter {
         }
     }
 
+    /**
+     * How many of {@code renderedIds} are present, in ONE statement. The sample verification
+     * used one {@code SELECT 1} per id (100 by default per collection), so a migration with
+     * dozens of collections spent thousands of round trips proving what a single IN query
+     * answers.
+     */
+    public int countExistingIds(String table, ColumnMeta idColumn, List<Object> renderedIds)
+            throws SQLException {
+        if (renderedIds.isEmpty()) {
+            return 0;
+        }
+        StringBuilder sql = new StringBuilder("SELECT COUNT(*) FROM ").append(qualified(table))
+                .append(" WHERE ").append(dialect.quoteIdentifier(idColumn.getName()))
+                .append(" IN (");
+        for (int i = 0; i < renderedIds.size(); i++) {
+            if (i > 0) {
+                sql.append(',');
+            }
+            sql.append('?');
+        }
+        sql.append(')');
+        try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
+            for (int i = 0; i < renderedIds.size(); i++) {
+                bindValue(statement, i + 1, renderedIds.get(i), idColumn.getJdbcType());
+            }
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getInt(1) : 0;
+            }
+        }
+    }
+
     /** True when the table has a unique index or primary key that covers {@code column}. */
     public boolean hasUniqueIndex(String table, String column) throws SQLException {
         DatabaseMetaData metaData = connection.getMetaData();

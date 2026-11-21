@@ -334,7 +334,9 @@ class MongoToKingbaseEngineTest {
         stubCollection("orders", "collection",
                 List.of(new Document("_id", "1")),
                 List.of(new Document("_id", "1")));
-        when(writer.idExists(eq("orders"), any(ColumnMeta.class), any())).thenReturn(false);
+        // One IN query now backs the sample check; zero of the sampled ids are present.
+        when(writer.countExistingIds(eq("orders"), any(ColumnMeta.class), anyList()))
+                .thenReturn(0);
 
         MigrationRunResult result = run();
 
