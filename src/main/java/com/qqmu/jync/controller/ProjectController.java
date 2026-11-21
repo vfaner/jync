@@ -7,6 +7,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.i18n.LocaleContextHolder;
@@ -38,6 +40,7 @@ import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SyncTask;
@@ -358,6 +361,21 @@ public class ProjectController {
         model.addAttribute("lockStale", lockExpired && !cycleRunning);
         var progressList = projectService.findProgress(id);
         model.addAttribute("progressList", progressList);
+        // 列清洗卡按表名查该表的游标策略与累计同步行数（键大小写无关）；表名清单供筛选下拉。
+        Map<String, SyncProgress> progressByTable = new HashMap<>();
+        for (SyncProgress p : progressList) {
+            if (p.getObjectName() != null) {
+                progressByTable.put(p.getObjectName().toUpperCase(Locale.ROOT), p);
+            }
+        }
+        model.addAttribute("progressByTable", progressByTable);
+        Set<String> columnRuleTables = new TreeSet<>();
+        for (ColumnRule r : config.getColumnRules()) {
+            if (r.getTable() != null && !r.getTable().isBlank()) {
+                columnRuleTables.add(r.getTable());
+            }
+        }
+        model.addAttribute("columnRuleTables", columnRuleTables);
         // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
         // lets the page show chunk progress and the resume promise per table.
         model.addAttribute("fullLoadProgress", projectService.findFullLoadProgress(id));

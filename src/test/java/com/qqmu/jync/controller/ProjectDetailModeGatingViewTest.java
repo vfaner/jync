@@ -146,6 +146,64 @@ class ProjectDetailModeGatingViewTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
+    void theProgressStrategyColumnIsHiddenForACdcProject() throws Exception {
+        // 游标策略只属于轮询/全量比对；CDC 的变更来自日志流，展示「数字主键」会误导。
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
+
+        String page = renderDetail();
+
+        String th = enclosingTag(page, "data-role=\"progress-strategy\"", "<th");
+        assertThat(th).contains("is-hidden").contains("data-cdc-visibility=\"non-cdc\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void theProgressStrategyColumnIsShownForAPollingProject() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, true);
+
+        String page = renderDetail();
+
+        String th = enclosingTag(page, "data-role=\"progress-strategy\"", "<th");
+        assertThat(th).doesNotContain("is-hidden");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void theProgressCursorColumnIsHiddenForACdcProject() throws Exception {
+        // 游标列和策略一样只属于轮询/全量比对；CDC 不用游标列，留着会误导。
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
+
+        String page = renderDetail();
+
+        String th = enclosingTag(page, "data-role=\"progress-cursor-column\"", "<th");
+        assertThat(th).contains("is-hidden").contains("data-cdc-visibility=\"non-cdc\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void theProgressCursorColumnIsShownForAPollingProject() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, true);
+
+        String page = renderDetail();
+
+        String th = enclosingTag(page, "data-role=\"progress-cursor-column\"", "<th");
+        assertThat(th).doesNotContain("is-hidden");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void theProgressTableShowsCumulativeSyncedRowsEvenInCdc() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
+
+        String page = renderDetail();
+
+        // 累计同步行数在 CDC 下也有意义，不随策略列隐藏。
+        String th = enclosingTag(page, "data-role=\"progress-synced-total\"", "<th");
+        assertThat(th).doesNotContain("is-hidden");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
     void theResetButtonIsHiddenOnTheServerForACdcProject() throws Exception {
         stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
 

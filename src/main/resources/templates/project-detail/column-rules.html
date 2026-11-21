@@ -3,57 +3,99 @@
 <body>
 <!-- 列清洗：封闭的字符串规则集，写入目标库前在内存中生效，不改源数据。
      独立小表单而非并入配置表单：规则需要逐条增删，合并会让主表单的保存语义
-     变成「整表覆盖」，误删风险更高。 -->
-<div class="card" th:if="${access.canEdit(project.ownerUsername)}" th:fragment="card">
+     变成「整表覆盖」，误删风险更高。卡片紧跟配置大表单（不是相邻卡片），
+     拿不到 .card + .card 的上边距，由 .column-rules-card 自己补。 -->
+<div class="card column-rules-card" th:if="${access.canEdit(project.ownerUsername)}" th:fragment="card">
     <div class="card-head">
         <h2><svg class="ico"><use href="#sliders"/></svg>
-            <span th:text="#{columnrule.title}">Column cleansing</span></h2>
+            <span th:text="#{columnrule.title}">Column cleansing</span>
+            <span class="badge badge-info" th:if="${!#lists.isEmpty(config.columnRules)}"
+                  th:text="${#lists.size(config.columnRules)}">0</span></h2>
         <span class="hint" th:text="#{columnrule.help}">help</span>
     </div>
-    <div class="card-body tight">
+    <div class="card-body">
         <p class="muted small" th:if="${#lists.isEmpty(config.columnRules)}"
            th:text="#{columnrule.empty}">No column rules yet.</p>
-        <div class="tbl-wrap" th:unless="${#lists.isEmpty(config.columnRules)}">
-            <table class="tbl dense">
-                <thead>
-                <tr>
-                    <th th:text="#{columnrule.table}">Table</th>
-                    <th th:text="#{columnrule.column}">Column</th>
-                    <th th:text="#{columnrule.type}">Rule</th>
-                    <th th:text="#{columnrule.arg}">Argument</th>
-                    <th class="num" th:text="#{common.actions}">Actions</th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr th:each="r, i : ${config.columnRules}">
-                    <td class="mono" th:text="${r.table}">orders</td>
-                    <td class="mono" th:text="${r.column}">name</td>
-                    <td th:text="${r.type != null} ? ${#messages.msg('columnrule.type.' + r.type)} : ''">TRIM</td>
-                    <td class="mono small">
-                        <span th:text="${r.arg != null and !#strings.isEmpty(r.arg)} ? ${r.arg} : '—'">—</span>
-                        <span th:if="${r.type != null and r.type.name() == 'REGEX_REPLACE'}">
-                            → <span th:text="${r.replacement ?: ''}"></span>
-                        </span>
-                    </td>
-                    <td class="num">
-                        <!-- 按位置删除：规则按保存顺序执行，列表就是唯一顺序真相。 -->
-                        <form method="post"
-                              th:action="@{/projects/{id}/column-rules/delete(id=${project.id})}">
-                            <input type="hidden" name="index" th:value="${i.index}">
-                            <button type="submit" class="btn-icon"
-                                    th:disabled="${project.enabled}" th:title="#{columnrule.delete}">
-                                <svg class="ico"><use href="#trash"/></svg>
-                            </button>
-                        </form>
-                    </td>
-                </tr>
-                </tbody>
-            </table>
-        </div>
+        <th:block th:unless="${#lists.isEmpty(config.columnRules)}">
+            <!--/* 工具行：按表筛选 + 按列名搜索 + 规则汇总 + 新增。筛选/搜索由 app.js 客户端
+                   过滤行并实时更新计数；新增按钮聚焦底部添加表单。 */-->
+            <div class="column-rule-toolbar">
+                <select class="select" data-role="column-rule-table-filter"
+                        th:attr="aria-label=#{columnrule.filter.all}">
+                    <option value="" th:text="#{columnrule.filter.all}">All tables</option>
+                    <option th:each="t : ${columnRuleTables}" th:value="${t}" th:text="${t}">table</option>
+                </select>
+                <input type="text" class="input mono" data-role="column-rule-search"
+                       th:placeholder="#{columnrule.search}" th:attr="aria-label=#{columnrule.search}">
+                <span class="muted small column-rule-summary" data-role="column-rule-summary"
+                      th:attr="data-template=#{columnrule.summary}"
+                      th:text="#{columnrule.summary(${#lists.size(config.columnRules)}, ${columnRuleTables.size()})}">summary</span>
+                <button type="button" class="btn btn-primary btn-sm" data-role="column-rule-add">
+                    <svg class="ico"><use href="#plus-lg"/></svg>
+                    <span th:text="#{columnrule.add}">Add rule</span>
+                </button>
+            </div>
+            <div class="tbl-wrap">
+                <table class="tbl dense" data-role="column-rule-table">
+                    <thead>
+                    <tr>
+                        <th th:text="#{columnrule.table}">Table</th>
+                        <!--/* 游标策略是轮询/全量比对特有：日志 CDC 没有游标列，整列隐藏
+                               （data-role="polling-only" 由 app.js 随策略卡片联动）。 */-->
+                        <th th:classappend="${cdcActive} ? 'is-hidden' : ''"
+                            th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null"
+                            th:text="#{columnrule.strategy}">Strategy</th>
+                        <th th:text="#{columnrule.column}">Column</th>
+                        <th th:text="#{columnrule.type}">Rule</th>
+                        <th class="num" th:text="#{columnrule.syncedTotal}">Rows synced</th>
+                        <th class="num" th:text="#{common.actions}">Actions</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <tr th:each="r, i : ${config.columnRules}"
+                        th:with="prog=${progressByTable.get(r.table != null ? r.table.toUpperCase(T(java.util.Locale).ROOT) : '')}"
+                        th:attr="data-table=${r.table}, data-column=${r.column}">
+                        <td class="mono" th:text="${r.table}">orders</td>
+                        <td th:classappend="${cdcActive} ? 'is-hidden' : ''"
+                            th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null">
+                            <span th:if="${prog != null and prog.cursorStrategy != null}" class="badge"
+                                  th:with="strat=${prog.cursorStrategy}"
+                                  th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
+                                                : (${strat == 'IDENTITY'} ? 'badge-info'
+                                                : (${strat == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
+                                  th:text="#{'cursor.' + ${strat}}">strategy</span>
+                            <span th:if="${prog == null or prog.cursorStrategy == null}" class="muted">—</span>
+                        </td>
+                        <td class="mono" th:text="${r.column}">name</td>
+                        <td>
+                            <span th:text="${r.type != null} ? ${#messages.msg('columnrule.type.' + r.type)} : ''">TRIM</span>
+                            <span class="mono small muted" th:if="${r.arg != null and !#strings.isEmpty(r.arg)}"
+                                  th:text="${r.arg}">arg</span>
+                            <span class="mono small muted" th:if="${r.type != null and r.type.name() == 'REGEX_REPLACE'}">
+                                → <span th:text="${r.replacement ?: ''}"></span>
+                            </span>
+                        </td>
+                        <td class="num" th:text="${prog != null and prog.rowsSyncedTotal != null ? prog.rowsSyncedTotal : 0}">0</td>
+                        <td class="num">
+                            <!-- 按位置删除：规则按保存顺序执行，列表就是唯一顺序真相。 -->
+                            <form method="post"
+                                  th:action="@{/projects/{id}/column-rules/delete(id=${project.id})}">
+                                <input type="hidden" name="index" th:value="${i.index}">
+                                <button type="submit" class="btn-icon"
+                                        th:disabled="${project.enabled}" th:title="#{columnrule.delete}">
+                                    <svg class="ico"><use href="#trash"/></svg>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+        </th:block>
         <!-- 表单分两段：字段网格 + 独立的右对齐按钮行。参数/替换为只在需要它们的
              规则下由 app.js 显示，且标签换成「要移除的前缀 / 正则表达式」这类
              说明性文字——常驻两个空输入框会让人以为每条规则都要填。 -->
-        <form method="post" data-role="column-rule-form" style="margin-top:12px"
+        <form method="post" data-role="column-rule-form" style="margin-top:16px"
               th:action="@{/projects/{id}/column-rules(id=${project.id})}">
             <div class="grid-2">
                 <div class="field">

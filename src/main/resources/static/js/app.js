@@ -1639,6 +1639,47 @@
     syncArgFields();
   }
 
+  /**
+   * 列清洗规则表的客户端筛选：按表下拉 + 列名搜索过滤行，实时更新「共 N 条覆盖 M 表」
+   * 汇总；「新增规则」按钮聚焦底部添加表单。纯前端，不打库。
+   */
+  function bindColumnRuleFilter(table) {
+    var card = table.closest('.column-rules-card');
+    if (!card) return;
+    var filter = card.querySelector('[data-role="column-rule-table-filter"]');
+    var search = card.querySelector('[data-role="column-rule-search"]');
+    var summary = card.querySelector('[data-role="column-rule-summary"]');
+    var addBtn = card.querySelector('[data-role="column-rule-add"]');
+    var rows = Array.prototype.slice.call(table.querySelectorAll('tbody tr'));
+    var template = summary ? (summary.getAttribute('data-template') || '') : '';
+
+    function apply() {
+      var t = filter ? filter.value : '';
+      var q = search ? search.value.trim().toLowerCase() : '';
+      var visible = 0;
+      var tables = {};
+      rows.forEach(function (row) {
+        var rt = row.getAttribute('data-table') || '';
+        var rc = (row.getAttribute('data-column') || '').toLowerCase();
+        var show = (!t || rt === t) && (!q || rc.indexOf(q) >= 0);
+        row.classList.toggle('is-hidden', !show);
+        if (show) { visible++; tables[rt] = 1; }
+      });
+      if (summary && template) {
+        summary.textContent = template
+          .replace('{0}', String(visible))
+          .replace('{1}', String(Object.keys(tables).length));
+      }
+    }
+
+    if (filter) filter.addEventListener('change', apply);
+    if (search) search.addEventListener('input', apply);
+    if (addBtn) addBtn.addEventListener('click', function () {
+      var input = card.querySelector('#columnRuleTable');
+      if (input) { input.focus(); input.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+    });
+  }
+
   /* ─── 只读数据预览 ──────────────────────────────────────── */
 
   /**
@@ -4413,6 +4454,7 @@
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);
     document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
+    document.querySelectorAll('[data-role="column-rule-table"]').forEach(bindColumnRuleFilter);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
     document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);

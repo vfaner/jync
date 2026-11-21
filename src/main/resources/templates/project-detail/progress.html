@@ -35,9 +35,18 @@
                 <thead>
                 <tr>
                     <th th:text="#{log.objectName}">Table</th>
-                    <th th:text="#{cursor.strategy}">Strategy</th>
-                    <th th:text="#{cursor.column}">Column</th>
+                    <!--/* 游标策略是轮询/全量比对特有：日志 CDC 的变更来自日志流而非游标，
+                           整列隐藏（data-cdc-visibility 由 app.js 随策略联动，对所有角色生效）。 */-->
+                    <th data-role="progress-strategy" data-cdc-visibility="non-cdc"
+                        th:classappend="${cdcActive} ? 'is-hidden' : ''"
+                        th:text="#{cursor.strategy}">Strategy</th>
+                    <!--/* 游标列同属轮询/全量比对：CDC 不用游标列，整列隐藏。 */-->
+                    <th data-role="progress-cursor-column" data-cdc-visibility="non-cdc"
+                        th:classappend="${cdcActive} ? 'is-hidden' : ''"
+                        th:text="#{cursor.column}">Column</th>
                     <th th:text="#{dashboard.lastSync}">Last sync</th>
+                    <!-- 累计同步行数：轮询与 CDC 都有意义，主表一眼可见进度量（不必点开核对行数）。 -->
+                    <th class="num" data-role="progress-synced-total" th:text="#{rowcount.syncedTotal}">Rows synced</th>
                     <!-- 「设置游标」列：仅轮询/全量比对模式可用。日志 CDC 下游标列是死配置，
                          同调度卡片一并隐藏（data-role="polling-only" 由 app.js 联动）。 -->
                     <th class="num"
@@ -72,7 +81,8 @@
                                   th:text="#{fullload.noResume}">no resume</span>
                         </div>
                     </td>
-                    <td>
+                    <td data-role="progress-strategy" data-cdc-visibility="non-cdc"
+                        th:classappend="${cdcActive} ? 'is-hidden' : ''">
                         <span class="badge"
                               th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
                                             : (${strat == 'IDENTITY'} ? 'badge-info'
@@ -90,7 +100,8 @@
                             <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
                         </span>
                     </td>
-                    <td class="mono small">
+                    <td class="mono small" data-role="progress-cursor-column" data-cdc-visibility="non-cdc"
+                        th:classappend="${cdcActive} ? 'is-hidden' : ''">
                         <span th:text="${p.cursorColumn ?: '—'}">col</span>
                         <!-- 游标列没有前导索引时,每次增量读取都要全表扫描:提示管理员在源库补索引。
                              data-tip 由 app.js 画成与性能配置一样的深色气泡并立即弹出；
@@ -110,6 +121,7 @@
                         th:text="${p.lastSyncTime != null}
                                  ? ${#temporals.format(p.lastSyncTime, 'MM-dd HH:mm:ss')}
                                  : #{common.never}">never</td>
+                    <td class="num" th:text="${p.rowsSyncedTotal ?: 0}">0</td>
                     <!-- td 本身不 th:if 藏掉（那样 JS 联动就没法恢复），改为加 is-hidden 类；
                          isAdmin=false 时始终隐藏（访客态）。 -->
                     <td th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"

@@ -35,6 +35,7 @@ import com.qqmu.jync.dto.ColumnRuleType;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
@@ -395,9 +396,57 @@ class ProjectColumnRuleViewTest {
         assertThat(page).contains("class=\"column-rule-actions\"");
     }
 
+    @Test
+    void theRulesTableShowsStrategySyncedTotalsAndFilterToolbar() throws Exception {
+        SyncConfig config = storedConfig(false);
+        config.getColumnRules().add(rule("orders", "customer_name", ColumnRuleType.TRIM, null));
+        SyncProgress p = new SyncProgress();
+        p.setObjectName("orders");
+        p.setCursorStrategy("IDENTITY");
+        p.setRowsSyncedTotal(1234L);
+
+        String page = renderDetailWithProgress(List.of(p));
+
+        assertThat(page).contains("data-role=\"column-rule-table\"");
+        assertThat(page).contains("Numeric key");              // 该表游标策略徽章
+        assertThat(page).contains("1234");                     // 累计同步行数
+        assertThat(page).contains("data-role=\"column-rule-table-filter\"");
+        assertThat(page).contains("data-role=\"column-rule-search\"");
+        assertThat(page).contains("data-role=\"column-rule-summary\"");
+        assertThat(page).contains("1 rules across 1 tables");  // 规则汇总
+        assertThat(page).contains("column-rules-card");        // 自带上下间距类
+    }
+
+    @Test
+    void cdcModeRendersTheCardAndHidesTheStrategyColumn() throws Exception {
+        SyncConfig config = storedConfig(false);
+        config.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        config.getColumnRules().add(rule("orders", "name", ColumnRuleType.TRIM, null));
+
+        String page = renderDetailWithProgress(List.of());
+
+        assertThat(page).contains("column-rules-card");
+        assertThat(page).contains("Rows synced");              // 累计列仍在
+        // CDC 下策略列整列隐藏（与进度模块同款 polling-only 联动）
+        assertThat(page).contains("data-role=\"polling-only\" class=\"is-hidden\">Strategy");
+    }
+
     private String renderDetail() throws Exception {
         when(projectService.findTask(1L)).thenReturn(Optional.empty());
         when(projectService.findProgress(1L)).thenReturn(new ArrayList<>());
+        when(projectService.findFullLoadProgress(1L)).thenReturn(java.util.Map.of());
+        when(projectService.isScheduled(1L)).thenReturn(false);
+        when(projectService.listSourceObjects(1L)).thenReturn(new ProjectService.SourceObjects());
+
+        MvcResult result = mvc.perform(get("/projects/1").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn();
+        return result.getResponse().getContentAsString();
+    }
+
+    private String renderDetailWithProgress(List<SyncProgress> progress) throws Exception {
+        when(projectService.findTask(1L)).thenReturn(Optional.empty());
+        when(projectService.findProgress(1L)).thenReturn(progress);
         when(projectService.findFullLoadProgress(1L)).thenReturn(java.util.Map.of());
         when(projectService.isScheduled(1L)).thenReturn(false);
         when(projectService.listSourceObjects(1L)).thenReturn(new ProjectService.SourceObjects());
