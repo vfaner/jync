@@ -580,6 +580,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         SqlServerTxFold fold = new SqlServerTxFold(
                 properties.getCdc().getMaxTransactionRows(),
                 properties.getCdc().getMaxTransactionBytes());
+        // How far this cycle may consume the window: a scan that stopped at its row budget
+        // reports its last complete transaction, and the next cycle resumes there. The
+        // earliest stop across capture instances wins (re-reading another instance's already
+        // applied interval is idempotent, skipping an unscanned one is loss).
+        String boundedTo = maxLsn;
         for (CaptureInstance ci : instances) {
             // A stop landing between CIs makes the shared fold partial just as surely as one
             // landing mid-ResultSet: a transaction spanning tables only a later CI scans
@@ -591,8 +596,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             // from_lsn is INCLUSIVE — pass fn_cdc_increment_lsn to skip the watermark
             // transaction we already applied on the previous cycle. The persisted value
             // remains fromLsn; only the SQL interval shifts.
+            String scanEnd = null;
             try {
-                scanCi(conn, ci, changesSql(ci.captureInstance), fromLsn, maxLsn, fold, out);
+                scanEnd = scanCi(conn, ci, changesSql(ci.captureInstance), fromLsn, maxLsn,
+                        fold, out);
             } catch (SQLException e) {
                 // SQL Server error 22054 == "an invalid LSN was specified for the capture
                 // instance": the @from_lsn we passed is BELOW this CI's valid range. It
@@ -652,8 +659,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                                 + " target; verify them against the source and re-baseline"
                                 + " if needed", ci.captureInstance, ci.startLsn, fromLsn,
                                 clampTo, fromLsn, clampTo);
-                        scanCi(conn, ci, changesSqlInclusive(ci.captureInstance), clampTo,
-                                maxLsn, fold, out);
+                        scanEnd = scanCi(conn, ci, changesSqlInclusive(ci.captureInstance),
+                                clampTo, maxLsn, fold, out);
+                        boundedTo = earlierLsn(boundedTo, scanEnd);
                         continue;
                     }
                     // ② purged past the watermark — unrecoverable; park as PURGED. No
@@ -672,6 +680,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 // Propagate — the caller leaves fromLsn untouched and retries.
                 throw e;
             }
+            boundedTo = earlierLsn(boundedTo, scanEnd);
         }
         // The scan phase finished while running on every CI — only now does the fold
         // contain COMPLETE transactions. If a stop/interrupt cut a scan short, abandon the
@@ -716,10 +725,24 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         // advanceLsn is monotonic and a no-op when a flush in this window already wrote a
         // later LSN, so data-first order is preserved (flushTransaction runs above).
         if (running && !Thread.currentThread().isInterrupted()) {
-            out.nextLsn = maxLsn;
-            positionStore.advanceLsn(projectId, maxLsn);
+            // Not necessarily maxLsn: a scan that stopped at its row budget leaves the
+            // interval above its last complete transaction for the next cycle. Persisting
+            // maxLsn would silently skip it after a restart.
+            out.nextLsn = boundedTo;
+            positionStore.advanceLsn(projectId, boundedTo);
         }
         return out;
+    }
+
+    /** The earlier of two canonical LSNs; {@code null} means "not bounded". */
+    private static String earlierLsn(String a, String b) {
+        if (b == null) {
+            return a;
+        }
+        if (a == null) {
+            return b;
+        }
+        return a.compareToIgnoreCase(b) <= 0 ? a : b;
     }
 
     /**
@@ -727,10 +750,20 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * for {@link #changesSql}, [fromBind, toLsn] for the inclusive #2 clamp variant —
      * folding every row into {@code fold}. Shared by the normal per-cycle pull and the
      * clamp rescan so both paths fold identically.
+     *
+     * @return the LSN the next cycle must resume from when the scan stopped at a transaction
+     *     boundary before reaching {@code toLsn} (several million small transactions in one
+     *     window otherwise all sit in the fold before anything is flushed), or {@code null}
+     *     when the whole window was read. The bound is transaction-aligned on purpose: a
+     *     transaction is never left half-folded, because the fold's net-effect rules depend
+     *     on seeing all of it.
      */
-    private void scanCi(Connection conn, CaptureInstance ci, String sql, String fromBind,
-                        String toLsn, SqlServerTxFold fold, DrainResult out)
+    private String scanCi(Connection conn, CaptureInstance ci, String sql, String fromBind,
+                          String toLsn, SqlServerTxFold fold, DrainResult out)
             throws SQLException {
+        long maxRows = properties.getCdc().getMssql().getMaxRowsPerCycle();
+        long rows = 0;
+        String currentTx = null;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, fromBind);
             ps.setString(2, toLsn);
@@ -771,7 +804,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                             }
                             stats.addSkippedUnsupported(skipped);
                             warnMissingCapturedColumns(ci, missingCols);
-                            return;
+                            return null;   // the whole instance was consumed (as skips)
                         }
                         missingColumnWarnings.remove(ci.captureInstance);
                         reader = RowReader.of(rs, binding, availableCols);
@@ -793,6 +826,16 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     // cycle after a restart fail until APPLY_STRIKE_OUT parked the project.
                     // Verified on SQL Server 2022 with mssql-jdbc 12.10.2.
                     String startLsn = rs.getString(1);
+                    if (!startLsn.equals(currentTx)) {
+                        if (maxRows > 0 && rows >= maxRows) {
+                            // A new transaction and the budget is spent: stop here. The fold
+                            // holds whole transactions only, so everything above `currentTx`
+                            // is re-read next cycle — the row just fetched is dropped, not
+                            // half-folded.
+                            return currentTx;
+                        }
+                        currentTx = startLsn;
+                    }
                     int op = rs.getInt(2);
                     if (reader == null) {
                         stats.addUnsupportedTable(ci.schema + "." + ci.table);
@@ -808,10 +851,12 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     }
                     fold.accept(startLsn, binding, op, row);
                     out.rows++;
+                    rows++;
                     stats.touchEvent(System.currentTimeMillis());
                 }
             }
         }
+        return null;   // the whole window was read
     }
 
     /**

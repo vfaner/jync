@@ -464,10 +464,15 @@ public class SyncProperties {
         @Getter
         @Setter
         public static class Mssql {
-            // No batch size: fn_cdc_get_all_changes returns the whole LSN range in one
-            // call, so a "rows per batch" knob could never be honoured. See
-            // docs/known-limitations.md — the memory ceiling is the per-transaction cap,
-            // not a fetch size.
+            /**
+             * Rows one poll cycle may fold before it stops at the next transaction boundary
+             * and lets the following cycle continue from there. Without a bound, a backlog of
+             * millions of small transactions was materialised in one fold before anything was
+             * flushed. The bound is approximate — the cycle always finishes the transaction it
+             * is inside, and that transaction is already capped by {@code maxTransactionRows}.
+             * 0 disables the bound.
+             */
+            private long maxRowsPerCycle = 100_000L;
             /** Idle poll interval between change-table reads. */
             private long idlePollMs = 1_000L;
         }
