@@ -124,6 +124,104 @@ class DataSyncServiceCursorRecoveryTest {
         assertThat(result.getNewCursorValue()).isEqualTo("3");
     }
 
+    /**
+     * The cursor column is entirely NULL: the full load seeds the target but stores no
+     * cursor. Without the marker this state looks like "never loaded" forever — a keyed
+     * table re-upserts itself on every poll, and a keyless one is refused every cycle.
+     */
+    @Test
+    void aTableWhoseCursorColumnIsAllNullIdlesInsteadOfReloadingEveryPoll() throws SQLException {
+        exec(source, "ALTER TABLE ITEMS ADD UPDATED TIMESTAMP");
+        exec(target, "ALTER TABLE ITEMS ADD UPDATED TIMESTAMP");
+        exec(source, "INSERT INTO ITEMS VALUES (1, 'a', NULL), (2, 'b', NULL), (3, 'c', NULL)");
+        exec(target, "INSERT INTO ITEMS VALUES (1, 'a', NULL), (2, 'b', NULL), (3, 'c', NULL)");
+        CursorStrategy byUpdated = CursorStrategy.timestamp("UPDATED", Types.TIMESTAMP,
+                "nullable updated timestamp");
+
+        SyncProgress progress = new SyncProgress();
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(null);
+        progress.setFullLoadWithoutCursor(true);
+
+        DataSyncService.TableSyncResult result =
+                service.syncTable(source, target, keyedItems(), byUpdated, progress, ctx);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.isInitialLoad()).isFalse();
+        assertThat(result.isSkipped()).isTrue();
+        assertThat(result.getRowsWritten()).isZero();
+        assertThat(result.getSkipReason()).contains("UPDATED");
+    }
+
+    /** A keyless table in the same state used to fail every cycle ("target holds rows"). */
+    @Test
+    void aKeylessTableWithAnAllNullCursorIsSkippedInsteadOfFailingEveryCycle()
+            throws SQLException {
+        exec(source, "CREATE TABLE KEYLESS (ID BIGINT, NAME VARCHAR(50), UPDATED TIMESTAMP)");
+        exec(target, "CREATE TABLE KEYLESS (ID BIGINT, NAME VARCHAR(50), UPDATED TIMESTAMP)");
+        exec(source, "INSERT INTO KEYLESS VALUES (1, 'a', NULL)");
+        exec(target, "INSERT INTO KEYLESS VALUES (1, 'a', NULL)");
+        TableMeta keyless = new TableMeta();
+        keyless.setName("KEYLESS");
+        keyless.getColumns().add(column("ID", Types.BIGINT));
+        keyless.getColumns().add(column("NAME", Types.VARCHAR));
+        keyless.getColumns().add(column("UPDATED", Types.TIMESTAMP));
+        CursorStrategy byUpdated = CursorStrategy.timestamp("UPDATED", Types.TIMESTAMP,
+                "nullable updated timestamp");
+
+        SyncProgress progress = new SyncProgress();
+        progress.setInitialLoadDone(true);
+        progress.setFullLoadWithoutCursor(true);
+
+        DataSyncService.TableSyncResult result =
+                service.syncTable(source, target, keyless, byUpdated, progress, ctx);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.isSkipped()).isTrue();
+        assertThat(result.getError()).isNull();
+    }
+
+    /** Once the column gains a value the stored null cursor reloads and re-establishes it. */
+    @Test
+    void aTableThatGainsCursorValuesReloadsOnceAndResumes() throws SQLException {
+        exec(source, "ALTER TABLE ITEMS ADD UPDATED TIMESTAMP");
+        exec(target, "ALTER TABLE ITEMS ADD UPDATED TIMESTAMP");
+        exec(source, "INSERT INTO ITEMS VALUES (1, 'row1', TIMESTAMP '2026-01-01 00:00:00')");
+        exec(target, "INSERT INTO ITEMS VALUES (1, 'row1', NULL)");
+        CursorStrategy byUpdated = CursorStrategy.timestamp("UPDATED", Types.TIMESTAMP,
+                "nullable updated timestamp");
+
+        SyncProgress progress = new SyncProgress();
+        progress.setInitialLoadDone(true);
+        progress.setLastSyncValue(null);
+        progress.setFullLoadWithoutCursor(true);
+
+        DataSyncService.TableSyncResult result =
+                service.syncTable(source, target, keyedItems(), byUpdated, progress, ctx);
+
+        assertThat(result.isSuccess()).isTrue();
+        assertThat(result.isInitialLoad()).isTrue();
+        assertThat(result.getNewCursorValue()).isNotNull();
+        assertThat(count()).isEqualTo(1);
+    }
+
+    private static TableMeta keyedItems() {
+        TableMeta meta = new TableMeta();
+        meta.setName("ITEMS");
+        meta.getColumns().add(column("ID", Types.BIGINT));
+        meta.getColumns().add(column("NAME", Types.VARCHAR));
+        meta.getColumns().add(column("UPDATED", Types.TIMESTAMP));
+        meta.getPrimaryKeys().add("ID");
+        return meta;
+    }
+
+    private static com.qqmu.jync.dto.meta.ColumnMeta column(String name, int jdbcType) {
+        com.qqmu.jync.dto.meta.ColumnMeta column = new com.qqmu.jync.dto.meta.ColumnMeta();
+        column.setName(name);
+        column.setJdbcType(jdbcType);
+        return column;
+    }
+
     private long count() throws SQLException {
         try (Statement st = target.createStatement();
              ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM ITEMS")) {

@@ -89,6 +89,17 @@ public class SyncProgress {
     @Column(name = "initial_load_done")
     private Boolean initialLoadDone = false;
 
+    /**
+     * True when the last completed full load could not establish a cursor — the cursor
+     * column held no non-NULL value, or the source table was empty. Unlike a cleared
+     * cursor (an operator asking for a reload, where {@code initialLoadDone} stays set),
+     * this state must NOT re-run the full load on every poll: doing so re-upserts the whole
+     * table forever, and for a keyless table is refused every cycle once the target holds
+     * rows. Cleared by {@code clearCursor} so a manual reset still reloads.
+     */
+    @Column(name = "full_load_without_cursor")
+    private Boolean fullLoadWithoutCursor = false;
+
     @Column(name = "rows_synced_total")
     private Long rowsSyncedTotal = 0L;
 

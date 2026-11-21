@@ -82,6 +82,17 @@ public class SyncStateWriter {
             progress.setInitialLoadDone(true);
             changed = true;
         }
+        if (result.isInitialLoad()) {
+            // Record whether this full load produced a cursor. A null one is not "never
+            // loaded": it means the cursor column (or the table) had no usable value, and
+            // re-running the load every poll is what this flag prevents. Only full-load
+            // cycles decide it, so an incremental cycle cannot clear it by accident.
+            boolean noCursor = progress.getLastSyncValue() == null;
+            if (!Objects.equals(progress.getFullLoadWithoutCursor(), noCursor)) {
+                progress.setFullLoadWithoutCursor(noCursor);
+                changed = true;
+            }
+        }
         // This method runs on every successful cycle, idle ones included — carrying the cursor
         // forward is exactly what stops an idle table re-reading the same window, so the
         // timestamp cannot ride along with it. Same rule as the project's 上次同步: it marks the
@@ -120,6 +131,9 @@ public class SyncStateWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public SyncProgress clearCursor(SyncProgress progress) {
         progress.setLastSyncValue(null);
+        // The null cursor is this method's reload signal; without clearing the marker the
+        // "full load produced no cursor" skip would swallow the requested reload.
+        progress.setFullLoadWithoutCursor(false);
         // Return the saved row and require callers to continue with it. save() merges this
         // detached instance into a managed copy whose version is bumped at commit, so a caller
         // that kept its old reference would fail the optimistic lock on its next write — which
@@ -151,6 +165,7 @@ public class SyncStateWriter {
                 progress.getProjectId(), progress.getObjectName());
         progress.setLastSyncValue(null);
         progress.setInitialLoadDone(false);
+        progress.setFullLoadWithoutCursor(false);
         return progressRepository.save(progress);
     }
 

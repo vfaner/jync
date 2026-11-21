@@ -251,6 +251,24 @@ public class DataSyncService {
         }
 
         try {
+            // A full load that completed without a usable cursor (the cursor column held no
+            // non-NULL value, or the table was empty) must not be mistaken for "never
+            // loaded" on every later cycle: that re-upserts the whole table on every poll,
+            // and on a keyless table is refused outright once the target holds rows — a
+            // permanent error with no way out. While the watermark is still null there is
+            // nothing an incremental window could match either, so the table idles; the
+            // moment the column gains a value the stored null cursor triggers the normal
+            // full reload above and the marker clears.
+            if (progress.getLastSyncValue() == null
+                    && Boolean.TRUE.equals(progress.getFullLoadWithoutCursor())
+                    && strategy.isIncremental()
+                    && readHighWatermark(sourceConn, table, strategy, ctx) == null) {
+                result.skipped = true;
+                result.skipReason = "Cursor column " + strategy.getColumn()
+                        + " has no non-NULL value yet; the one-time full load seeded the"
+                        + " target, and nothing can be delivered until it does";
+                return result;
+            }
             // A stored cursor the current strategy cannot parse — e.g. a full-compare "fc:"
             // fingerprint left behind by a switch to identity — must not be fed to the window
             // query as null: "> NULL" matches no rows, yet the cycle would still advance the
