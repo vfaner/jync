@@ -156,6 +156,16 @@ final class MongoToMongoEngine {
                                           MigrationCancellation cancellation,
                                           MongoMigrationSupport.Progress counters,
                                           MigrationProgressListener progress) {
+        // An empty source (a TTL job just cleaned it, a mis-scoped filter) must never be
+        // allowed to wipe an existing target: OVERWRITE below drops the collection before a
+        // single document is counted. Mongo→Kingbase already SKIPs the same case, and
+        // docs/known-limitations.md promises it.
+        if (options.getWriteMode() == MigrationWriteMode.OVERWRITE
+                && sourceGateway.countDocuments(sourceName) == 0) {
+            return new IndexResult(sourceName, targetName, Status.SKIPPED, 0, 0,
+                    "source collection is empty; the target was left untouched");
+        }
+
         long existingTargetCount = 0;
         boolean exists = targetGateway.collectionExists(targetName);
         if (exists) {

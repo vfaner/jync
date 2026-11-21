@@ -62,6 +62,10 @@ class MongoEtlSourceTest {
                 .thenReturn(samples);
         when(gateway.find(eq(config), eq(COLLECTION), any(Document.class), any(),
                 eq(1000), anyInt())).thenReturn(handle);
+        // A resumed run first probes the checkpoint value for duplicates (batch size 2); the
+        // default stub returns an empty cursor, i.e. a unique boundary.
+        when(gateway.find(eq(config), eq(COLLECTION), any(Document.class), any(),
+                eq(2), anyInt())).thenReturn(mock(MongoCursorHandle.class));
     }
 
     @Test
@@ -96,6 +100,26 @@ class MongoEtlSourceTest {
                 new Document("status", "active"),
                 new Document("seq", new Document("$gt", 41)))));
         assertThat(cursor.resumeKeyIndex()).isEqualTo(4);
+    }
+
+    /**
+     * The JDBC source refuses a checkpoint value that occurs more than once; Mongo must do the
+     * same, or a checkpoint taken at a repeated timestamp resumes with {@code $gt} and
+     * permanently skips every row still sharing that value while reporting SUCCESS.
+     */
+    @Test
+    void aResumeBoundaryWithDuplicateKeyValuesIsRefused() {
+        MongoEtlSource source = source();
+        EtlTask task = task(EtlWriteMode.APPEND, "seq");
+        MongoCursorHandle duplicates = mock(MongoCursorHandle.class);
+        when(duplicates.next()).thenReturn(true);
+        when(gateway.find(eq(config), eq(COLLECTION), any(Document.class), any(),
+                eq(2), anyInt())).thenReturn(duplicates);
+
+        assertThatThrownBy(() -> source.query(task, new EtlCheckpointValue(Types.INTEGER, "41")))
+                .hasMessageStartingWith("error.etl.resumeKey.duplicate:seq");
+        verify(gateway, never()).find(eq(config), eq(COLLECTION), any(Document.class),
+                any(), eq(1000), anyInt());
     }
 
     @Test

@@ -115,7 +115,10 @@ public class KingbaseTableWriter {
                 int size = resultSet.getInt("COLUMN_SIZE");
                 column.setSize(size > 0 ? size : null);
                 int scale = resultSet.getInt("DECIMAL_DIGITS");
-                column.setDecimalDigits(scale > 0 ? scale : null);
+                // getInt() returns 0 for both "scale 0" and SQL NULL; wasNull tells them
+                // apart, so DECIMAL(p,0) keeps its true scale instead of being reported
+                // as unknown.
+                column.setDecimalDigits(resultSet.wasNull() ? null : scale);
                 column.setNullable(!"NO".equalsIgnoreCase(resultSet.getString("IS_NULLABLE")));
                 column.setDefaultValue(resultSet.getString("COLUMN_DEF"));
                 column.setOrdinalPosition(columns.size() + 1);

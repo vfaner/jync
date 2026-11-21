@@ -66,6 +66,19 @@ final class EtlSqlScript {
         return !tokens.isEmpty() && isWord(tokens.get(0).word(), "WITH");
     }
 
+    /**
+     * Whether the statement carries a real top-level row-limiting clause ({@code TOP},
+     * {@code FETCH FIRST/NEXT}, {@code LIMIT/OFFSET … ROWS}, {@code FOR UPDATE/XML/JSON}).
+     *
+     * <p>The resume wrapper puts the extraction inside a derived table and filters on the key
+     * outside it, so an inner limit is evaluated before the watermark: with a checkpoint the
+     * same first window is re-read, filtered out completely, and the remaining rows are never
+     * migrated. Validation refuses such a task instead of letting it report SUCCESS forever.
+     */
+    static boolean hasTopLevelLimitingClause(String statement, DialectFamily family) {
+        return hasLimitingClause(topLevelTokens(statement, family));
+    }
+
     /** Whether the statement has an {@code ORDER BY} outside every parentheses level. */
     static boolean hasTopLevelOrderBy(String statement) {
         return hasTopLevelOrderBy(statement, DEFAULT_FAMILY);

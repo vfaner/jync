@@ -172,11 +172,12 @@ public class SearchHttpClient implements AutoCloseable {
     }
 
     public JsonNode get(String path) {
-        return request("GET", path, null, null).json();
+        return requireCompleteResult(request("GET", path, null, null).json(), path);
     }
 
     public JsonNode postJson(String path, Object body) {
-        return request("POST", path, json(body), "application/json").json();
+        return requireCompleteResult(
+                request("POST", path, json(body), "application/json").json(), path);
     }
 
     public JsonNode putJson(String path, Object body) {
@@ -189,6 +190,28 @@ public class SearchHttpClient implements AutoCloseable {
 
     public JsonNode search(String path, JsonNode body) {
         return postJson(path, body);
+    }
+
+    /**
+     * A search or count answered by a cluster with unassigned shards is a PARTIAL result: the
+     * 2xx looks healthy, the hit list and the count both omit the failed shards, and even
+     * verifyCount compares two equally-short numbers. Fail the index instead of reporting a
+     * successful copy that silently lost those documents.
+     */
+    private static JsonNode requireCompleteResult(JsonNode root, String path) {
+        if (root == null) {
+            return null;
+        }
+        if (root.path("timed_out").asBoolean(false)) {
+            throw new IllegalStateException("the source timed out answering " + path
+                    + "; the partial result would silently drop documents");
+        }
+        int failed = root.path("_shards").path("failed").asInt(0);
+        if (failed > 0) {
+            throw new IllegalStateException(failed + " shard(s) failed answering " + path
+                    + "; the partial result would silently drop documents");
+        }
+        return root;
     }
 
     /** HEAD existence check used by the write-mode rules. */
@@ -207,7 +230,13 @@ public class SearchHttpClient implements AutoCloseable {
         String body = String.join("\n", ndjsonLines) + "\n";
         SearchResponse response = request("POST", "/_bulk", body, "application/x-ndjson");
         JsonNode root = response.json();
-        if (root == null || !root.path("errors").asBoolean(false)) {
+        if (root == null || (!root.has("errors") && !root.has("items"))) {
+            // A 2xx with an unparseable/empty body is not "no errors": reporting success here
+            // counted every document of the batch as written.
+            throw new IllegalStateException("bulk response could not be parsed; refusing to "
+                    + "report the batch as written");
+        }
+        if (!root.path("errors").asBoolean(false)) {
             return BulkResult.success();
         }
         List<BulkResult.FailedItem> failures = new ArrayList<>();

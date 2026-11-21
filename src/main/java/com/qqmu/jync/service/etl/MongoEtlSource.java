@@ -67,6 +67,11 @@ public final class MongoEtlSource implements EtlSource {
                     Object resumeValue = MongoResumeKeyCodec.decode(
                             checkpoint.value(), checkpoint.jdbcType());
                     if (resumeValue != null) {
+                        // The JDBC source refuses to resume from a checkpoint value that occurs
+                        // more than once; without the same rule here, a checkpoint taken at a
+                        // repeated timestamp resumes with $gt and permanently skips every row
+                        // still sharing that value — reporting SUCCESS while rows are missing.
+                        requireUniqueResumeBoundary(filter, collection, key, resumeValue, timeout);
                         query = MongoFilterParser.withResume(filter, key, resumeValue);
                     }
                 }
@@ -86,6 +91,30 @@ public final class MongoEtlSource implements EtlSource {
             throw new EtlProgramException(e.getMessage());
         } catch (RuntimeException e) {
             throw sourceFailure(e);
+        }
+    }
+
+    /**
+     * Refuses a checkpoint whose key value occurs more than once, the same rule
+     * {@link JdbcEtlSource} applies. Two documents are enough to tell; the extra read only
+     * happens on a resumed run.
+     */
+    private void requireUniqueResumeBoundary(Document filter, String collection, String key,
+                                             Object value, int timeout) {
+        Document equality = new Document(key, value);
+        Document boundary = filter == null || filter.isEmpty()
+                ? equality : new Document("$and", List.of(filter, equality));
+        try (MongoCursorHandle cursor =
+                     gateway.find(config, collection, boundary, null, 2, timeout)) {
+            int seen = 0;
+            while (seen < 2 && cursor.next()) {
+                seen++;
+            }
+            if (seen > 1) {
+                // Same shape as the runner's other resume-key guards: the key follows ':'
+                // so the run history can translate the main sentence.
+                throw new EtlProgramException("error.etl.resumeKey.duplicate:" + key);
+            }
         }
     }
 

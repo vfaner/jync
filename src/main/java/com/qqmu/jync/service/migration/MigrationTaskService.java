@@ -276,7 +276,14 @@ public class MigrationTaskService {
             return JSON.createObjectNode();
         }
         try {
-            return JSON.readTree(task.getOptionsJson());
+            JsonNode node = JSON.readTree(task.getOptionsJson());
+            // "[]" or "null" are valid JSON but not options. The parsers read every missing
+            // field as its default — and the default write mode is OVERWRITE, so an imported
+            // or corrupted row would silently drop and recreate an existing target.
+            if (node == null || !node.isObject()) {
+                throw new IllegalArgumentException("error.migration.options.invalid");
+            }
+            return node;
         } catch (tools.jackson.core.JacksonException e) {
             throw new IllegalArgumentException("error.migration.options.invalid", e);
         }

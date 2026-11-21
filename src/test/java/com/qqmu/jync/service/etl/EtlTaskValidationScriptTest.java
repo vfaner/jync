@@ -81,29 +81,43 @@ class EtlTaskValidationScriptTest {
     }
 
     /**
-     * SQL Server 只在派生表里禁止裸的 ORDER BY;带 TOP / OFFSET / FOR XML 时它是合法语法
-     * (错误 1033 的反面)。这类语句以前能续跑,校验不能把它们挡在门外;运行期的包装也
-     * 原样保留 ORDER BY,因为去掉它会改变 TOP 选中的行。
+     * 带 TOP 的语句在派生表里语法合法,但续传语义是错的:续传包装把
+     * {@code WHERE key > ?} 加在派生表外面,内层 TOP 在过滤之前生效。第一次之后每轮都
+     * 重新读回同一批 Top N 行、被全部过滤掉,剩余行永远复制不到,任务却一直报成功。
+     * 语法合法不等于可以续跑,校验要在保存时就拒绝。
      */
     @Test
-    void aResumableSqlServerTopWithOrderByIsAccepted() {
+    void aResumableSqlServerTopIsRefused() {
         sourceType(DatabaseType.SQLSERVER);
         EtlTask task = task("SELECT TOP 10 id FROM src ORDER BY id");
         task.setWriteMode(EtlWriteMode.APPEND);
         task.setResumeKeyColumn("id");
 
-        assertThatCode(() -> EtlTaskValidation.validateExtraction(task, configs))
-                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> EtlTaskValidation.validateExtraction(task, configs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.resume.limit");
     }
 
-    /** DB2 同样的规则:子查询里的 ORDER BY 在带 OFFSET / FETCH FIRST 时合法。 */
+    /** DB2 的 OFFSET / FETCH NEXT 同样把窗口冻结在第一批。 */
     @Test
-    void aResumableDb2OrderByWithFetchIsAccepted() {
+    void aResumableDb2FetchIsRefused() {
         sourceType(DatabaseType.DB2);
         EtlTask task = task("SELECT id FROM src ORDER BY id OFFSET 0 ROWS FETCH NEXT 10 ROWS ONLY");
         task.setWriteMode(EtlWriteMode.RANGE_OVERWRITE);
         task.setResumeKeyColumn("id");
         task.setRangeCondition("id > 0");
+
+        assertThatThrownBy(() -> EtlTaskValidation.validateExtraction(task, configs))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.etl.resume.limit");
+    }
+
+    /** 不续传时行数限制没有这个问题,必须继续放行。 */
+    @Test
+    void aNonResumableTopIsStillAccepted() {
+        sourceType(DatabaseType.SQLSERVER);
+        EtlTask task = task("SELECT TOP 10 id FROM src ORDER BY id");
+        task.setWriteMode(EtlWriteMode.OVERWRITE);
 
         assertThatCode(() -> EtlTaskValidation.validateExtraction(task, configs))
                 .doesNotThrowAnyException();

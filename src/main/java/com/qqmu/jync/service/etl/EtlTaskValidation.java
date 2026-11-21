@@ -120,12 +120,22 @@ final class EtlTaskValidation {
      * products accept.
      */
     static void validateResumableWrapper(EtlTask task, DatabaseConfig source) {
-        if (!resumable(task) || source == null || isNativeMongo(source)
-                || !EtlSqlSupport.wrapsAsDerivedTable(source)) {
+        if (!resumable(task) || source == null || isNativeMongo(source)) {
             return;
         }
         String select = EtlSqlScript.lastStatement(task.getSourceSql(), source.resolvedFamily());
-        if (select != null && EtlSqlScript.startsWithWith(select, source.resolvedFamily())) {
+        if (select == null) {
+            return;
+        }
+        // The resume wrapper (SELECT * FROM (<sql>) alias WHERE key > ?) is built for EVERY
+        // resumable JDBC extraction, not just SQL Server/DB2. A top-level row limit inside it
+        // is evaluated before the watermark: after the first checkpoint every run re-reads
+        // the same window, filters all of it out, copies nothing and reports SUCCESS.
+        if (EtlSqlScript.hasTopLevelLimitingClause(select, source.resolvedFamily())) {
+            throw new IllegalArgumentException("error.etl.resume.limit");
+        }
+        if (EtlSqlSupport.wrapsAsDerivedTable(source)
+                && EtlSqlScript.startsWithWith(select, source.resolvedFamily())) {
             throw new IllegalArgumentException("error.etl.resume.cte");
         }
     }
