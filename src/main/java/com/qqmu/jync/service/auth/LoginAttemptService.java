@@ -100,7 +100,17 @@ public class LoginAttemptService {
             if (previous == null || now - previous.windowStart >= lockMs) {
                 return new Attempts(1, now);
             }
-            return new Attempts(previous.count + 1, previous.windowStart);
+            if (previous.count >= maxAttempts) {
+                // Already locked; isBlocked gates admission. Do not push the expiry forward
+                // on every further attempt, or an attacker could keep an account locked
+                // indefinitely by retrying.
+                return previous;
+            }
+            int count = previous.count + 1;
+            // The lock starts when the threshold is reached, not when the first failure in
+            // this run happened: four failures spread over fourteen minutes followed by a
+            // fifth used to lock the account for one second instead of the full window.
+            return new Attempts(count, count >= maxAttempts ? now : previous.windowStart);
         });
         if (attempts.size() > MAX_TRACKED_KEYS) {
             prune();

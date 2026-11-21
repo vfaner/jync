@@ -31,6 +31,35 @@ class LoginAttemptServiceTest {
         assertThat(service.isBlocked(key)).isTrue();
     }
 
+    /**
+     * The lock must last the full window from the fifth failure — not from the first one.
+     * Four failures spread over most of the window followed by a fifth used to lock the
+     * account for a fraction of the advertised time.
+     */
+    @Test
+    void theLockoutStartsWhenTheThresholdIsReached() {
+        for (int i = 0; i < LoginAttemptService.MAX_ATTEMPTS - 1; i++) {
+            service.recordFailure(key);
+            now.addAndGet(LoginAttemptService.LOCK_MS / LoginAttemptService.MAX_ATTEMPTS);
+        }
+        service.recordFailure(key);          // the threshold, late in the original window
+
+        now.addAndGet(LoginAttemptService.LOCK_MS / 2);
+        assertThat(service.isBlocked(key)).as("still inside the full lockout window").isTrue();
+    }
+
+    /** A retry during the lock must not extend it (an account could be locked forever). */
+    @Test
+    void aFailureDuringTheLockDoesNotExtendIt() {
+        for (int i = 0; i < LoginAttemptService.MAX_ATTEMPTS; i++) {
+            service.recordFailure(key);
+        }
+        now.addAndGet(LoginAttemptService.LOCK_MS - 1);
+        service.recordFailure(key);          // racing retry inside the lock
+        now.addAndGet(2);
+        assertThat(service.isBlocked(key)).isFalse();
+    }
+
     @Test
     void aSuccessfulLoginClearsTheCounter() {
         for (int i = 0; i < LoginAttemptService.MAX_ATTEMPTS - 1; i++) {
