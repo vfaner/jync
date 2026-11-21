@@ -78,21 +78,21 @@
     <div class="split-wide" style="margin-top:18px">
         <div>
             <div class="card" id="chart-rows">
-                <div class="card-head"><h3 th:text="#{metrics.chart.rows}">Rows synced</h3></div>
+                <div class="card-head"><h3><svg class="ico"><use href="#graph-up"/></svg> <span th:text="#{metrics.chart.rows}">Rows synced</span></h3></div>
                 <div class="card-body">
                     <div class="chart-slot" data-chart="rows"
                          th:attr="data-unit='',data-empty=#{metrics.noData}"></div>
                 </div>
             </div>
             <div class="card" id="chart-lag">
-                <div class="card-head"><h3 th:text="#{metrics.chart.lag}">Replication lag</h3></div>
+                <div class="card-head"><h3><svg class="ico"><use href="#clock-history"/></svg> <span th:text="#{metrics.chart.lag}">Replication lag</span></h3></div>
                 <div class="card-body">
                     <div class="chart-slot" data-chart="lag" data-duration="true" data-color="var(--warn)"
                          th:attr="data-empty=#{metrics.noData}"></div>
                 </div>
             </div>
             <div class="card" id="chart-failures">
-                <div class="card-head"><h3 th:text="#{metrics.chart.failures}">Consecutive failures</h3></div>
+                <div class="card-head"><h3><svg class="ico"><use href="#exclamation-triangle-fill"/></svg> <span th:text="#{metrics.chart.failures}">Consecutive failures</span></h3></div>
                 <div class="card-body">
                     <div class="chart-slot" data-chart="failures" data-color="var(--danger)"
                          th:attr="data-empty=#{metrics.noData}"></div>
@@ -102,7 +102,7 @@
         <div>
             <div class="card" id="chart-change-share">
                 <div class="card-head">
-                    <h3 th:text="#{metrics.chart.changeShare}">Change types</h3>
+                    <h3><svg class="ico"><use href="#arrow-left-right"/></svg> <span th:text="#{metrics.chart.changeShare}">Change types</span></h3>
                 </div>
                 <div class="card-body">
                     <div class="chart-host" data-chart-share
@@ -112,7 +112,7 @@
                 </div>
             </div>
             <div class="card" id="chart-hot-objects">
-                <div class="card-head"><h3 th:text="#{metrics.chart.hotObjects}">Hot tables</h3></div>
+                <div class="card-head"><h3><svg class="ico"><use href="#speedometer2"/></svg> <span th:text="#{metrics.chart.hotObjects}">Hot tables</span></h3></div>
                 <div class="card-body">
                     <div class="chart-host" data-chart-hot
                          th:attr="data-empty=#{metrics.noChanges}"></div>

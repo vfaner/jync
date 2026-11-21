@@ -94,7 +94,7 @@
 
     <div class="card" style="margin-top:18px">
         <div class="card-head">
-            <h3 th:text="#{metrics.db.runtime.title}">In-database runtime</h3>
+            <h3><svg class="ico"><use href="#cpu"/></svg> <span th:text="#{metrics.db.runtime.title}">In-database runtime</span></h3>
             <span class="hint" th:if="${runtimeSupported}" th:text="#{metrics.db.runtime.hint}">
                 Read from the database's own session and statistics views</span>
         </div>
@@ -142,7 +142,7 @@
     </div>
 
     <div class="card">
-        <div class="card-head"><h3 th:text="#{metrics.db.card.latency}">Latency</h3></div>
+        <div class="card-head"><h3><svg class="ico"><use href="#clock-history"/></svg> <span th:text="#{metrics.db.card.latency}">Latency</span></h3></div>
         <div class="card-body">
             <div class="chart-slot" data-chart="latency" data-duration="true"
                  th:attr="data-empty=#{metrics.noData}"></div>
@@ -150,7 +150,7 @@
     </div>
 
     <div class="card">
-        <div class="card-head"><h3 th:text="#{metrics.db.card.bytes}">Space used</h3></div>
+        <div class="card-head"><h3><svg class="ico"><use href="#hdd-network"/></svg> <span th:text="#{metrics.db.card.bytes}">Space used</span></h3></div>
         <div class="card-body">
             <div class="chart-slot" data-chart="bytes" data-color="var(--accent)" data-bytes="true"
                  th:attr="data-empty=#{metrics.noData}"></div>
