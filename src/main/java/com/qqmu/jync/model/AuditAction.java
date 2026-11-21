@@ -32,6 +32,8 @@ public enum AuditAction {
     CHANGELOG_PURGE,
     /** Audit history on or before a chosen day was purged by an administrator. */
     AUDIT_PURGE,
+    /** Rolled system-log archives on or before a chosen day were deleted. */
+    SYSTEM_LOG_PURGE,
     /** A diagnostics bundle was exported, including logs and configuration shape. */
     DIAGNOSTICS_EXPORT,
     /** A Redis cache target was created or updated. */

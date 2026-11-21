@@ -179,7 +179,8 @@ public class ConversionApiController {
                     "uncertainties", candidate.getUncertainties(),
                     "model", nullToEmpty(candidate.getModel()),
                     "elapsedMs", candidate.getElapsedMs(),
-                    "cached", candidate.isCached());
+                    "cached", candidate.isCached(),
+                    "truncated", candidate.isTruncated());
         }
         return Map.of(
                 "success", true,
@@ -187,7 +188,8 @@ public class ConversionApiController {
                 "uncertainties", candidate.getUncertainties(),
                 "model", nullToEmpty(candidate.getModel()),
                 "elapsedMs", candidate.getElapsedMs(),
-                "cached", candidate.isCached());
+                "cached", candidate.isCached(),
+                "truncated", candidate.isTruncated());
     }
 
     /**

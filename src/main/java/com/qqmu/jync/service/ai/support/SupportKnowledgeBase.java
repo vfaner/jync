@@ -39,11 +39,12 @@ public class SupportKnowledgeBase {
      * baseline section reaches its "does a rebuild delete rows?" answer past character 600,
      * so the model received the setup and none of the conclusion. 1000 fixed that section
      * but not the assistant section, whose English text puts its later bullets past 1000.
-     * 3000 covers the longest surviving section ("When data stops arriving", ~2.1 KB) with
-     * room to spare; the total across sections is still bounded by
+     * 3200 covers the longest surviving section ("What the AI operations assistant can do",
+     * ~3.1 KB once hand-trimmed); the Chinese variant was split into shorter sections instead.
+     * The total across sections is still bounded by
      * {@link #TOTAL_EXCERPT_BUDGET}, well under the registry's 8 KB result cap.
      */
-    private static final int MAX_EXCERPT = 3000;
+    private static final int MAX_EXCERPT = 3200;
 
     /**
      * Total body characters across one search result. Three maximal sections would be 9 KB,

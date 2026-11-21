@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -20,6 +21,9 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.log.SystemLogService;
 
 /**
@@ -38,6 +42,8 @@ class SystemLogControllerViewTest {
 
     @MockitoBean
     private SystemLogService logService;
+    @MockitoBean
+    private AdminAuditService auditService;
     @MockitoBean
     private BuildProperties buildProperties;
 
@@ -109,5 +115,18 @@ class SystemLogControllerViewTest {
                 new SystemLogService.LogQueryResult(List.of(), 0, false, "syslog.error.file"));
 
         assertThat(page("?file=missing.log")).contains("日志文件不可用");
+    }
+
+    /** Deleting diagnostic logs is accountable: the purge writes its own audit event. */
+    @org.junit.jupiter.api.Test
+    void aDatePurgeRecordsItselfInTheAuditTrail() throws Exception {
+        java.time.LocalDate day = java.time.LocalDate.now().minusDays(1);
+        when(logService.purgeBefore(day)).thenReturn(3);
+
+        mvc.perform(post("/system-logs/purge").param("date", day.toString()))
+                .andExpect(status().isOk());
+
+        org.mockito.Mockito.verify(auditService).record(AuditAction.SYSTEM_LOG_PURGE,
+                AuditDetail.of("audit.detail.systemLogPurge", "3", day.toString()));
     }
 }

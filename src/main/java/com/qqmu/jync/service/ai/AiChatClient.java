@@ -171,7 +171,7 @@ public class AiChatClient {
                 // the same tree, and a completion body can be large.
                 JsonNode root = parseOrNull(response.body());
                 return ChatResult.success(extractText(protocol, root), servedModel(root),
-                        endpoint, model, ms);
+                        endpoint, model, ms, truncatedInBuffered(protocol, root));
             }
             String detail = extractError(response.statusCode(), response.body());
             log.warn("AI request to '{}' failed: HTTP {} {}",
@@ -276,6 +276,11 @@ public class AiChatClient {
 
             StringBuilder text = new StringBuilder();
             String[] served = {""};
+            // Finish reasons arrive on the last chunk / message_delta; remembering them lets
+            // the caller say "cut off at Max Tokens" instead of silently keeping half a
+            // statement. Declared outside the reader scope: the buffered-reply path and the
+            // final return both need it.
+            boolean[] truncated = {false};
             try (java.io.BufferedReader reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(body, StandardCharsets.UTF_8))) {
                 String line;
@@ -325,6 +330,9 @@ public class AiChatClient {
                             text.append(piece);
                             sink.accept(piece);
                         }
+                        if ("length".equals(chunk.path("done_reason").asString(""))) {
+                            truncated[0] = true;
+                        }
                         if (chunk.path("done").asBoolean(false)) {
                             break;
                         }
@@ -370,6 +378,14 @@ public class AiChatClient {
                     // with one protocol and answer with the other's events.
                     String delta = "";
                     JsonNode choice = root.path("choices").path(0);
+                    if ("length".equals(choice.path("finish_reason").asString(""))) {
+                        truncated[0] = true;
+                    }
+                    if ("message_delta".equals(root.path("type").asString(""))
+                            && "max_tokens".equals(root.path("delta")
+                                    .path("stop_reason").asString(""))) {
+                        truncated[0] = true;
+                    }
                     if (!choice.isMissingNode()) {
                         delta = choice.path("delta").path("content").asString("");
                         if (delta.isEmpty()) {
@@ -396,13 +412,14 @@ public class AiChatClient {
                         sink.accept(whole);
                     }
                     return ChatResult.success(whole, servedModel(root), endpoint, model,
-                            System.currentTimeMillis() - start);
+                            System.currentTimeMillis() - start,
+                            truncatedInBuffered(protocol, root));
                 }
             } finally {
                 watchdog.cancel(false);
             }
             return ChatResult.success(text.toString(), served[0], endpoint, model,
-                    System.currentTimeMillis() - start);
+                    System.currentTimeMillis() - start, truncated[0]);
 
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -730,9 +747,14 @@ public class AiChatClient {
             body.put("max_tokens", maxTokens);
             body.put("stream", true);
         }
-        // No reasoning knob here on purpose: the assistant's answers are short and the extra
-        // latency of a thinking model works against a chat panel.
-        applyReasoning(protocol, body, AiReasoningEffort.DEFAULT, maxTokens);
+        // Short answers; a thinking model's latency works against a chat panel. Ollama's
+        // thinking models think by default, so the assistant asks them explicitly not to:
+        // native sends `think:false`, the /v1 endpoint sends reasoning_effort "none"
+        // (verified against a local qwen3 install). Other providers stay on DEFAULT — no
+        // field sent, old behavior kept.
+        boolean ollama = protocol == AiProtocol.OLLAMA || protocol == AiProtocol.OLLAMA_NATIVE;
+        applyReasoning(protocol, body, ollama ? AiReasoningEffort.OFF : AiReasoningEffort.DEFAULT,
+                maxTokens);
 
         boolean anthropic = protocol == AiProtocol.ANTHROPIC;
         boolean hasSystem = system != null && !system.isBlank();
@@ -1491,9 +1513,16 @@ public class AiChatClient {
         private final String servedModel;
         private final String requestedModel;
         private final long elapsedMs;
+        /**
+         * True when the endpoint reported that generation stopped at the token budget
+         * (finish_reason "length", Anthropic "max_tokens", Ollama done_reason "length").
+         * A truncated reply is still a reply — callers decide whether to keep or flag it.
+         */
+        private final boolean truncated;
 
         private ChatResult(boolean success, String text, String message, String endpoint,
-                           String servedModel, String requestedModel, long ms) {
+                           String servedModel, String requestedModel, long ms,
+                           boolean truncated) {
             this.success = success;
             this.text = text;
             this.message = message;
@@ -1501,15 +1530,22 @@ public class AiChatClient {
             this.servedModel = servedModel;
             this.requestedModel = requestedModel;
             this.elapsedMs = ms;
+            this.truncated = truncated;
         }
 
         static ChatResult success(String text, String servedModel, String endpoint,
                                   String requestedModel, long ms) {
-            return new ChatResult(true, text, "OK", endpoint, servedModel, requestedModel, ms);
+            return success(text, servedModel, endpoint, requestedModel, ms, false);
+        }
+
+        static ChatResult success(String text, String servedModel, String endpoint,
+                                  String requestedModel, long ms, boolean truncated) {
+            return new ChatResult(true, text, "OK", endpoint, servedModel, requestedModel, ms,
+                    truncated);
         }
 
         static ChatResult failure(String message, String endpoint, String requestedModel, long ms) {
-            return new ChatResult(false, "", message, endpoint, "", requestedModel, ms);
+            return new ChatResult(false, "", message, endpoint, "", requestedModel, ms, false);
         }
 
         /** The model that answered, falling back to the one requested when unreported. */

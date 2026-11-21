@@ -559,10 +559,10 @@ public class ProjectController {
         model.addAttribute("cdcStats", cdcStats);
 
         if (!liveSourceAllowed) {
-            // Same bundle key the failure path uses: the template already knows how to say
-            // "the source listing is unavailable" and every consumer of sourceObjects is
-            // null-safe.
-            model.addAttribute("sourceWarning", "msg.source.objects.unavailable");
+            // Not a fault: this account may not edit the project, so the page never dials
+            // the live source. Say that, not "check the connection" — the template's
+            // sourceObjects consumers are all null-safe.
+            model.addAttribute("sourceWarning", "msg.source.objects.restricted");
             return "project-detail";
         }
         try {

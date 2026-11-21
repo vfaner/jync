@@ -9,6 +9,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import com.qqmu.jync.model.AuditAction;
+import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.log.SystemLogService;
 
 /**
@@ -23,13 +26,15 @@ import com.qqmu.jync.service.log.SystemLogService;
 public class SystemLogController {
 
     private final SystemLogService logService;
+    private final AdminAuditService auditService;
 
     /** Optional so @WebMvcTest slices that omit the message source still wire the controller. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private org.springframework.context.MessageSource messageSource;
 
-    public SystemLogController(SystemLogService logService) {
+    public SystemLogController(SystemLogService logService, AdminAuditService auditService) {
         this.logService = logService;
+        this.auditService = auditService;
     }
 
     @GetMapping("/system-logs")
@@ -73,6 +78,11 @@ public class SystemLogController {
         }
         try {
             int removed = logService.purgeBefore(day);
+            // The same accountability rule as the change-log and audit purges: deleting
+            // diagnostic history writes the act itself to the audit trail.
+            auditService.record(AuditAction.SYSTEM_LOG_PURGE,
+                    AuditDetail.of("audit.detail.systemLogPurge",
+                            String.valueOf(removed), day.toString()));
             return Map.of("success", true, "message", text("log.purge.success", removed));
         } catch (IllegalArgumentException e) {
             return Map.of("success", false, "message", text(e.getMessage()));

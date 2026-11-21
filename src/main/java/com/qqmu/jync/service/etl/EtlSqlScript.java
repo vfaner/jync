@@ -76,7 +76,7 @@ final class EtlSqlScript {
      * migrated. Validation refuses such a task instead of letting it report SUCCESS forever.
      */
     static boolean hasTopLevelLimitingClause(String statement, DialectFamily family) {
-        return hasLimitingClause(topLevelTokens(statement, family));
+        return hasLimitingClause(statement, topLevelTokens(statement, family));
     }
 
     /** Whether the statement has an {@code ORDER BY} outside every parentheses level. */
@@ -103,7 +103,7 @@ final class EtlSqlScript {
 
     static String stripTopLevelOrderBy(String statement, DialectFamily family) {
         List<Token> tokens = topLevelTokens(statement, family);
-        if (hasLimitingClause(tokens)) {
+        if (hasLimitingClause(statement, tokens)) {
             return statement;
         }
         int start = orderByStart(tokens);
@@ -128,12 +128,18 @@ final class EtlSqlScript {
      * wrapper fail on every run. TOP, FETCH FIRST/NEXT, LIMIT/OFFSET with a count, and
      * FOR UPDATE / FOR XML / FOR JSON (cursor or document semantics) do keep the order.
      */
-    private static boolean hasLimitingClause(List<Token> tokens) {
+    private static boolean hasLimitingClause(String statement, List<Token> tokens) {
         for (int i = 0; i < tokens.size(); i++) {
             String word = tokens.get(i).word();
             String next = i + 1 < tokens.size() ? tokens.get(i + 1).word() : null;
             if (isWord(word, "TOP")) {
-                return true;
+                // TOP needs a count to limit anything: `AS top` is just an alias. The count can
+                // be a number, a variable, or a parenthesized expression — all of which the
+                // character right after the word reveals, even when the tokenizer drops it.
+                if (nextCharIsCount(statement, tokens.get(i).end())) {
+                    return true;
+                }
+                continue;
             }
             if (isWord(word, "FETCH") && (isWord(next, "FIRST") || isWord(next, "NEXT"))) {
                 return true;
@@ -169,6 +175,19 @@ final class EtlSqlScript {
             }
         }
         return true;
+    }
+
+    /** Whether {@code from} is followed (after whitespace) by a row-count expression. */
+    private static boolean nextCharIsCount(String statement, int from) {
+        int i = from;
+        while (i < statement.length() && Character.isWhitespace(statement.charAt(i))) {
+            i++;
+        }
+        if (i >= statement.length()) {
+            return false;
+        }
+        char c = statement.charAt(i);
+        return Character.isDigit(c) || c == '(' || c == '@' || c == ':' || c == '?';
     }
 
     private static boolean isWord(String token, String keyword) {

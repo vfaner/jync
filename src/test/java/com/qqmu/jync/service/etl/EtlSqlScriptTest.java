@@ -181,6 +181,27 @@ class EtlSqlScriptTest {
     }
 
     @Test
+    void aTopAliasDoesNotCountAsALimitingClause() {
+        // `top` is not reserved in T-SQL/DB2: an alias must not keep the ORDER BY, because
+        // the derived-table wrapper would then be rejected on every run.
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT x AS top FROM src ORDER BY x", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT x AS top FROM src");
+        assertThat(EtlSqlScript.hasTopLevelLimitingClause(
+                "SELECT x AS top FROM src", DialectFamily.SQLSERVER)).isFalse();
+    }
+
+    @Test
+    void topWithAParenthesizedOrVariableCountStillKeepsTheOrderBy() {
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT TOP (10) id FROM src ORDER BY id", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT TOP (10) id FROM src ORDER BY id");
+        assertThat(EtlSqlScript.stripTopLevelOrderBy(
+                "SELECT TOP (@n) id FROM src ORDER BY id", DialectFamily.SQLSERVER))
+                .isEqualTo("SELECT TOP (@n) id FROM src ORDER BY id");
+    }
+
+    @Test
     void offsetWithAVariableOrHexCountStillKeepsTheOrderBy() {
         // SQL Server OFFSET @p ROWS / DB2 OFFSET :n ROWS / 十六进制计数：计数不是字面数字，
         // 但 OFFSET 仍是真限流子句，剥掉 ORDER BY 会让派生表里的 OFFSET 失去排序而报错。

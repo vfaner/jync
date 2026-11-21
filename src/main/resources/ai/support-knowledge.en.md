@@ -32,6 +32,8 @@ trend chart (sync or ETL), recent activity, and a project overview with table co
 and last sync time per task. Start here for overall health; per-task speed and failures live on
 the task's Performance and Change log tabs.
 
+- The "Live status · Updated HH:mm:ss" pill at the top writes the latest refresh time on every 10-second poll; the task card shows failing tasks as a red count beside the running count.
+
 ## Creating tasks at scale
 
 - Table mapping: a source table can be written to another target table name; target names must be
@@ -96,7 +98,7 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 - High query%/read%: the source SQL, cursor or network is the bottleneck.
 - High write%: target constraints, unique indexes, triggers or large fields are slow.
 - High commit%: commits are too frequent; raise sync.full-load-batch-size.
-Log file: ./logs/jync.log (UTF-8), 10MB per file, kept 14 days, 500MB total.
+Log file: ./logs/jync.log (UTF-8), 10MB per file, kept 30 days, 500MB total.
 
 ## Where to see sync speed and logs
 
@@ -118,11 +120,15 @@ Setting metrics.enabled=false only stops sampling; sync is unaffected.
   committed batch boundary.
 - Log CDC tasks have no Quartz schedule and hide the scheduling card.
 - Instances rebuild the in-memory schedule; a database lease excludes concurrent runs.
+- reconcile-interval-ms (default 30000, 30 s): how often instances re-check which one should
+  run which task, so a failed node hands over within that window.
 
 ## Cron expressions
 
-Cron uses Quartz syntax with 6 or 7 fields, seconds first, validated on save and start; it takes
-precedence over the poll interval.
+Sync tasks use Quartz syntax with 6 or 7 fields (year included); ETL and dedicated-migration tasks
+use Spring's 6-field syntax (no year field), and a 7-field expression is refused on save. Seconds
+come first, expressions are validated on save and at start, and a schedule overrides the poll
+interval.
 - 0/2 * * * * ?    every 2 seconds
 - 0 0/5 * * * ?    every 5 minutes
 - 0 30 2 * * ?     daily at 02:30
@@ -167,7 +173,9 @@ executes once when a worker becomes free.
   streaming-enabled=false.
 - CDC buffer values above the limit spill to sync.lob.spill-dir (jync-lob in the temp dir),
   deleted at transaction boundaries; spill-max-bytes caps one transaction at 1GiB and startup
-  removes residue older than spill-retention-hours.
+  removes residue older than spill-retention-hours (default 24 hours).
+- A batch is committed once it accumulates batch-max-bytes (default 16MiB); a single value above
+  that budget gets a batch of its own.
 - Primary key, cursor and cleaned columns must be inline; above force-inline-max-bytes (1MB) the
   task fails naming table and column.
 - PostgreSQL/openGauss sources keep the read transaction open, delaying vacuum.
@@ -662,41 +670,37 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 
 - The floating assistant is for administrators and operators; it reads project state, progress rows,
   the last failure, and 1-hour throughput and lag.
-- Answers follow "conclusion → evidence → recommendations → executable items". An executable item
-  is a runtime action rendered as a confirmation card: each card is one option, and nothing happens
-  until the user clicks Confirm. Actions the assistant cannot perform (editing task configuration,
-  dropping a target table, rerunning an external report job) are written as manual steps and are
-  never dressed up as cards.
-- When the user describes a sync-task symptom (stall, data mismatch, repeated failures, slowdown),
-  one diagnose_project call gathers task state, recent failures, active alerts, the CDC position
-  and the switches that decide whether a rebuild can help (captureStrategy, syncDeletes,
-  truncateBeforeInitialLoad, fullCompareMaxRows, deleteCompareMaxRows), plus the newest change and
-  newest successful write times — which separate "never saw a change" (read side) from "saw it and
-  the write failed" (write side).
+- Answers follow "conclusion → evidence → recommendations → executable items"; a runtime action
+  becomes a confirmation card, one per option, effective only after Confirm. Actions it cannot
+  perform (editing configuration, dropping a table, rerunning an external report job) are written
+  as manual steps, never as cards.
+- When the user describes a sync-task symptom (stall, mismatch, repeated failures, slowdown), one
+  diagnose_project call gathers task state, recent failures, active alerts, the CDC position, the
+  rebuild-relevant switches (captureStrategy, syncDeletes, truncateBeforeInitialLoad,
+  fullCompareMaxRows, deleteCompareMaxRows) and the newest change / newest successful write times —
+  separating "never saw a change" (read side) from "saw it and the write failed" (write side).
 - It reads change-log (CDC) runtime state: connection, position, last error, skipped DDL and
   pruned-column counters, and whether the consumer runs on this node or elsewhere.
 - It can run the change-log prerequisite self-check for one project (archivelog, binlog format and
   retention, supplemental logging, replication or mining privileges, server-id collisions) and list
-  every failing item. The check opens the source database and runs at most twice per conversation;
-  it runs only on projects the caller may edit, the same right the page's self-check button requires.
+  every failing item. It opens the source database, runs at most twice per conversation, and needs
+  edit rights on the project — the same right as the page's self-check button.
 - It lists the alert conditions active right now (sync failure, stuck polling, CDC stopped, drift,
   unhealthy connection, PG slot backlog, skipped DDL) and ETL task state: enabled, last run time,
   success and result line.
-- It diagnoses one ETL task (diagnose_etl_task): enabled, cron validity, whether a run is in
-  flight, both connection names, the latest result and the last 20 runs with their row counts and
-  timestamps — enough to separate "running fine with no new data" from "failing all night". A
-  non-null batchId means the task is a batch member sharing connections and scheduling with its
-  batch.
-- It lists dedicated-migration tasks (list_migrations) and diagnoses one (diagnose_migration):
-  migration type, both connection names, enabled state, latest run status, current index, documents
-  read and written, and failed-index count.
-- It reads failure history from the last 1 to 168 hours (default 24, at most 20 rows), optionally
-  narrowed to one project. Alerts only cover conditions still active; this shows a short failure
-  from last night that had already recovered by morning.
-- Suggested diagnosis order: alerts and recent failures, then task status, then CDC runtime state,
-  then the prerequisite self-check, then this knowledge base for prerequisites and known limits.
-  For a data mismatch, check syncDeletes, the comparison limits, and whether the target or report
-  table is produced by another job.
+- It diagnoses one ETL task (diagnose_etl_task): enabled, cron validity, in-flight state, both
+  connections, the latest result and the last 20 runs with row counts and timestamps — separating
+  "running fine with no new data" from "failing all night". A non-null batchId marks a batch member
+  sharing connections and scheduling.
+- It lists dedicated-migration tasks (list_migrations) and diagnoses one (diagnose_migration): type,
+  both connections, enabled state, latest run status, current index, documents read and written, and
+  failed-index count.
+- It reads failure history over the last 1 to 168 hours (default 24, at most 20 rows), optionally
+  for one project — including short failures from last night that had already recovered, which the
+  alert board no longer shows.
+- Suggested order: alerts and recent failures, task status, CDC runtime state, the prerequisite
+  self-check, then this knowledge base for prerequisites and limits. For a mismatch, check
+  syncDeletes, the comparison limits, and whether the target comes from another job.
 - It reads connection database metrics (1h / 24h), lists connections and projects, and compares the
   exact row count of one table on both sides.
 - It searches this knowledge base for how-to answers and drafts a new task from a description, which

@@ -2806,10 +2806,13 @@
           unlockEditor();
           flushSync();
           showDraftNotice();
-          // 缓存命中会「秒回」，不标注的话用户会以为根本没调模型
+          // 缓存命中会「秒回」，不标注的话用户会以为根本没调模型；被 Max Tokens
+          // 截断的候选仍是候选，但要和「已生成」一起说，别连弹两条提示。
           var extra = payload.cached ? ' ' + t('conversion.draftCached') : '';
+          if (payload.truncated) extra += ' ' + t('conversion.draftTruncated');
           toast(t('conversion.draftDone') + ' — ' + (payload.model || '') +
-            ' (' + (payload.elapsedMs || 0) + 'ms)' + extra, 'ok');
+            ' (' + (payload.elapsedMs || 0) + 'ms)' + extra,
+            payload.truncated ? 'warn' : 'ok');
         }
 
         return postSse(btn.dataset.action + '/stream', function (text) {
@@ -3330,7 +3333,10 @@
           animateCounters(grid, previousValues);
 
           var freshOverview = fresh.getElementById('project-overview');
-          if (overview && freshOverview) {
+          // 内容没变就不动 DOM：换 innerHTML 会丢焦点、丢正在拖动的选区，
+          // 概览表里还有可点的任务链接，没必要的重画就是可感知的卡顿。
+          if (overview && freshOverview && overview.innerHTML !== freshOverview.innerHTML
+              && !overview.contains(document.activeElement)) {
             // 变动的数字格跳一下，和统计卡同一套「这是活的」语言。
             var beforeNums = overview.querySelectorAll('td.num');
             var previousNums = [];
@@ -3846,6 +3852,11 @@
   function setModalOpen(id, open) {
     var modal = document.getElementById(id);
     if (!modal) return;
+    // aria-hidden 的子树里不能留着焦点（读屏会丢掉当前位置，浏览器也会告警）；
+    // 关弹窗前先让焦点落地，再改 aria-hidden。
+    if (!open && modal.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
     modal.classList.toggle('open', open);
     modal.setAttribute('aria-hidden', open ? 'false' : 'true');
     // 弹窗自己可滚动，锁住背景避免两层滚动条打架

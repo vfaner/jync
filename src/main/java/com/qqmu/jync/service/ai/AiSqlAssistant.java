@@ -190,16 +190,32 @@ public class AiSqlAssistant {
     private Candidate parse(AiChatClient.ChatResult result) {
         String text = result.getText() == null ? "" : result.getText().strip();
         if (text.isEmpty()) {
+            if (result.isTruncated()) {
+                // The budget ran out before any statement arrived (a thinking model that was
+                // not told to skip thinking does this). Name the real cause: raising Max
+                // Tokens is the fix, and retrying as-is just burns another call.
+                return Candidate.failure("error.ai.truncated", result.effectiveModel(),
+                        result.getElapsedMs());
+            }
+            // Empty with no finish reason can be a gateway returning {} or a filtered reply,
+            // not necessarily a refusal: keep the actionable "raise Max Tokens" wording
+            // instead of claiming the model declined.
             return Candidate.failure("error.ai.emptyReply", result.effectiveModel(),
                     result.getElapsedMs());
         }
 
         String sql = stripFence(text);
         if (sql.isEmpty()) {
+            if (result.isTruncated()) {
+                // Only a fence opening made it out: the cut, not a refusal, emptied it.
+                return Candidate.failure("error.ai.truncated", result.effectiveModel(),
+                        result.getElapsedMs());
+            }
             // Rule 4: the model answered nothing usable, which is its way of declining.
             return Candidate.declined(List.of(), result.effectiveModel(), result.getElapsedMs());
         }
-        return Candidate.success(sql, List.of(), result.effectiveModel(), result.getElapsedMs());
+        return Candidate.success(sql, List.of(), result.effectiveModel(), result.getElapsedMs(),
+                result.isTruncated());
     }
 
     /** Removes a surrounding markdown fence if present, leaving the content alone. */
@@ -237,9 +253,14 @@ public class AiSqlAssistant {
         private final long elapsedMs;
         /** True when served from the short-lived draft cache rather than a fresh model call. */
         private final boolean cached;
+        /**
+         * True when the endpoint said it stopped at the token budget. The statement may end
+         * mid-sentence; the page warns so it is not saved as if it were complete.
+         */
+        private final boolean truncated;
 
         private Candidate(boolean success, String sql, List<String> uncertainties, String message,
-                          String model, long ms, boolean cached) {
+                          String model, long ms, boolean cached, boolean truncated) {
             this.success = success;
             this.sql = sql;
             this.uncertainties = List.copyOf(uncertainties);
@@ -247,25 +268,32 @@ public class AiSqlAssistant {
             this.model = model;
             this.elapsedMs = ms;
             this.cached = cached;
+            this.truncated = truncated;
         }
 
         static Candidate success(String sql, List<String> uncertainties, String model, long ms) {
-            return new Candidate(true, sql, uncertainties, null, model, ms, false);
+            return success(sql, uncertainties, model, ms, false);
+        }
+
+        static Candidate success(String sql, List<String> uncertainties, String model, long ms,
+                                 boolean truncated) {
+            return new Candidate(true, sql, uncertainties, null, model, ms, false, truncated);
         }
 
         /** Re-serves an earlier candidate; the elapsed time of the original call no longer applies. */
         static Candidate cached(Candidate original) {
             return new Candidate(original.success, original.sql, original.uncertainties,
-                    original.message, original.model, 0, true);
+                    original.message, original.model, 0, true, original.truncated);
         }
 
         /** The model answered but refused to convert; its reasons are the uncertainties. */
         static Candidate declined(List<String> uncertainties, String model, long ms) {
-            return new Candidate(false, "", uncertainties, "error.ai.declined", model, ms, false);
+            return new Candidate(false, "", uncertainties, "error.ai.declined", model, ms, false,
+                    false);
         }
 
         static Candidate failure(String message, String model, long ms) {
-            return new Candidate(false, "", List.of(), message, model, ms, false);
+            return new Candidate(false, "", List.of(), message, model, ms, false, false);
         }
     }
 }

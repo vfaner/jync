@@ -132,7 +132,7 @@ class SupportKnowledgeBaseTest {
                 "AI support assistant diagnosis suggestions executable confirmation card", 3);
         String all = en.stream().map(SupportKnowledgeBase.Section::body)
                 .reduce("", String::concat);
-        assertThat(all).contains("Suggested diagnosis order").contains("confirmation card");
+        assertThat(all).contains("Suggested order").contains("confirmation card");
     }
 
     /** The per-section cap times topK must still fit the registry's result cap. */

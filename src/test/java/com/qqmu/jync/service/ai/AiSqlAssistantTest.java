@@ -32,6 +32,7 @@ class AiSqlAssistantTest {
 
     /** Returns a canned reply and records what it was asked. */
     private static class StubClient extends AiChatClient {
+        private boolean truncated;
         private String reply = "CREATE PROCEDURE x() BEGIN END";
         private boolean fail;
         private String failMessage = "HTTP 401";
@@ -51,7 +52,7 @@ class AiSqlAssistantTest {
             return fail
                     ? ChatResult.failure(failMessage, "http://stub", provider.getModel(), 5)
                     : ChatResult.success(reply, "served-model", "http://stub",
-                            provider.getModel(), 5);
+                            provider.getModel(), 5, truncated);
         }
     }
 
@@ -224,8 +225,8 @@ class AiSqlAssistantTest {
     }
 
     @Test
-    @DisplayName("an empty reply is a failure, not an empty candidate")
-    void anEmptyReplyIsAFailure() {
+    @DisplayName("an empty reply with no finish reason keeps the actionable Max Tokens message")
+    void anEmptyReplySaysTheModelReturnedNothing() {
         client.reply = "";
         AiSqlAssistant.Candidate candidate = draft();
 
@@ -233,6 +234,30 @@ class AiSqlAssistantTest {
         assertThat(candidate.getMessage()).isEqualTo("error.ai.emptyReply");
         // An empty candidate would silently blank the reviewer's editor.
         assertThat(candidate.getSql()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("an empty reply cut off by Max Tokens names the real cause")
+    void anEmptyTruncatedReplySaysMaxTokensRanOut() {
+        client.reply = "";
+        client.truncated = true;
+        AiSqlAssistant.Candidate candidate = draft();
+
+        assertThat(candidate.isSuccess()).isFalse();
+        assertThat(candidate.getMessage()).isEqualTo("error.ai.truncated");
+        assertThat(candidate.getSql()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("a truncated but non-empty reply is kept and flagged for the page")
+    void aTruncatedReplyIsKeptAndFlagged() {
+        client.reply = "SELECT 1";
+        client.truncated = true;
+        AiSqlAssistant.Candidate candidate = draft();
+
+        assertThat(candidate.isSuccess()).isTrue();
+        assertThat(candidate.getSql()).isEqualTo("SELECT 1");
+        assertThat(candidate.isTruncated()).isTrue();
     }
 
     @Test

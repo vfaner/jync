@@ -312,6 +312,18 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .btn-ok:hover:not(:disabled), .btn-warn:hover:not(:disabled) {
   color: #fff; transform: translateY(-2px);
 }
+/* 「按日期删除」这类危险但不是主操作的按钮挂的是 btn-ghost btn-warn 两个类，
+   两个选择器同级，按书写顺序会落成实心橙底、悬停又只剩品牌色描边。组合态显式
+   定成描边款：平时低调，悬停才染上警示色。 */
+.btn-ghost.btn-warn {
+  background: var(--bg); color: var(--warn); border-color: var(--line);
+  box-shadow: none;
+}
+.btn-ghost.btn-warn:hover:not(:disabled) {
+  background: var(--fb-warn-11);
+  background: color-mix(in srgb, var(--warn) 11%, transparent);
+  border-color: var(--warn); color: var(--warn);
+}
 
 .btn-outline-danger { background: transparent; color: var(--danger); border-color: var(--fb-danger-40-line); border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
 .btn-outline-danger:hover:not(:disabled) { background: var(--danger); color: #fff; }
@@ -1942,12 +1954,10 @@ table.tbl a.truncate { display: block; }
 /* 进程资源不套卡片：紧跟整机资源环，用自己的标题行把这一节和上面的任务数字隔开。 */
 .process-row { margin-top: 18px; }
 .process-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
-.process-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .process-head .seg { margin-left: auto; }
 .process-stats { margin-bottom: 14px; }
 /* 整机资源环的小标题行，与进程资源标题同款；标题在环片段之外，刷新不重画。 */
 .server-head { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 18px 0 10px; }
-.server-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .server-head .hint, .process-head .hint { font-size: 12.5px; color: var(--ink-mute); font-weight: 400; }
 /* 区块标题胶囊徽标头：品牌色图标 + 柔和标题 + 实时呼吸点（复用 live-dot），
    服务器信息 / Jync 进程资源 / 同步趋势 统一组件感。 */
