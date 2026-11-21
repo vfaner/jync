@@ -38,7 +38,7 @@ class MigrationRunStoreTest {
 
     @BeforeEach
     void setUp() {
-        nodeId = new MigrationNodeId();
+        nodeId = new MigrationNodeId("node-under-test");
         store = new MigrationRunStore(runRepository, taskRepository, nodeId);
     }
 

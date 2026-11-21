@@ -35,8 +35,26 @@ class MigrationRunRecoveryTest {
 
     @BeforeEach
     void setUp() {
-        nodeId = new MigrationNodeId();
+        nodeId = new MigrationNodeId("node-under-test");
         recovery = new MigrationRunRecovery(runRepository, taskRepository, nodeId);
+    }
+
+    /**
+     * The stable id means a run this deployment's previous process left behind IS recovered
+     * after a restart — the case the per-boot random id would have missed.
+     */
+    @Test
+    void aRunOwnedByThisNodesStableIdIsRecovered() {
+        MigrationRun run = running(3L, 9L);
+        run.setRunNode(nodeId.id());
+        MigrationTask task = task(9L);
+        when(runRepository.findByStatus(MigrationRunStatus.RUNNING))
+                .thenReturn(List.of(run));
+        when(taskRepository.findById(9L)).thenReturn(Optional.of(task));
+
+        assertThat(recovery.recoverInterrupted()).isEqualTo(1);
+        assertThat(run.getStatus()).isEqualTo(MigrationRunStatus.INTERRUPTED);
+        assertThat(task.getLastRunResult()).isEqualTo("INTERRUPTED");
     }
 
     /**
