@@ -178,8 +178,12 @@ public class SupportApiController {
         if (runId == null || cancelled == null) {
             return;
         }
-        pendingCancels.computeIfAbsent(runId, id -> cancelScheduler.schedule(
-                () -> cancelled.set(true), DETACH_CANCEL_GRACE_MS, TimeUnit.MILLISECONDS));
+        pendingCancels.computeIfAbsent(runId, id -> cancelScheduler.schedule(() -> {
+            // Remove the entry once it has fired: the completion hook schedules one for every
+            // finished run, and keeping them would grow the map for the life of the process.
+            pendingCancels.remove(id);
+            cancelled.set(true);
+        }, DETACH_CANCEL_GRACE_MS, TimeUnit.MILLISECONDS));
     }
 
     private void clearPendingCancel(String runId) {
