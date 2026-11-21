@@ -240,6 +240,28 @@ class DriverMongoMigrationGatewayTest {
                 .allSatisfy(option -> assertThat(option.isOrdered()).isTrue());
     }
 
+    /**
+     * A duplicate on a customer unique index is not "the document already existed": the
+     * source row has no home on the target, and swallowing the error would report a
+     * successful copy with a silently missing document (skipped rows are not counted).
+     */
+    @Test
+    void aDuplicateOnAnotherUniqueIndexFailsTheBatch() {
+        MongoCollection<Document> collection = mock(MongoCollection.class);
+        when(database.getCollection("orders")).thenReturn(collection);
+        List<Document> documents = List.of(new Document("_id", 1).append("email", "a@b.c"));
+        BulkWriteResult writeResult = mock(BulkWriteResult.class);
+        when(writeResult.getInsertedCount()).thenReturn(0);
+        MongoBulkWriteException failure = new MongoBulkWriteException(writeResult,
+                List.of(bulkError(11000, new BsonDocument("email", new BsonInt32(1)), 0)),
+                null, new ServerAddress(), Set.of());
+        when(collection.insertMany(eq(documents), any(InsertManyOptions.class)))
+                .thenThrow(failure);
+
+        assertThatThrownBy(() -> gateway.insertMany("orders", documents, true))
+                .isSameAs(failure);
+    }
+
     private static MongoBulkWriteException duplicateKeyFailure(int inserted) {
         return bulkFailure(11000, inserted);
     }
@@ -261,8 +283,19 @@ class DriverMongoMigrationGatewayTest {
                                                        WriteConcernError concern) {
         BulkWriteResult writeResult = mock(BulkWriteResult.class);
         when(writeResult.getInsertedCount()).thenReturn(inserted);
-        BulkWriteError error = new BulkWriteError(code, "write error", new BsonDocument(), index);
+        BulkWriteError error = bulkError(code, new BsonDocument("_id", new BsonInt32(1)), index);
         return new MongoBulkWriteException(writeResult, List.of(error), concern,
                 new ServerAddress(), Set.of());
+    }
+
+    /** Shaped like the server's real reply, details included: the gateway reads them. */
+    private static BulkWriteError bulkError(int code, BsonDocument keyPattern, int index) {
+        BsonDocument details = new BsonDocument("keyPattern", keyPattern)
+                .append("keyValue", keyPattern);
+        String message = code == 11000
+                ? "E11000 duplicate key error collection: x.orders index: "
+                        + String.join("_", keyPattern.keySet()) + "_1 dup key"
+                : "write error";
+        return new BulkWriteError(code, message, details, index);
     }
 }

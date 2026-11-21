@@ -187,8 +187,26 @@ final class DriverMongoMigrationGateway implements MongoMigrationGateway {
         client.close();
     }
 
+    /**
+     * Only an {@code _id} duplicate is "the document already existed". A duplicate on any
+     * other unique index means the source has a document the target cannot hold: treating it
+     * as already-present silently drops a row that the count check cannot see (skipped
+     * documents are not counted as written).
+     */
     static boolean isDuplicateKey(BulkWriteError error) {
-        return error.getCode() == DUPLICATE_KEY || error.getCode() == DUPLICATE_KEY_LEGACY;
+        if (error.getCode() != DUPLICATE_KEY && error.getCode() != DUPLICATE_KEY_LEGACY) {
+            return false;
+        }
+        org.bson.BsonDocument details = error.getDetails();
+        if (details != null) {
+            org.bson.BsonDocument pattern = details.getDocument("keyPattern", null);
+            if (pattern != null) {
+                return pattern.keySet().size() == 1 && pattern.containsKey("_id");
+            }
+        }
+        // Older servers omit keyPattern; the message names the index in that case.
+        String message = error.getMessage();
+        return message != null && message.contains("index: _id_");
     }
 
     private Document describeCollection(String name) {
