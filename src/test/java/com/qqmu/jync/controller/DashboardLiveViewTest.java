@@ -32,6 +32,8 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.DashboardService;
+import com.qqmu.jync.service.HostInfo;
+import com.qqmu.jync.service.HostTopProcesses;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
@@ -53,6 +55,10 @@ class DashboardLiveViewTest {
     private DashboardService dashboardService;
     @MockitoBean
     private SystemMetrics systemMetrics;
+    @MockitoBean
+    private HostInfo hostInfo;
+    @MockitoBean
+    private HostTopProcesses hostTopProcesses;
     @MockitoBean
     private MetricsQueryService metricsQueryService;
 

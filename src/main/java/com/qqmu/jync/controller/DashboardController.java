@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
 
 import com.qqmu.jync.service.DashboardService;
+import com.qqmu.jync.service.HostInfo;
+import com.qqmu.jync.service.HostTopProcesses;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.metrics.AppMetricsView;
@@ -21,12 +23,17 @@ public class DashboardController {
     private final DashboardService dashboardService;
     private final SystemMetrics systemMetrics;
     private final MetricsQueryService metricsQueryService;
+    private final HostInfo hostInfo;
+    private final HostTopProcesses hostTopProcesses;
 
     public DashboardController(DashboardService dashboardService, SystemMetrics systemMetrics,
-                               MetricsQueryService metricsQueryService) {
+                               MetricsQueryService metricsQueryService, HostInfo hostInfo,
+                               HostTopProcesses hostTopProcesses) {
         this.dashboardService = dashboardService;
         this.systemMetrics = systemMetrics;
         this.metricsQueryService = metricsQueryService;
+        this.hostInfo = hostInfo;
+        this.hostTopProcesses = hostTopProcesses;
     }
 
     /**
@@ -47,6 +54,7 @@ public class DashboardController {
             model.addAttribute("recentChanges", stats.getRecentChanges());
             // Sampled with the statistics: one reading per page, then the row polls itself.
             model.addAttribute("metrics", systemMetrics.snapshot());
+            model.addAttribute("host", hostInfo.cpu());
         }
         return "dashboard";
     }
@@ -62,7 +70,21 @@ public class DashboardController {
     @GetMapping("/dashboard/resource-gauges")
     public String resourceGaugesFragment(Model model) {
         model.addAttribute("metrics", systemMetrics.snapshot());
+        model.addAttribute("host", hostInfo.cpu());
         return "dashboard :: resourceGauges";
+    }
+
+    /**
+     * The busiest processes on this host, for the CPU gauge's expandable hover card.
+     *
+     * <p>Read on demand (one click), cached for 10 seconds server-side: the 5-second gauge
+     * refresh must not turn into a process-table poll. Only executable names are returned —
+     * command lines in this product carry {@code -D} passwords.
+     */
+    @GetMapping("/dashboard/top-processes")
+    @ResponseBody
+    public HostTopProcesses.TopProcesses topProcesses() {
+        return hostTopProcesses.topCpu(5);
     }
 
     /**

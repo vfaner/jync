@@ -18,6 +18,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.service.DashboardService;
+import com.qqmu.jync.service.HostInfo;
+import com.qqmu.jync.service.HostTopProcesses;
 import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
@@ -43,6 +45,10 @@ class DashboardUpdatePromptDisabledViewTest {
     private BuildProperties buildProperties;
     @MockitoBean
     private MetricsQueryService metricsQueryService;
+    @MockitoBean
+    private HostInfo hostInfo;
+    @MockitoBean
+    private HostTopProcesses hostTopProcesses;
 
     @Test
     void noVersionPromptOrCheckIsRendered() throws Exception {

@@ -3184,9 +3184,10 @@
             window.location.reload();
             return;
           }
-          // 键盘焦点正在某个环上（详情浮层开着）时就别换 DOM：换掉会丢焦点和浮层。
-          // 内容没变也不必重画。
-          if (row.contains(document.activeElement) || row.innerHTML === freshRow.innerHTML) {
+          // 键盘焦点正在某个环上、或 CPU 浮层被点开（top5 进程榜）时就别换 DOM：
+          // 换掉会丢焦点、收起浮层。内容没变也不必重画。
+          if (row.contains(document.activeElement) || row.querySelector('.gauge.is-pinned')
+              || row.innerHTML === freshRow.innerHTML) {
             return;
           }
           row.innerHTML = freshRow.innerHTML;
@@ -3214,6 +3215,109 @@
     });
 
     apply();
+  }
+
+  /**
+   * CPU 资源环的「占用率 top5」：点击展开并固定浮层，再点一次 / 点外面 / Esc 收起。
+   * 进程列表只在点击时取一次（服务端再缓存 10 秒），看板 5 秒刷新不会轮询进程表；
+   * 展开期间刷新暂停，浮层与列表不会被重画掉。列表里只有进程名，不含命令行参数。
+   */
+  function bindGaugeTopProcesses() {
+    var row = document.getElementById('resource-gauges');
+    if (!row) return;
+    var pinned = null;
+    var inFlight = false;
+
+    function closePinned() {
+      if (!pinned) return;
+      pinned.classList.remove('is-pinned');
+      var btn = pinned.querySelector('[data-role="top-cpu-toggle"]');
+      var list = pinned.querySelector('[data-role="top-cpu-list"]');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+      if (list) {
+        list.hidden = true;
+        list.textContent = '';
+      }
+      pinned = null;
+    }
+
+    function message(text) {
+      var div = document.createElement('div');
+      div.className = 'tip-proc-msg';
+      div.textContent = text;
+      return div;
+    }
+
+    function render(list, data) {
+      list.textContent = '';
+      if (!data || data.supported === false) {
+        list.appendChild(message(t('dashboard.tip.cpu.top.unsupported')));
+        return;
+      }
+      var items = data.processes || [];
+      if (!items.length) {
+        list.appendChild(message(t('dashboard.tip.cpu.top.empty')));
+        return;
+      }
+      var ol = document.createElement('ol');
+      ol.className = 'tip-proc-list';
+      items.forEach(function (p) {
+        var li = document.createElement('li');
+        var name = document.createElement('span');
+        name.className = 'tip-proc-name';
+        name.textContent = p.name || ('pid ' + p.pid);
+        name.title = name.textContent;
+        var cpu = document.createElement('b');
+        cpu.textContent = (Math.round((p.cpu || 0) * 10) / 10) + '%';
+        li.appendChild(name);
+        li.appendChild(cpu);
+        ol.appendChild(li);
+      });
+      list.appendChild(ol);
+    }
+
+    row.addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('[data-role="top-cpu-toggle"]') : null;
+      if (!btn || !row.contains(btn)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      var gauge = btn.closest('.gauge');
+      var list = gauge.querySelector('[data-role="top-cpu-list"]');
+      if (pinned === gauge) {
+        closePinned();
+        return;
+      }
+      closePinned();
+      pinned = gauge;
+      gauge.classList.add('is-pinned');
+      btn.setAttribute('aria-expanded', 'true');
+      list.hidden = false;
+      if (list.childElementCount || inFlight) return; // 已经取过，固定态直接复用
+      inFlight = true;
+      list.appendChild(message(t('dashboard.tip.cpu.top.loading')));
+      fetch(btn.getAttribute('data-url'), { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.json();
+        })
+        .then(function (data) { render(list, data); })
+        .catch(function () {
+          list.textContent = '';
+          list.appendChild(message(t('dashboard.tip.cpu.top.failed')));
+        })
+        .then(function () { inFlight = false; });
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!pinned) return;
+      if (pinned.contains(e.target)) return;
+      closePinned();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && pinned) {
+        closePinned();
+      }
+    });
   }
 
   var LIVE_REFRESH_INTERVAL = 10000;
@@ -4774,6 +4878,7 @@
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
     bindResourceRefresh();
+    bindGaugeTopProcesses();
     bindLiveStats();
     bindActivityChart();
     bindActivityFeed();

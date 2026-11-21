@@ -121,7 +121,7 @@
                     <b th:text="${metrics.loadText()}">—</b></div>
             </div>
         </div>
-        <div class="gauge" tabindex="0">
+        <div class="gauge" tabindex="0" data-role="gauge-cpu">
             <div class="gauge-ring" th:classappend="'tone-' + ${metrics.cpuTone()}"
                  th:style="'--pct:' + ${metrics.cpuPercent() < 0 ? 0 : metrics.cpuPercent()}">
                 <span th:text="${metrics.cpuText()}">—</span>
@@ -131,8 +131,25 @@
             <div class="gauge-tip" role="tooltip">
                 <div class="tip-row"><span th:text="#{dashboard.tip.cpu.usage}">CPU</span>
                     <b th:text="${metrics.cpuText()}">—</b></div>
-                <div class="tip-row"><span th:text="#{dashboard.tip.cores}">Cores</span>
+                <div class="tip-row" th:if="${host != null and host.model != null}">
+                    <span th:text="#{dashboard.tip.cpu.model}">Model</span>
+                    <b th:text="${host.model}" th:title="${host.model}">—</b></div>
+                <div class="tip-row" th:if="${host != null}">
+                    <span th:text="#{dashboard.tip.cpu.physical}">Physical cores</span>
+                    <b th:text="${host.physicalCores}">—</b></div>
+                <div class="tip-row">
+                    <span th:text="#{dashboard.tip.cores}">Logical cores</span>
                     <b th:text="${metrics.cores()}">—</b></div>
+                <div class="tip-row" th:if="${host != null and host.osText != null}">
+                    <span th:text="#{dashboard.tip.cpu.os}">OS</span>
+                    <b th:text="${host.osText}" th:title="${host.osText}">—</b></div>
+                <!--/* 点击展开进程榜：只读、按需取一次，不跟随 5 秒刷新轮询 */-->
+                <button type="button" class="tip-more" data-role="top-cpu-toggle"
+                        aria-expanded="false" th:attr="data-url=@{/dashboard/top-processes}">
+                    <span th:text="#{dashboard.tip.cpu.top}">Top 5 processes</span>
+                    <svg class="ico" aria-hidden="true"><use href="#chevron-down"/></svg>
+                </button>
+                <div class="tip-proc" data-role="top-cpu-list" hidden></div>
             </div>
         </div>
         <div class="gauge" tabindex="0">

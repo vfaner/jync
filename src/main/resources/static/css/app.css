@@ -1941,7 +1941,8 @@ table.tbl a.truncate { display: block; }
   transition: background .2s, transform .25s ease, box-shadow .25s ease;
 }
 /* 悬停/键盘聚焦：环上浮一点、按当前档位泛一圈同色光，像卡片那样有反馈 */
-.gauge:hover .gauge-ring, .gauge:focus-visible .gauge-ring {
+.gauge:hover .gauge-ring, .gauge:focus-visible .gauge-ring,
+.gauge.is-pinned .gauge-ring {
   transform: translateY(-4px) scale(1.04);
   box-shadow: 0 12px 28px rgba(15, 23, 42, .18);
   box-shadow: 0 12px 28px color-mix(in srgb, var(--gauge) 28%, transparent);
@@ -1964,7 +1965,8 @@ table.tbl a.truncate { display: block; }
 .gauge-label {
   font-size: 13px; font-weight: 600; color: var(--ink); transition: color .2s;
 }
-.gauge:hover .gauge-label, .gauge:focus-visible .gauge-label { color: var(--brand); }
+.gauge:hover .gauge-label, .gauge:focus-visible .gauge-label,
+.gauge.is-pinned .gauge-label { color: var(--brand); }
 /* 磁盘那格的说明后面跟着卷路径，可能很长：单行截断，完整路径在 title 里 */
 .gauge-sub   {
   font-size: 12px; color: var(--ink-mute); font-variant-numeric: tabular-nums;
@@ -1974,7 +1976,7 @@ table.tbl a.truncate { display: block; }
    内容跟着 5 秒刷新一起换，不需要额外的接口。 */
 .gauge-tip {
   position: absolute; top: calc(100% + 8px); left: 50%;
-  transform: translate(-50%, 6px); width: 236px;
+  transform: translate(-50%, 6px); width: 260px;
   background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
   box-shadow: 0 18px 40px rgba(15, 23, 42, .18);
   padding: 10px 12px; display: grid; gap: 6px; text-align: left;
@@ -1990,7 +1992,18 @@ table.tbl a.truncate { display: block; }
 .gauge:hover .gauge-tip, .gauge:focus-visible .gauge-tip,
 .gauge:focus-within .gauge-tip {
   opacity: 1; visibility: visible; transform: translate(-50%, 0);
+  /* 浮层里有可点的「top5」：显示时允许交互，否则按钮点不到 */
+  pointer-events: auto;
 }
+/* 悬停桥：环与浮层之间有几像素空隙，移过去时悬停会断；让浮层自己向上探一段。 */
+.gauge-tip::after {
+  content: ""; position: absolute; top: -10px; left: 0; right: 0; height: 10px;
+}
+/* 点击展开后固定显示，鼠标移开也不收（再点一次 / 点外面 / Esc 收起） */
+.gauge.is-pinned .gauge-tip {
+  opacity: 1; visibility: visible; pointer-events: auto; transform: translate(-50%, 0);
+}
+.gauge:last-child.is-pinned .gauge-tip { transform: none; }
 .tip-row {
   display: flex; justify-content: space-between; gap: 12px;
   font-size: 12px; color: var(--ink-soft);
@@ -2005,6 +2018,28 @@ table.tbl a.truncate { display: block; }
   transform: none;
 }
 .gauge:last-child .gauge-tip::before { left: auto; right: 34px; }
+/* CPU 浮层里的「top5 进程」：只读列表，进出都是点击，不随刷新轮询 */
+.tip-more {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; margin-top: 2px; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 9px;
+  background: var(--bg-tint); color: var(--ink-soft);
+  font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+.tip-more:hover { border-color: var(--brand); color: var(--brand); }
+.tip-more .ico { width: 12px; height: 12px; transition: transform .2s; }
+.tip-more[aria-expanded="true"] .ico { transform: rotate(180deg); }
+.tip-proc { margin-top: 6px; border-top: 1px dashed var(--line); padding-top: 6px; }
+.tip-proc[hidden] { display: none; }
+.tip-proc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.tip-proc-list li {
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 11.5px; color: var(--ink-soft);
+}
+.tip-proc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tip-proc-list b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.tip-proc-msg { font-size: 11.5px; color: var(--ink-mute); padding: 2px 0; }
 /* 两列布局下按列对齐：左列贴左、右列贴右，浮层不会挤出窄屏 */
 @media (max-width: 1000px) {
   .gauge-tip { width: 200px; left: auto; right: 0; transform: translateY(6px); }
@@ -2014,6 +2049,7 @@ table.tbl a.truncate { display: block; }
   .gauge:focus-within .gauge-tip { transform: none; }
   .gauge:nth-child(odd) .gauge-tip::before { left: 34px; right: auto; }
   .gauge:nth-child(even) .gauge-tip::before { left: auto; right: 34px; }
+  .gauge.is-pinned .gauge-tip { transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   .gauge, .gauge-ring, .gauge-label, .gauge-tip { transition: none; }

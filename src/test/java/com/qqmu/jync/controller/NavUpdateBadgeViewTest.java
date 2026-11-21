@@ -22,6 +22,8 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.DashboardService;
+import com.qqmu.jync.service.HostInfo;
+import com.qqmu.jync.service.HostTopProcesses;
 import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
@@ -42,6 +44,10 @@ class NavUpdateBadgeViewTest {
 
     @MockitoBean
     private DashboardService dashboardService;
+    @MockitoBean
+    private HostInfo hostInfo;
+    @MockitoBean
+    private HostTopProcesses hostTopProcesses;
     @MockitoBean
     private BuildProperties buildProperties;
     @MockitoBean

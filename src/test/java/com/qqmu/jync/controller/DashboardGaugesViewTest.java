@@ -6,6 +6,7 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.util.List;
 import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,8 @@ import com.qqmu.jync.model.AppUser;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.ChangeLogDetailsLocalizer;
 import com.qqmu.jync.service.DashboardService;
+import com.qqmu.jync.service.HostInfo;
+import com.qqmu.jync.service.HostTopProcesses;
 import com.qqmu.jync.service.SystemMetrics;
 import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
@@ -50,6 +53,10 @@ class DashboardGaugesViewTest {
     private DashboardService dashboardService;
     @MockitoBean
     private SystemMetrics systemMetrics;
+    @MockitoBean
+    private HostInfo hostInfo;
+    @MockitoBean
+    private HostTopProcesses hostTopProcesses;
     @MockitoBean
     private MetricsQueryService metricsQueryService;
 
@@ -178,5 +185,27 @@ class DashboardGaugesViewTest {
         SyncUserDetails principal = new SyncUserDetails(user, usingDefaultPassword);
         return authentication(new UsernamePasswordAuthenticationToken(
                 principal, null, principal.getAuthorities()));
+    }
+
+    /** The CPU card tells the operator what the machine is, and can fetch its top processes. */
+    @Test
+    void theCpuCardShowsMachineInfoAndCanReadTopProcesses() throws Exception {
+        when(hostInfo.cpu()).thenReturn(
+                new HostInfo.Cpu("Intel(R) Xeon(R) Platinum 8255C", 4, 8, "Linux 6.8 (amd64)"));
+        when(hostTopProcesses.topCpu(5)).thenReturn(new HostTopProcesses.TopProcesses(true,
+                List.of(new HostTopProcesses.ProcessSample(42, "java", 12.5))));
+
+        String html = render(SAMPLE, Locale.SIMPLIFIED_CHINESE);
+        assertThat(html).contains("data-role=\"gauge-cpu\"")
+                .contains("Intel(R) Xeon(R) Platinum 8255C")
+                .contains("物理核心")
+                .contains("/dashboard/top-processes");
+
+        String json = mvc.perform(get("/dashboard/top-processes").with(as(false)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        assertThat(json).contains("\"supported\":true")
+                .contains("\"name\":\"java\"")
+                .contains("\"cpu\":12.5");
     }
 }
