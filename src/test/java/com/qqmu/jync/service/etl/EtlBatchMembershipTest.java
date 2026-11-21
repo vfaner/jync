@@ -143,6 +143,23 @@ class EtlBatchMembershipTest {
     }
 
     @Test
+    void aSelectionWithTwoSpellingsOfOneTargetIsRefused() {
+        // A case-sensitive source (PostgreSQL) offers "T1" and "t1"; the target folds case,
+        // so both members would write the same physical table and take turns wiping it.
+        stubConnections();
+        when(catalogService.listTables(1L))
+                .thenReturn(new ConnectionCatalogService.Tables("s", List.of("T1", "t1")));
+
+        assertThatThrownBy(() -> service.createWithTables(form(), List.of("T1", "t1"),
+                AccessGuard.system()))
+                .isInstanceOf(EtlBatchTableException.class)
+                .hasMessage("error.etl.batch.tables.exists")
+                .satisfies(error -> assertThat(((EtlBatchTableException) error).names())
+                        .containsExactly("t1"));
+        verify(taskRepository, never()).saveAll(any());
+    }
+
+    @Test
     void addTablesRefusesTablesThatAreAlreadyInTheBatch() {
         EtlBatch batch = batch(5L);
         when(batchRepository.findById(5L)).thenReturn(Optional.of(batch));

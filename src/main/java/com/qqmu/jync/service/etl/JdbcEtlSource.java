@@ -27,6 +27,10 @@ import com.qqmu.jync.service.sync.JdbcRowMapper;
  */
 final class JdbcEtlSource implements EtlSource {
 
+    /** The one TIME rendering {@link #parsesBack} treats as faithful. */
+    private static final java.time.format.DateTimeFormatter TIME_TEXT =
+            java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss");
+
     private static final int FETCH_SIZE = 1000;
 
     private final Connection connection;
@@ -390,16 +394,24 @@ final class JdbcEtlSource implements EtlSource {
         return canonical == null ? driverText : canonical;
     }
 
-    /** Whether {@link #bindResumeKey} can read this text back for the given type. */
-    private static boolean parsesBack(int jdbcType, String text) {
+    /**
+     * Whether {@link #bindResumeKey} can read this text back for the given type.
+     *
+     * <p>Package-private so the runner can refuse a value it would otherwise checkpoint:
+     * a stored value that cannot be bound poisons every later run with a PROGRAM failure.
+     */
+    static boolean parsesBack(int jdbcType, String text) {
         try {
             switch (jdbcType) {
                 case Types.DATE:
                     Date.valueOf(text);
                     return true;
                 case Types.TIME:
-                    Time.valueOf(text);
-                    return true;
+                    // Time.valueOf wraps rather than rejects out-of-domain hours
+                    // ("838:59:59" -> "22:59:59"), which would move the resume boundary
+                    // silently. Only a faithful round trip counts as readable.
+                    Time time = Time.valueOf(text);
+                    return TIME_TEXT.format(time.toLocalTime()).equals(text);
                 case Types.TIMESTAMP:
                     return wallClock(text) != null;
                 default:

@@ -2,8 +2,10 @@ package com.qqmu.jync.service.etl;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -463,11 +465,18 @@ public class EtlBatchService {
 
         // Resolve the target the same way the runner does. A member stored as "SCHEMA.a"
         // and a catalog name "a" are the same physical table; comparing raw text would let
-        // both into the batch.
-        List<String> existing = chosen.stream()
-                .filter(name -> takenTargets.contains(
-                        EtlSqlSupport.targetKey(targetConfig, name)))
-                .toList();
+        // both into the batch. The same resolution must also run INSIDE the selection: on a
+        // case-sensitive source (PostgreSQL) "T1" and "t1" are two tables, but on a folding
+        // target both become one — two OVERWRITE members would then take turns wiping each
+        // other, reporting SUCCESS.
+        Map<String, String> firstByTarget = new LinkedHashMap<>();
+        List<String> existing = new ArrayList<>();
+        for (String name : chosen) {
+            String key = EtlSqlSupport.targetKey(targetConfig, name);
+            if (takenTargets.contains(key) || firstByTarget.putIfAbsent(key, name) != null) {
+                existing.add(name);
+            }
+        }
         if (!existing.isEmpty()) {
             throw new EtlBatchTableException("error.etl.batch.tables.exists", existing);
         }

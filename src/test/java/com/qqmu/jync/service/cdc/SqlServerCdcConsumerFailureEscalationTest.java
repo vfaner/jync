@@ -88,7 +88,11 @@ class SqlServerCdcConsumerFailureEscalationTest {
     /** 每周期递增的 max_lsn:成功周期把水位推到 maxLsn 后,下周期 maxLsn 更大,
      *  不会落入 idle 早返回,从而能继续编排失败周期。 */
     private String maxLsnForCycle() {
-        return "0x0000002857ae0258" + String.format("%04x", maxLsnCycle.getAndIncrement());
+        // Base 0x0a00 stays above TX_LSN's 0x00a0: a change row can never sit past the
+        // server's max LSN, and the drain now refuses to flush transactions above the
+        // scanned bound.
+        return "0x0000002857ae0258"
+                + String.format("%04x", 0x0a00 + maxLsnCycle.getAndIncrement());
     }
 
     @BeforeEach

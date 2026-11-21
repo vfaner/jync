@@ -3184,6 +3184,11 @@
             window.location.reload();
             return;
           }
+          // 键盘焦点正在某个环上（详情浮层开着）时就别换 DOM：换掉会丢焦点和浮层。
+          // 内容没变也不必重画。
+          if (row.contains(document.activeElement) || row.innerHTML === freshRow.innerHTML) {
+            return;
+          }
           row.innerHTML = freshRow.innerHTML;
         })
         .catch(function () {
@@ -3897,6 +3902,211 @@
    * 这里只负责提交：日期 + 弹窗自带的范围隐藏域 → 服务端 JSON（已本地化的条数文案），
    * 成功后提示并刷新列表。截止日期上限由服务端渲染（昨天），今天永远删不到。
    */
+  /**
+   * 按日期删除的日期选择器（变更日志 / 审计日志 / 系统日志共用）。
+   *
+   * 原生 <input type=date> 只有点右侧小图标才会展开，面板由浏览器绘制，跟随不了
+   * 页面主题与密度。这里用页面自己的面板：点输入框任意位置展开，月份可翻页，
+   * 「今天 / 清除」一键，截止上限（昨天）之后的日子禁用。
+   *
+   * 面板挂到 body、用 fixed 定位：删除弹窗的 .modal-dialog 是滚动容器，面板放在
+   * 里面会被裁掉，也会被弹窗的位移动画带偏。
+   */
+  function bindPurgeDatePicker(modal, input) {
+    var pop = modal.querySelector('[data-role="date-pop"]');
+    if (!pop) return null;
+    var field = input.closest('.date-field') || input;
+    var max = input.getAttribute('max') || '';
+    var lang = document.documentElement.getAttribute('lang') || 'zh-CN';
+    var today = new Date();
+    var todayIso = isoOf(today);
+    var view = new Date(today.getFullYear(), today.getMonth(), 1);
+    document.body.appendChild(pop);
+
+    input.setAttribute('aria-haspopup', 'dialog');
+    pop.setAttribute('role', 'dialog');
+    pop.setAttribute('aria-label', input.getAttribute('placeholder') || '');
+
+    function isoOf(d) {
+      var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+    function parseIso(value) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+      if (!m) return null;
+      var d = new Date(+m[1], +m[2] - 1, +m[3]);
+      return isNaN(d.getTime()) ? null : d;
+    }
+    function monthKey(d) { return d.getFullYear() * 12 + d.getMonth(); }
+    function labelledButton(label, cls) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      if (cls) b.className = cls;
+      b.setAttribute('aria-label', label);
+      // 文字按钮直接用 label 当内容；翻页按钮随后会用图标 innerHTML 覆盖它。
+      b.textContent = label;
+      return b;
+    }
+
+    function render() {
+      pop.textContent = '';
+      var head = document.createElement('div');
+      head.className = 'date-pop-head';
+      var prev = labelledButton(t('date.prevMonth'), 'date-nav');
+      prev.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#chevron-left"/></svg>';
+      var next = labelledButton(t('date.nextMonth'), 'date-nav');
+      next.innerHTML = '<svg class="ico" aria-hidden="true"><use href="#chevron-right"/></svg>';
+      var maxDate = parseIso(max);
+      if (maxDate && monthKey(view) >= monthKey(maxDate)) next.disabled = true;
+      var title = document.createElement('div');
+      title.className = 'date-pop-title';
+      title.textContent = new Intl.DateTimeFormat(lang, { year: 'numeric', month: 'long' })
+          .format(view);
+      head.appendChild(prev);
+      head.appendChild(title);
+      head.appendChild(next);
+      pop.appendChild(head);
+
+      var week = document.createElement('div');
+      week.className = 'date-week';
+      var weekFmt = new Intl.DateTimeFormat(lang, { weekday: 'narrow' });
+      // 从周日开始，与中文日历的读法一致
+      for (var w = 0; w < 7; w++) {
+        var label = document.createElement('span');
+        label.textContent = weekFmt.format(new Date(2023, 0, 1 + w));
+        week.appendChild(label);
+      }
+      pop.appendChild(week);
+
+      var grid = document.createElement('div');
+      grid.className = 'date-grid';
+      var lead = new Date(view.getFullYear(), view.getMonth(), 1).getDay();
+      var days = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+      for (var i = 0; i < lead; i++) {
+        grid.appendChild(document.createElement('span'));
+      }
+      for (var d = 1; d <= days; d++) {
+        var day = new Date(view.getFullYear(), view.getMonth(), d);
+        var value = isoOf(day);
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'date-day';
+        btn.textContent = String(d);
+        btn.setAttribute('aria-label', value);
+        if (max && value > max) btn.disabled = true;
+        if (value === todayIso) btn.classList.add('is-today');
+        if (value === input.value) btn.classList.add('is-selected');
+        btn.addEventListener('click', (function (v) {
+          return function () {
+            input.value = v;
+            close();
+            input.focus();
+          };
+        })(value));
+        grid.appendChild(btn);
+      }
+      pop.appendChild(grid);
+
+      var foot = document.createElement('div');
+      foot.className = 'date-pop-foot';
+      var clear = labelledButton(t('date.clear'), 'date-foot-btn');
+      clear.addEventListener('click', function () { input.value = ''; close(); input.focus(); });
+      var now = labelledButton(t('date.today'), 'date-foot-btn');
+      if (max && todayIso > max) now.disabled = true;
+      now.addEventListener('click', function () { input.value = todayIso; close(); input.focus(); });
+      foot.appendChild(clear);
+      foot.appendChild(now);
+      pop.appendChild(foot);
+
+      prev.addEventListener('click', function () {
+        view = new Date(view.getFullYear(), view.getMonth() - 1, 1);
+        render();
+        // 有的月份是六行，翻页后高度会变，重新贴一次边
+        place();
+      });
+      next.addEventListener('click', function () {
+        view = new Date(view.getFullYear(), view.getMonth() + 1, 1);
+        render();
+        place();
+      });
+    }
+
+    function place() {
+      var rect = input.getBoundingClientRect();
+      var width = pop.offsetWidth || 300;
+      var height = pop.offsetHeight || 330;
+      var left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      var top = rect.bottom + 8;
+      if (top + height > window.innerHeight - 8) {
+        top = Math.max(8, rect.top - height - 8);
+      }
+      pop.style.left = left + 'px';
+      pop.style.top = top + 'px';
+    }
+
+    function open() {
+      if (!pop.hidden) return;
+      var current = parseIso(input.value);
+      var maxDate = parseIso(max);
+      // 没有选中值且「今天」已经落到上限之后的月份（每月 1 号）：直接打开上限所在月，
+      // 否则整个月都是禁用格，看起来像坏了。
+      var anchor = maxDate && monthKey(today) > monthKey(maxDate) ? maxDate : today;
+      view = current
+          ? new Date(current.getFullYear(), current.getMonth(), 1)
+          : new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+      pop.hidden = false;
+      render();
+      place();
+    }
+
+    function close() {
+      if (pop.hidden) return;
+      pop.hidden = true;
+    }
+
+    function toggle() {
+      if (pop.hidden) open();
+      else close();
+    }
+
+    input.addEventListener('click', function (e) {
+      e.stopPropagation();
+      toggle();
+    });
+    field.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !pop.hidden) {
+        // 先关日历，不要顺带把整个删除弹窗关掉。
+        e.stopPropagation();
+        close();
+        input.focus();
+      } else if ((e.key === 'Enter' || e.key === ' ') && e.target === input) {
+        e.preventDefault();
+        open();
+      }
+    });
+    pop.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        close();
+        input.focus();
+      }
+    });
+    document.addEventListener('click', function (e) {
+      if (pop.hidden) return;
+      if (pop.contains(e.target) || field.contains(e.target)) return;
+      close();
+    });
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    // 面板挂在 body 上，弹窗一关它不会跟着消失。看弹窗的开合状态而不是逐个按钮：
+    // 取消 / 遮罩 / × / Esc / 程序化关闭都走同一条路。
+    new MutationObserver(function () {
+      if (!modal.classList.contains('open')) close();
+    }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+
+    return { close: close };
+  }
+
   function bindLogPurge() {
     var modal = document.getElementById('log-purge-modal');
     if (!modal) return;
@@ -3904,6 +4114,9 @@
     var dateInput = modal.querySelector('[data-role="purge-date"]');
     var confirmBtn = modal.querySelector('[data-role="purge-confirm"]');
     if (!url || !dateInput || !confirmBtn) return;
+    var datePicker = bindPurgeDatePicker(modal, dateInput);
+    // 面板缺失时至少还能手动输入，不至于把只读框配成死路
+    if (!datePicker) dateInput.removeAttribute('readonly');
     // 快捷筹码：7/30/90 天前，一键填日期（不超过服务端给的上限）。
     modal.querySelectorAll('[data-purge-days]').forEach(function (chip) {
       chip.addEventListener('click', function () {
@@ -3915,6 +4128,7 @@
         var iso = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
         var max = dateInput.getAttribute('max');
         dateInput.value = (max && iso > max) ? max : iso;
+        if (datePicker) datePicker.close();
       });
     });
     var busy = false;

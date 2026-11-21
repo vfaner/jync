@@ -88,6 +88,26 @@ class EtlRunnerResumeKeyTextTest {
         assertThat(saved.value()).isEqualTo("2026-11-14 10:00:00");
     }
 
+    @Test
+    void anExtremeTimeResumeKeyIsRefusedBeforeItCanPoisonTheCheckpoint() {
+        // MySQL TIME runs to 838:59:59; the cursor keeps that literal (no JDBC Time can carry
+        // it), and no later run could bind it. Failing here names the column instead of
+        // letting every future run die with "stored resume value ... cannot be read back".
+        List<EtlSourceColumn> columns = List.of(
+                new EtlSourceColumn("id", Types.INTEGER, "INT", null, null, true),
+                new EtlSourceColumn("updatedAt", Types.TIME, "TIME", null, null, true));
+
+        EtlRunResult result = run(
+                new FakeJdbcSource(columns, new Object[]{1, "838:59:59"}, "838:59:59"),
+                h2Config(1L), task("updatedAt"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.failureSide()).isEqualTo(EtlRunResult.Side.PROGRAM);
+        assertThat(result.errorMessage())
+                .isEqualTo("error.etl.resumeKey.unbindable:updatedAt");
+        assertThat(checkpoints.load(7L)).isNull();
+    }
+
     // --- harness ------------------------------------------------------------------------
 
     private EtlRunResult run(EtlSource source, DatabaseConfig sourceConfig, EtlTask task) {

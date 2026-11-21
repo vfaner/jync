@@ -496,7 +496,8 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .stat {
   position: relative; overflow: hidden;
   background: var(--bg); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 19px 20px;
+  /* 看板卡片角稍圆一点：方角在大屏上显得硬，且顶部渐变条贴边时像被切平 */
+  border-radius: 20px; padding: 19px 20px;
   display: flex; align-items: center; gap: 15px;
   transition: transform .25s, box-shadow .25s, border-color .25s;
 }
@@ -507,8 +508,9 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 }
 /* 顶部渐变条：不同指标用不同色，扫一眼能区分 */
 .stat::after {
-  /* inset 简写需 Chromium 87+；前置展开供老内核 */
-  content: ""; position: absolute; top: 0; right: 0; left: 0; inset: 0 0 auto 0; height: 3px;
+  /* 渐变条两端收圆并留出边距：贴满整条边时，条的两端是直角，和圆角卡片不搭 */
+  content: ""; position: absolute; top: 0; left: 14px; right: 14px; height: 3px;
+  border-radius: 999px;
   background: linear-gradient(90deg, var(--brand), var(--accent));
 }
 .stat.is-ok::after     { background: linear-gradient(90deg, var(--ok), #34d399); }
@@ -1406,18 +1408,85 @@ table.tbl a.truncate { display: block; }
 }
 .modal-close:hover { background: var(--bg-tint); color: var(--ink); }
 .modal-close .ico { width: 14px; height: 14px; }
-/* 按日期删除弹窗：日期输入放大描边，原生日历面板跟随主题（color-scheme）。 */
-.modal input[type="date"] {
-  width: 100%; height: 42px; padding: 0 12px;
+/* 按日期删除弹窗：日期框整块可点、自带一格日历面板。
+   原生 <input type=date> 只有点右侧小图标才展开，面板由浏览器绘制，主题和密度都
+   无法与页面统一 —— 所以面板自己画，点击输入框任意位置即可展开。 */
+.modal .date-input {
+  width: 100%; height: 42px; padding: 0 38px 0 12px;
   border: 1px solid var(--line); border-radius: 10px;
   background: var(--bg); color: var(--ink);
-  font: inherit; font-size: 14px; color-scheme: light;
+  font: inherit; font-size: 14px; cursor: pointer;
 }
-.modal input[type="date"]:focus {
+.modal .date-input:focus {
   outline: none; border-color: var(--brand);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
 }
-[data-theme="dark"] .modal input[type="date"] { color-scheme: dark; }
+.date-field { position: relative; }
+.date-ico {
+  position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; color: var(--ink-mute); pointer-events: none;
+}
+.date-pop {
+  position: fixed; z-index: 1400; width: 300px; padding: 12px 12px 8px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, .18);
+  animation: datePopIn .16s ease;
+}
+.date-pop[hidden] { display: none; }
+@keyframes datePopIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+.date-pop-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.date-pop-title {
+  flex: 1; text-align: center; font-size: 13.5px; font-weight: 600; color: var(--ink);
+}
+.date-nav {
+  width: 28px; height: 28px; border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--ink-soft); cursor: pointer;
+  display: grid; place-items: center; transition: background .15s, color .15s;
+}
+.date-nav:hover:not(:disabled) { background: var(--bg-tint); color: var(--brand); }
+.date-nav:disabled { opacity: .35; cursor: not-allowed; }
+.date-week, .date-grid { display: grid; grid-template-columns: repeat(7, 1fr); }
+.date-week span {
+  text-align: center; font-size: 11px; font-weight: 600;
+  color: var(--ink-mute); padding: 4px 0;
+}
+.date-grid { gap: 2px; }
+.date-day {
+  height: 32px; border: 1px solid transparent; border-radius: 9px;
+  background: transparent; color: var(--ink); font: inherit; font-size: 12.5px;
+  cursor: pointer; transition: background .12s, color .12s, border-color .12s;
+}
+.date-day:hover:not(:disabled) {
+  background: var(--fb-brand-10);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+  color: var(--brand);
+}
+.date-day.is-today { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.date-day.is-selected {
+  background: linear-gradient(135deg, var(--brand), var(--brand-light));
+  color: #fff; font-weight: 600; box-shadow: 0 6px 14px rgba(79, 70, 229, .28);
+}
+.date-day:disabled { color: var(--ink-mute); opacity: .4; cursor: not-allowed; }
+.date-pop-foot {
+  display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.date-foot-btn {
+  border: 0; background: transparent; color: var(--brand); font: inherit;
+  font-size: 12px; font-weight: 600; padding: 4px 8px; border-radius: 7px;
+  cursor: pointer;
+}
+.date-foot-btn:hover:not(:disabled) {
+  background: var(--fb-brand-10);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+}
+.date-foot-btn:disabled { color: var(--ink-mute); opacity: .5; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+  .date-pop { animation: none; }
+}
 .purge-quick { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .chip-btn {
   padding: 4px 12px; border-radius: 999px;
@@ -1859,15 +1928,27 @@ table.tbl a.truncate { display: block; }
   .gauges { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .gauge {
+  position: relative;
   display: flex; flex-direction: column; align-items: center; gap: 6px;
-  text-align: center;
+  text-align: center; padding: 6px 4px; border-radius: 18px;
+  transition: transform .25s ease; outline: none;
 }
 .gauge-ring {
   --gauge: var(--ok);
   width: 92px; height: 92px; border-radius: 50%;
   display: grid; place-items: center;
   background: conic-gradient(var(--gauge) calc(var(--pct, 0) * 1%), var(--bg-tint) 0);
-  transition: background .2s;
+  transition: background .2s, transform .25s ease, box-shadow .25s ease;
+}
+/* 悬停/键盘聚焦：环上浮一点、按当前档位泛一圈同色光，像卡片那样有反馈 */
+.gauge:hover .gauge-ring, .gauge:focus-visible .gauge-ring {
+  transform: translateY(-4px) scale(1.04);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, .18);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--gauge) 28%, transparent);
+}
+.gauge:focus-visible {
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, .22);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 22%, transparent);
 }
 .gauge-ring > span {
   width: 72px; height: 72px; border-radius: 50%;
@@ -1880,11 +1961,62 @@ table.tbl a.truncate { display: block; }
 .gauge-ring.tone-danger { --gauge: var(--danger); }
 .gauge-ring.tone-none   { --gauge: var(--line); }
 .gauge-ring.tone-none > span { color: var(--ink-mute); font-weight: 600; }
-.gauge-label { font-size: 13px; font-weight: 600; color: var(--ink); }
+.gauge-label {
+  font-size: 13px; font-weight: 600; color: var(--ink); transition: color .2s;
+}
+.gauge:hover .gauge-label, .gauge:focus-visible .gauge-label { color: var(--brand); }
 /* 磁盘那格的说明后面跟着卷路径，可能很长：单行截断，完整路径在 title 里 */
 .gauge-sub   {
   font-size: 12px; color: var(--ink-mute); font-variant-numeric: tabular-nums;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 悬停详情浮层：只读快照，不带任何操作按钮（监控区不放危险入口）。
+   内容跟着 5 秒刷新一起换，不需要额外的接口。 */
+.gauge-tip {
+  position: absolute; top: calc(100% + 8px); left: 50%;
+  transform: translate(-50%, 6px); width: 236px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, .18);
+  padding: 10px 12px; display: grid; gap: 6px; text-align: left;
+  opacity: 0; visibility: hidden; pointer-events: none; z-index: 40;
+  transition: opacity .18s ease, transform .18s ease, visibility .18s;
+}
+.gauge-tip::before {
+  content: ""; position: absolute; top: -5px; left: 50%;
+  width: 8px; height: 8px; transform: translateX(-50%) rotate(45deg);
+  background: var(--bg); border-left: 1px solid var(--line);
+  border-top: 1px solid var(--line);
+}
+.gauge:hover .gauge-tip, .gauge:focus-visible .gauge-tip,
+.gauge:focus-within .gauge-tip {
+  opacity: 1; visibility: visible; transform: translate(-50%, 0);
+}
+.tip-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  font-size: 12px; color: var(--ink-soft);
+}
+.tip-row b {
+  color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums;
+  max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 最右一格贴边：浮层改为右对齐，别把它推出视口 */
+.gauge:last-child .gauge-tip { left: auto; right: 0; transform: translateY(6px); }
+.gauge:last-child:hover .gauge-tip, .gauge:last-child:focus-visible .gauge-tip {
+  transform: none;
+}
+.gauge:last-child .gauge-tip::before { left: auto; right: 34px; }
+/* 两列布局下按列对齐：左列贴左、右列贴右，浮层不会挤出窄屏 */
+@media (max-width: 1000px) {
+  .gauge-tip { width: 200px; left: auto; right: 0; transform: translateY(6px); }
+  .gauge:nth-child(odd) .gauge-tip { left: 0; right: auto; }
+  .gauge:nth-child(even) .gauge-tip { left: auto; right: 0; }
+  .gauge:hover .gauge-tip, .gauge:focus-visible .gauge-tip,
+  .gauge:focus-within .gauge-tip { transform: none; }
+  .gauge:nth-child(odd) .gauge-tip::before { left: 34px; right: auto; }
+  .gauge:nth-child(even) .gauge-tip::before { left: auto; right: 34px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gauge, .gauge-ring, .gauge-label, .gauge-tip { transition: none; }
 }
 
 /* ==========================================================================
@@ -1923,9 +2055,10 @@ table.tbl a.truncate { display: block; }
 
 /* 看板底部双卡（概览 + 活动流）：与统计卡同款顶部渐变条、与整机/进程资源同款胶囊标题，
    整页徽标语言统一；并排布局不动，只改展现。 */
-.dash-panel { position: relative; overflow: hidden; }
+.dash-panel { position: relative; overflow: hidden; border-radius: 20px; }
 .dash-panel::before {
-  content: ""; position: absolute; top: 0; right: 0; left: 0; height: 3px;
+  content: ""; position: absolute; top: 0; left: 16px; right: 16px; height: 3px;
+  border-radius: 999px;
   background: linear-gradient(90deg, var(--brand), var(--accent));
 }
 .feed-card.dash-panel::before { background: linear-gradient(90deg, var(--info), #38bdf8); }

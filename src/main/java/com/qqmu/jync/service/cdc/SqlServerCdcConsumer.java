@@ -699,6 +699,14 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             if (!running || Thread.currentThread().isInterrupted()) {
                 break;
             }
+            // boundedTo is the earliest point at which ANY capture instance stopped, so a
+            // transaction above it may belong to an interval another CI has not scanned yet.
+            // Flushing it would persist a later LSN that the truncated CI's remaining rows
+            // sit under — after a restart they would be skipped silently. Leave the tail
+            // for the next cycle (the scan re-reads it; at-least-once).
+            if (boundedTo != null && e.getKey().compareToIgnoreCase(boundedTo) > 0) {
+                break;
+            }
             try {
                 flushTransaction(projectId, e.getKey(), e.getValue());
             } catch (Exception ex) {

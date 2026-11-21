@@ -338,6 +338,19 @@ public class EtlRunner {
                                     ? driverText
                                     : JdbcEtlSource.resumeKeyText(keyType,
                                             values[keyIndex - 1], driverText);
+                            if (resumable && keyValue != null
+                                    && sourceType != DatabaseType.MONGODB_NATIVE
+                                    && !JdbcEtlSource.parsesBack(keyType, keyValue)) {
+                                // A checkpoint text the binder cannot read makes EVERY later
+                                // run fail before it copies a row (e.g. a MySQL TIME beyond
+                                // 24h: the cursor keeps the server literal, which no JDBC
+                                // Time can carry). Refuse now, name the column, and let the
+                                // operator pick another resume key.
+                                checkpointStore.clear(task.getId());
+                                throw new EtlProgramException(
+                                        "error.etl.resumeKey.unbindable:"
+                                                + columnNames.get(keyIndex - 1));
+                            }
                             if (resumable && keyValue == null) {
                                 // The continuation query filters with `key > ?`, which never
                                 // matches NULL. Copying this row now and then excluding it from

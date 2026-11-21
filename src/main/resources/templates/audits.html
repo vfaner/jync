@@ -38,8 +38,14 @@
                     recorded as a new audit event.</p>
                 <div class="field">
                     <label for="purge-date" th:text="#{log.purge.date}">Cutoff date</label>
-                    <input type="date" id="purge-date" class="input" data-role="purge-date"
-                           th:max="${purgeMaxDate}">
+                    <div class="date-field" data-role="date-field">
+                        <input type="text" id="purge-date" class="input date-input"
+                               data-role="purge-date" readonly autocomplete="off"
+                               th:max="${purgeMaxDate}"
+                               th:placeholder="#{log.purge.date.placeholder}">
+                        <svg class="ico date-ico" aria-hidden="true"><use href="#calendar"/></svg>
+                        <div class="date-pop" data-role="date-pop" hidden></div>
+                    </div>
                 </div>
                 <div class="purge-quick">
                     <button type="button" class="chip-btn" data-purge-days="7"

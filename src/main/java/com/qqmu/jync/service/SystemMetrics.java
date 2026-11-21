@@ -347,6 +347,21 @@ public class SystemMetrics {
             return volumePath == null || volumePath.isBlank() ? usage : usage + " · " + volumePath;
         }
 
+        /** Free memory, for the gauge's hover card. */
+        public String memoryFreeText() {
+            return freeText(memoryUsedBytes, memoryTotalBytes);
+        }
+
+        /** Used/total on the metadata volume without the volume suffix, for the hover card. */
+        public String diskUsedText() {
+            return bytesText(diskUsedBytes, diskTotalBytes);
+        }
+
+        /** Free space on the metadata volume, for the gauge's hover card. */
+        public String diskFreeText() {
+            return freeText(diskUsedBytes, diskTotalBytes);
+        }
+
         /** Used share of memory, for the ring; negative when the platform did not report it. */
         public double memoryPercent() {
             return ratio(memoryUsedBytes, memoryTotalBytes);
@@ -390,6 +405,13 @@ public class SystemMetrics {
                 return UNKNOWN_TEXT;
             }
             return size(used) + " / " + size(total);
+        }
+
+        private static String freeText(long used, long total) {
+            if (used < 0 || total <= 0) {
+                return UNKNOWN_TEXT;
+            }
+            return size(Math.max(0, total - used));
         }
 
         private static String size(long bytes) {

@@ -102,7 +102,7 @@
            都只让那一格显示「—」。默认口令账号看不到统计块，也就不会轮询。 */-->
     <div class="gauges" id="resource-gauges" th:fragment="resourceGauges"
          th:attr="data-refresh-url=@{/dashboard/resource-gauges}">
-        <div class="gauge">
+        <div class="gauge" tabindex="0">
             <div class="gauge-ring" th:classappend="'tone-' + ${metrics.loadTone()}"
                  th:style="'--pct:' + ${metrics.loadPercent() < 0 ? 0 : metrics.loadPercent()}">
                 <span th:text="${metrics.loadText()}">—</span>
@@ -110,24 +110,48 @@
             <div class="gauge-label" th:text="#{dashboard.load}">Load</div>
             <!--/* 环上是「占几核的百分之多少」，下面补 1 分钟平均负载本身（uptime 那个数） */-->
             <div class="gauge-sub" th:text="${metrics.loadAverageText()}">—</div>
+            <!--/* 悬停 / 键盘聚焦时的详情：只读，和宝塔那种带操作的不一样，
+                   不给按钮，避免把监控区变成危险操作入口 */-->
+            <div class="gauge-tip" role="tooltip">
+                <div class="tip-row"><span th:text="#{dashboard.tip.load.avg}">1-min load</span>
+                    <b th:text="${metrics.loadAverageText()}">—</b></div>
+                <div class="tip-row"><span th:text="#{dashboard.tip.cores}">Cores</span>
+                    <b th:text="${metrics.cores()}">—</b></div>
+                <div class="tip-row"><span th:text="#{dashboard.tip.load.share}">Share</span>
+                    <b th:text="${metrics.loadText()}">—</b></div>
+            </div>
         </div>
-        <div class="gauge">
+        <div class="gauge" tabindex="0">
             <div class="gauge-ring" th:classappend="'tone-' + ${metrics.cpuTone()}"
                  th:style="'--pct:' + ${metrics.cpuPercent() < 0 ? 0 : metrics.cpuPercent()}">
                 <span th:text="${metrics.cpuText()}">—</span>
             </div>
             <div class="gauge-label" th:text="#{dashboard.cpu}">CPU</div>
             <div class="gauge-sub" th:text="#{dashboard.loadCores(${metrics.cores()})}">2</div>
+            <div class="gauge-tip" role="tooltip">
+                <div class="tip-row"><span th:text="#{dashboard.tip.cpu.usage}">CPU</span>
+                    <b th:text="${metrics.cpuText()}">—</b></div>
+                <div class="tip-row"><span th:text="#{dashboard.tip.cores}">Cores</span>
+                    <b th:text="${metrics.cores()}">—</b></div>
+            </div>
         </div>
-        <div class="gauge">
+        <div class="gauge" tabindex="0">
             <div class="gauge-ring" th:classappend="'tone-' + ${metrics.memoryTone()}"
                  th:style="'--pct:' + ${metrics.memoryPercent() < 0 ? 0 : metrics.memoryPercent()}">
                 <span th:text="${metrics.memoryPercentText()}">—</span>
             </div>
             <div class="gauge-label" th:text="#{dashboard.memory}">System memory</div>
             <div class="gauge-sub" th:text="${metrics.memoryText()}">—</div>
+            <div class="gauge-tip" role="tooltip">
+                <div class="tip-row"><span th:text="#{dashboard.tip.mem.used}">Used</span>
+                    <b th:text="${metrics.memoryText()}">—</b></div>
+                <div class="tip-row"><span th:text="#{dashboard.tip.mem.free}">Free</span>
+                    <b th:text="${metrics.memoryFreeText()}">—</b></div>
+                <div class="tip-row"><span th:text="#{dashboard.tip.mem.usage}">Usage</span>
+                    <b th:text="${metrics.memoryPercentText()}">—</b></div>
+            </div>
         </div>
-        <div class="gauge">
+        <div class="gauge" tabindex="0">
             <div class="gauge-ring" th:classappend="'tone-' + ${metrics.diskTone()}"
                  th:style="'--pct:' + ${metrics.diskPercent() < 0 ? 0 : metrics.diskPercent()}">
                 <span th:text="${metrics.diskPercentText()}">—</span>
@@ -136,6 +160,17 @@
             <!--/* 数字后面跟着量的是哪块卷（H2 元数据库所在目录），写法与配置里一致；
                   实在过长时按列宽截断 */-->
             <div class="gauge-sub" th:text="${metrics.diskText()}">—</div>
+            <div class="gauge-tip" role="tooltip">
+                <div class="tip-row"><span th:text="#{dashboard.tip.disk.used}">Used</span>
+                    <b th:text="${metrics.diskUsedText()}">—</b></div>
+                <div class="tip-row"><span th:text="#{dashboard.tip.disk.free}">Free</span>
+                    <b th:text="${metrics.diskFreeText()}">—</b></div>
+                <div class="tip-row"><span th:text="#{dashboard.tip.disk.usage}">Share</span>
+                    <b th:text="${metrics.diskPercentText()}">—</b></div>
+                <div class="tip-row" th:if="${metrics.volumePath() != null}">
+                    <span th:text="#{dashboard.tip.disk.volume}">Volume</span>
+                    <b th:text="${metrics.volumePath()}">—</b></div>
+            </div>
         </div>
     </div>
 

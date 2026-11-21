@@ -757,8 +757,13 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
         }
         if (lastCommitLsn != null) {
             stats.recordPositionLsn(lastCommitLsn);
+            return total;
         }
-        return total;
+        // No transaction was committed, so nothing moved. Returning the peeked row count
+        // would tell run() this was a busy cycle and skip the idle sleep; a transaction the
+        // server keeps truncating at max_changes would then be re-peeked at full speed
+        // forever. Report 0 so the idle poll paces the retry.
+        return 0;
     }
 
     /** This transaction's spiller; one per buffered transaction, disposed on its boundary. */

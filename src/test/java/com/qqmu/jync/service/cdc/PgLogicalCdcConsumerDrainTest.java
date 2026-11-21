@@ -448,7 +448,9 @@ class PgLogicalCdcConsumerDrainTest {
 
         int total = consumer.drain(source, "jync_1");
 
-        assertThat(total).isEqualTo(2);
+        // 没有提交任何事务 = 没有进展：返回 0 让 run() 走空闲间隔，
+        // 返回已 peek 行数会按繁忙轮零延迟重读。
+        assertThat(total).isZero();
         assertThat(targetRowCount()).isZero();
         verify(advancePs, never()).executeQuery();
         verify(source).rollback();
@@ -475,7 +477,8 @@ class PgLogicalCdcConsumerDrainTest {
 
         int total = consumer.drain(source, "jync_1");
 
-        assertThat(total).isEqualTo(6);
+        // 放弃被截断的事务时同样没有提交，必须按空闲计，否则 run() 会零延迟反复重读。
+        assertThat(total).isZero();
         assertThat(targetRowCount()).isZero();
         verify(peekPs, times(3)).executeQuery();
         verify(advancePs, never()).executeQuery();
