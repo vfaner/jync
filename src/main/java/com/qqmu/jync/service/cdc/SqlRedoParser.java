@@ -488,6 +488,14 @@ public class SqlRedoParser {
             }
             String col = c.substring(0, eq).trim();
             String val = c.substring(eq + 1).trim();
+            // 末尾合取项带语句终止符 ';'。Oracle 末项恒为 ROWID（下游忽略）所以幸存，
+            // DM 无 ROWID，末项是真实列值："1;" / "'x';" 会让字面量转换器抛 UnsupportedLiteral，
+            // DELETE 转 unsupported 被跳过、UPDATE 直写脏值。与 nullPredicateColumn /
+            // isOutOfLineLobMarker 同法去尾 ';'：带引号的值以 ' 收尾，while 自然停在闭引号处，
+            // 只剥引号外的语句终止符，引号内的 ';' 作为值的一部分保留。
+            while (val.endsWith(";")) {
+                val = val.substring(0, val.length() - 1).trim();
+            }
             if (col.startsWith("\"") && col.endsWith("\"")) {
                 out.put(col.substring(1, col.length() - 1), val);
             } else if (col.toUpperCase(Locale.ROOT).equals("ROWID")) {

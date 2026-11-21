@@ -630,7 +630,12 @@ public final class PgTestDecodingParser {
         if (type == null || raw.isEmpty()) {
             return raw;
         }
-        String t = type.toLowerCase(Locale.ROOT);
+        // format_type_be 带 typmod：numeric(10,2)、timestamp(3) without time zone、timestamptz(3)。
+        // 剥括号修饰并折叠空白，否则全词 switch 落空退化为 String：带偏移的 timestamptz(p)
+        // 在 Oracle/TDengine 目标上以 VARCHAR2 绑触发 ORA-01843/01861 停车。
+        String t = type.toLowerCase(Locale.ROOT)
+                .replaceAll("\\([^)]*\\)", "")
+                .replaceAll("\\s+", " ").trim();
         try {
             switch (t) {
                 case "int2":

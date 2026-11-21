@@ -64,6 +64,18 @@ class PgTestDecodingParserTest {
         assertThat(line.change.row.get("total")).isEqualTo(new java.math.BigDecimal("9.99"));
     }
 
+    /** format_type_be 带 typmod 的类型标签仍要正确强制转换，不能退化为 String。 */
+    @Test
+    void typmodTypeLabelsStillCoerce() {
+        PgTestDecodingParser.SlotLine line = parser.parse(
+                "table public.orders: INSERT: total[numeric(10,2)]:9.99 "
+                        + "ts[timestamp(3) without time zone]:'2026-11-01 12:00:00.123' "
+                        + "tz[timestamptz(3)]:'2026-11-01 12:00:00+08'");
+        assertThat(line.change.row.get("total")).isEqualTo(new java.math.BigDecimal("9.99"));
+        assertThat(line.change.row.get("ts")).isInstanceOf(java.sql.Timestamp.class);
+        assertThat(line.change.row.get("tz")).isNotInstanceOf(String.class);
+    }
+
     @Test
     void updateRowSkipsOldKeyAndKeepsNewTuple() {
         // docker 实测(postgres:16,REPLICA IDENTITY FULL):真实的分隔标记是

@@ -7,9 +7,11 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.sql.Types;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.github.shyiko.mysql.binlog.event.deserialization.json.JsonBinary;
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -69,6 +71,30 @@ public final class CdcRowMapper {
             row.put(plan.name(), mapValue(binlogRow[i], plan, stats));
         }
         return spiller.spill(binding, row);
+    }
+
+    /**
+     * 只解码主键列。UPDATE 前镜像仅用于 PK 比较与可能的旧键删除，DELETE 仅绑 PK：
+     * 全列解码（字符集/JSON/枚举渲染 + 整行 map 分配）在宽表密集流上是监听线程的成倍
+     * 浪费。与 SQL Server 引擎 keysOnlyReader 同一取舍；PK 不可能是 LOB，无需 spill。
+     */
+    public Map<String, Object> mapKeyRow(Serializable[] binlogRow, CdcTableBinding binding,
+                                         CdcRuntimeStats stats) throws CdcUnmappableValueException {
+        java.util.List<ColumnPlan> plans = binding.columnPlans();
+        if (binlogRow.length != plans.size()) {
+            throw new CdcUnmappableValueException(binding.getTable(), "row-image",
+                    "binlog row has " + binlogRow.length + " cells but metadata has "
+                            + plans.size() + " columns (stale binding after DDL?)");
+        }
+        Set<String> pk = new HashSet<>(binding.pkNames());
+        Map<String, Object> row = new LinkedHashMap<>();
+        for (int i = 0; i < binlogRow.length; i++) {
+            ColumnPlan plan = plans.get(i);
+            if (pk.contains(plan.name())) {
+                row.put(plan.name(), mapValue(binlogRow[i], plan, stats));
+            }
+        }
+        return row;
     }
 
     static Object mapValue(Serializable raw, ColumnPlan plan, CdcRuntimeStats stats)

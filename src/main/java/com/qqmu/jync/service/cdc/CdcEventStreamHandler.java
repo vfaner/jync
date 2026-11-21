@@ -464,7 +464,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             try {
                 // The before-image only feeds the PK comparison and a possible delete;
                 // spilling its payload would write a file nobody ever reads.
-                Map<String, Object> before = mapper.mapRow(entry.getKey(), binding, stats);
+                Map<String, Object> before = mapper.mapKeyRow(entry.getKey(), binding, stats);
                 Map<String, Object> after = mapper.mapRow(entry.getValue(), binding, stats, spiller());
                 appendUpsert(change, after);
                 if (CdcPrimaryKey.changed(before, after, binding)) {
@@ -490,7 +490,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         for (Serializable[] row : data.getRows()) {
             try {
                 // A delete binds primary keys only: keep its row image out of the spiller.
-                appendDelete(change, mapper.mapRow(row, binding, stats));
+                appendDelete(change, mapper.mapKeyRow(row, binding, stats));
                 noteTrackedRowsBuffered();
             } catch (CdcUnmappableValueException e) {
                 countAndLogUnmappable(binding, "DELETE", e);

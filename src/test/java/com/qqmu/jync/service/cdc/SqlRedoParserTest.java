@@ -100,6 +100,18 @@ class SqlRedoParserTest {
         assertThat(delete.row).containsOnlyKeys("Id");
     }
 
+    /** DM 无 ROWID：WHERE 末项是真实 PK 列且带语句终止符 ';'，须去尾分号否则字面量转换抛错。 */
+    @Test
+    void dmDeleteWithoutRowidStripsTheTrailingSemicolon() {
+        CdcTableBinding binding = spikeBinding();
+
+        SqlRedoParser.ParsedChange delete = parser.parse(SqlRedoParser.Op.DELETE,
+                "delete from \"SRC\".\"SPIKE_T\" where \"ID\" = 1;", binding);
+
+        assertThat(delete.op).isEqualTo(SqlRedoParser.Op.DELETE);
+        assertThat(delete.row.get("ID")).isEqualTo("1");   // 不是 "1;"
+    }
+
     // —— 外联 LOB:LogMiner 的 SQL_REDO 里根本没有这一列 ——
     //
     // docker 实测(OracleToOpenGaussIT.streamedLobReachesANonOracleTarget):3000+ 字符的

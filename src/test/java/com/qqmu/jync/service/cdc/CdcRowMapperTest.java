@@ -34,6 +34,24 @@ class CdcRowMapperTest {
         return CdcRowMapper.mapValue(raw, column, charset, stats);
     }
 
+    /** UPDATE 前镜像/DELETE 只解 PK：非 PK 列不做字符集/JSON/枚举解码，省监听线程开销。 */
+    @Test
+    void mapKeyRowDecodesOnlyPrimaryKeys() throws Exception {
+        com.qqmu.jync.dto.meta.TableMeta meta = new com.qqmu.jync.dto.meta.TableMeta();
+        meta.setName("orders");
+        meta.getColumns().add(column("id", Types.BIGINT, "bigint", null));
+        meta.getColumns().add(column("name", Types.VARCHAR, "varchar", 100));
+        meta.getPrimaryKeys().add("id");
+        CdcTableBinding binding = CdcTableBinding.of("app", "orders", meta, "orders",
+                java.util.Collections.emptyMap());
+
+        java.util.Map<String, Object> key =
+                mapper.mapKeyRow(new Serializable[]{1L, "alice"}, binding, stats);
+
+        assertThat(key).containsOnlyKeys("id");
+        assertThat(key.get("id")).isEqualTo(1L);
+    }
+
     // —— 数值透传(整型/浮点/DECIMAL 家族)——
 
     @Test
