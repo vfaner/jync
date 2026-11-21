@@ -8,8 +8,4 @@ public record SearchResponse(int status, String reason, String body, JsonNode js
     public boolean isSuccessful() {
         return status >= 200 && status < 300;
     }
-
-    public boolean isNotFound() {
-        return status == 404;
-    }
 }

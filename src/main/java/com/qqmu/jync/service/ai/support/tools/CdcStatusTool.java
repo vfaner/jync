@@ -122,7 +122,6 @@ public class CdcStatusTool implements SupportTool {
     }
 
     private String clamp(String value) {
-        return value == null || value.length() <= MAX_TEXT
-                ? value : value.substring(0, MAX_TEXT);
+        return ToolText.safe(value, MAX_TEXT);
     }
 }

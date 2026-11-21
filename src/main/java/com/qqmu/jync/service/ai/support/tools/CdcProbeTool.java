@@ -104,7 +104,6 @@ public class CdcProbeTool implements SupportTool {
     }
 
     private String clamp(String detail) {
-        return detail == null || detail.length() <= MAX_DETAIL
-                ? detail : detail.substring(0, MAX_DETAIL);
+        return ToolText.safe(detail, MAX_DETAIL);
     }
 }
