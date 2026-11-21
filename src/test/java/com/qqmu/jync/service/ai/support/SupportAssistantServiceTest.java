@@ -74,6 +74,21 @@ class SupportAssistantServiceTest {
         public void done() { events.add("done"); }
     }
 
+    /**
+     * A page that stayed closed past its grace period cancels the run. The worker must stop
+     * before any further provider call or source-database tool execution — that is the whole
+     * point of the flag.
+     */
+    @Test
+    void aCancelledRequestStopsBeforeCallingTheModel() {
+        Recorder sink = new Recorder();
+
+        service().ask(actor, "zh", ask("订单同步在跑吗"), sink, () -> true);
+
+        assertThat(sink.events).containsExactly("error:error.support.cancelled");
+        verifyNoInteractions(chat);
+    }
+
     @Test
     void aToolRoundIsExecutedAndItsResultFedBack() {
         AiChatClient.ToolCall call =

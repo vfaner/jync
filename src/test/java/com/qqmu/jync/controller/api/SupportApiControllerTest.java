@@ -85,7 +85,7 @@ class SupportApiControllerTest {
             SupportSink sink = invocation.getArgument(3);
             sink.delta("它在跑");
             return null;
-        }).when(assistant).ask(any(), any(), any(), any());
+        }).when(assistant).ask(any(), any(), any(), any(), any());
 
         MvcResult result = mvc.perform(post("/api/support/chat").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -117,7 +117,7 @@ class SupportApiControllerTest {
             SupportSink sink = invocation.getArgument(3);
             sink.delta("在跑");
             return null;
-        }).when(assistant).ask(any(), any(), any(), any());
+        }).when(assistant).ask(any(), any(), any(), any(), any());
 
         mvc.perform(post("/api/support/chat").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)

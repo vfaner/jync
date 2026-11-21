@@ -6,10 +6,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletResponse;
@@ -82,9 +87,25 @@ public class SupportApiController {
         this.runs = runs;
     }
 
+    /**
+     * How long a closed page keeps its run alive for a reattach before the work is cancelled.
+     * The answer is buffered, so a reload within this window still picks it up.
+     */
+    static final long DETACH_CANCEL_GRACE_MS = 60_000L;
+
+    /** One timer per detached run; cancelled when the page comes back or the run ends. */
+    private final ScheduledExecutorService cancelScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "ai-support-cancel");
+                t.setDaemon(true);
+                return t;
+            });
+    private final Map<String, ScheduledFuture<?>> pendingCancels = new ConcurrentHashMap<>();
+
     @PreDestroy
     void shutdown() {
         executor.shutdownNow();
+        cancelScheduler.shutdownNow();
     }
 
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -105,19 +126,30 @@ public class SupportApiController {
         response.setHeader(RUN_ID_HEADER, runId);
         SseEmitter emitter = new SseEmitter(EMITTER_TIMEOUT_MS);
         SseSink sink = new SseSink(emitter, runs, runId);
+        AtomicBoolean cancelled = new AtomicBoolean();
         // A closed stream is not a finished answer: the worker keeps running and the single-
         // flight lock stays held until it actually finishes, or the user reattaches and the
         // page sees its own run still in progress.
-        emitter.onTimeout(sink::detach);
-        emitter.onError(e -> sink.detach());
+        emitter.onTimeout(() -> {
+            sink.detach();
+            scheduleCancelAfterDetach(runId, cancelled);
+        });
+        emitter.onError(e -> {
+            sink.detach();
+            scheduleCancelAfterDetach(runId, cancelled);
+        });
+        // Completing the emitter (including the normal finish) also detaches the page; the
+        // scheduled flag is a no-op once the worker has returned.
+        emitter.onCompletion(() -> scheduleCancelAfterDetach(runId, cancelled));
         try {
             executor.execute(() -> {
                 try {
-                    assistant.ask(actor, language, request, sink);
+                    assistant.ask(actor, language, request, sink, cancelled::get);
                 } catch (RuntimeException e) {
                     log.warn("Support stream failed: {}", e.toString());
                     sink.error("error.unexpected");
                 } finally {
+                    clearPendingCancel(runId);
                     assistant.finish(username);
                     sink.doneAndComplete();
                 }
@@ -137,10 +169,32 @@ public class SupportApiController {
      * worker is done. A run that is unknown, expired or belongs to another account is a plain
      * 404: distinguishing those cases would confirm that someone else's answer exists.
      */
+    /**
+     * A closed page is not a cancelled answer: the run keeps going so a reload can pick it up.
+     * After the grace period, though, nobody is waiting — cancel the remaining rounds so no
+     * more source-database probes or row counts run on the operator's behalf.
+     */
+    void scheduleCancelAfterDetach(String runId, AtomicBoolean cancelled) {
+        if (runId == null || cancelled == null) {
+            return;
+        }
+        pendingCancels.computeIfAbsent(runId, id -> cancelScheduler.schedule(
+                () -> cancelled.set(true), DETACH_CANCEL_GRACE_MS, TimeUnit.MILLISECONDS));
+    }
+
+    private void clearPendingCancel(String runId) {
+        ScheduledFuture<?> pending = pendingCancels.remove(runId);
+        if (pending != null) {
+            pending.cancel(false);
+        }
+    }
+
     @GetMapping("/runs/{id}")
     public ResponseEntity<Map<String, Object>> reattach(@PathVariable String id,
             @RequestParam(name = "since", defaultValue = "0") long since) {
         String username = AccessGuard.current().username();
+        // The page is back: the answer is still wanted.
+        clearPendingCancel(id);
         return runs.snapshot(id, username, since)
                 .map(snapshot -> ResponseEntity.ok(snapshotBody(snapshot)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
