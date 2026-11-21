@@ -1893,6 +1893,12 @@ table.tbl a.truncate { display: block; }
 .process-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
 .process-head .seg { margin-left: auto; }
 .process-stats { margin-bottom: 14px; }
+/* 整机资源环的小标题行，与进程资源标题同款；标题在环片段之外，刷新不重画。 */
+.server-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin: 18px 0 10px; }
+.server-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.server-head .hint, .process-head .hint { font-size: 12.5px; color: var(--ink-mute); font-weight: 400; }
+/* 异常任务数并进统计卡副标题：与「正在运行」隔一点，红字由 .text-danger 给。 */
+.stat-x .stat-err { margin-left: 6px; white-space: nowrap; }
 
 /* 趋势图 */
 .chart-card { display: flex; flex-direction: column; }

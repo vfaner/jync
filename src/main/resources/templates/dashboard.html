@@ -36,6 +36,12 @@
                 <div class="stat-x">
                     <span data-count th:text="${stats.enabledProjectCount}">0</span>
                     <span th:text="#{dashboard.running}">running</span>
+                    <!--/* 异常任务数并进这张卡：红字醒目，随 live-stats 一起刷新，不再单挂横幅。
+                           名词跟着数走（英文单复数），数字单独成格供 countUp 滚动。 */-->
+                    <span th:if="${stats.errorTaskCount > 0}" class="stat-err">
+                        · <span th:text="${stats.errorTaskCount == 1} ? #{dashboard.errors.one} : #{dashboard.errors.other}">failing tasks</span>
+                        <span class="text-danger" data-count th:text="${stats.errorTaskCount}">0</span>
+                    </span>
                 </div>
             </div>
         </div>
@@ -61,7 +67,7 @@
                 </div>
             </div>
         </div>
-        <div class="stat" th:classappend="${stats.errorTaskCount > 0} ? 'is-danger' : 'is-warn'">
+        <div class="stat is-warn">
             <span class="stat-ico"><svg class="ico"><use href="#activity"/></svg></span>
             <div class="stat-body">
                 <div class="stat-n" data-count th:text="${stats.changesToday}">0</div>
@@ -72,6 +78,13 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!--/* 整机资源的小标题：交代这块监控的是本机 CPU/内存/磁盘，吃紧时该清理或扩容。
+           标题在环片段之外，5 秒刷新只换环、不重画标题。 */-->
+    <div class="server-head">
+        <h2 th:text="#{dashboard.server.title}">Server resources</h2>
+        <span class="hint" th:text="#{dashboard.server.hint}">Monitor this machine's resources</span>
     </div>
 
     <!--/* 资源使用四联环：跟着统计块走，不套卡片。整页渲染时取一次快照，之后由 app.js
@@ -115,17 +128,6 @@
             <!--/* 数字后面跟着量的是哪块卷（H2 元数据库所在目录），写法与配置里一致；
                   实在过长时按列宽截断 */-->
             <div class="gauge-sub" th:text="${metrics.diskText()}">—</div>
-        </div>
-    </div>
-
-    <!-- 仅在真的有任务失败时出现，保证这条提示始终有意义 -->
-    <div th:if="${stats.errorTaskCount > 0}" class="alert alert-warn">
-        <svg class="ico"><use href="#exclamation-triangle-fill"/></svg>
-        <div class="alert-body">
-            <strong th:text="${stats.errorTaskCount}">0</strong>
-            <!--/* 数字单独渲染，名词得跟着数走：英文 1 用单数，其余用复数；
-                   中文两档同一个词，两条键都指向它。 */-->
-            <span th:text="${stats.errorTaskCount == 1} ? #{dashboard.errors.one} : #{dashboard.errors.other}">failing tasks</span>
         </div>
     </div>
 

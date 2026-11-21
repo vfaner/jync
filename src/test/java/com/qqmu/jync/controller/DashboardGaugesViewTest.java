@@ -85,6 +85,14 @@ class DashboardGaugesViewTest {
                 .doesNotContain("负载").doesNotContain("整机内存");
     }
 
+    @Test
+    void theServerGaugesCarryATitleAndHint() throws Exception {
+        assertThat(render(SAMPLE, Locale.SIMPLIFIED_CHINESE))
+                .contains("服务器信息").contains("资源吃紧时及时清理或扩容");
+        assertThat(render(SAMPLE, Locale.ENGLISH))
+                .contains("Server resources").contains("clean up or scale out");
+    }
+
     /**
      * 磁盘那格量的到底是哪块盘，页面上必须自己说清楚：JDBC URL 落在 ./data/jync 时，
      * 数字来自该目录所在卷，不是「/」。写法跟配置里一致，够短，不需要悬浮提示；

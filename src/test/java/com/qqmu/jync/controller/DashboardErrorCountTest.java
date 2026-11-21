@@ -28,15 +28,13 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
 
 /**
- * The failing-tasks banner is a number followed by a noun, and English needs two nouns: one
- * failing task, three failing tasks. The banner used to read "1 Failing tasks" — the count is
- * rendered on its own, so a fixed plural cannot agree with it. The template now picks the form
- * from the count; Chinese uses the same word for both.
+ * 异常任务数不再单挂横幅，而是并进「实时同步任务」卡的副标题，红字醒目。名词跟着数走
+ * （英文 1 单数、其余复数；中文两档同词），数字单独成格供 countUp 滚动；没有异常时整段不渲染。
  */
 @WebMvcTest(DashboardController.class)
 @Import({GlobalModelAdvice.class, ChangeLogDetailsLocalizer.class})
 @TestPropertySource(properties = "app.github-url=https://example.com/repo")
-class DashboardErrorBannerTest {
+class DashboardErrorCountTest {
 
     @Autowired
     private MockMvc mvc;
@@ -58,15 +56,30 @@ class DashboardErrorBannerTest {
 
     @Test
     void threeFailingTasksArePlural() throws Exception {
-        String html = render(3, Locale.ENGLISH);
-
-        assertThat(html).contains("Failing tasks");
+        assertThat(render(3, Locale.ENGLISH)).contains("Failing tasks");
     }
 
     @Test
     void chineseKeepsOneWordForBoth() throws Exception {
         assertThat(render(1, Locale.SIMPLIFIED_CHINESE)).contains("异常任务");
         assertThat(render(4, Locale.SIMPLIFIED_CHINESE)).contains("异常任务");
+    }
+
+    @Test
+    void theFailingCountIsRedInTheProjectCard() throws Exception {
+        String html = render(3, Locale.SIMPLIFIED_CHINESE);
+
+        assertThat(html).contains("stat-err").contains("text-danger");
+    }
+
+    @Test
+    void noFailingTasksShowsNoErrorSegment() throws Exception {
+        assertThat(render(0, Locale.SIMPLIFIED_CHINESE)).doesNotContain("stat-err");
+    }
+
+    @Test
+    void theStandaloneBannerIsGone() throws Exception {
+        assertThat(render(3, Locale.ENGLISH)).doesNotContain("alert-warn");
     }
 
     private String render(int errorTasks, Locale locale) throws Exception {
