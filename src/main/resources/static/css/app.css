@@ -1729,6 +1729,14 @@ table.tbl a.truncate { display: block; }
 .nav-menu .menu-item:hover { color: var(--brand); background: var(--bg-tint); }
 .nav-menu .menu-item .ico { width: 14px; height: 14px; color: var(--ink-mute); }
 .nav-menu .menu-item:hover .ico { color: var(--brand); }
+/* 当前页对应的子项：与顶层导航 .active 同一套高亮，展开下拉即知身在何处。
+   放在 :hover 之后，悬停当前项时仍保持选中底色。 */
+.nav-menu .menu-item.is-active {
+  color: var(--brand); font-weight: 600;
+  background: var(--fb-brand-10);
+  background: color-mix(in srgb, var(--brand) 10%, transparent);
+}
+.nav-menu .menu-item.is-active .ico { color: var(--brand); }
 .nav-menu .menu-item.is-danger:hover {
   color: var(--danger); background: var(--fb-danger-08); background: color-mix(in srgb, var(--danger) 8%, transparent);
 }

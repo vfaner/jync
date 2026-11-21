@@ -59,8 +59,8 @@
                 <svg class="ico"><use href="#speedometer2"/></svg><span th:text="#{nav.dashboard}">Dashboard</span>
             </a>
             <!--/* 同步任务按工作方式分组：实时同步（原项目页）、ETL（客户 SQL + 定时/
-                   手动）与专属迁移（独立连接 + 整索引复制）。几页都在同一组里，组本身
-                   点亮即可，不必同时高亮多个子项。 */-->
+                   手动）与专属迁移（独立连接 + 整索引复制）。组本身点亮表示「在这一组
+                   里」，展开下拉时当前页对应的子项同时点亮，告诉用户自己站在哪一页。 */-->
             <div class="nav-group nav-links-group"
                  th:classappend="${activeNav == 'projects' or activeNav == 'etl'
                                   or activeNav == 'migrations'} ? 'is-active' : ''">
@@ -71,15 +71,15 @@
                     <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
                 </button>
                 <div class="nav-menu">
-                    <a class="menu-item" th:href="@{/projects}">
+                    <a class="menu-item" th:href="@{/projects}" th:classappend="${activeNav == 'projects'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#diagram-3"/></svg>
                         <span th:text="#{nav.realtime}">Real-time sync</span>
                     </a>
-                    <a class="menu-item" th:href="@{/etl}">
+                    <a class="menu-item" th:href="@{/etl}" th:classappend="${activeNav == 'etl'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#arrow-repeat"/></svg>
                         <span th:text="#{nav.etl}">ETL tasks</span>
                     </a>
-                    <a class="menu-item" th:href="@{/migrations}">
+                    <a class="menu-item" th:href="@{/migrations}" th:classappend="${activeNav == 'migrations'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#arrow-left-right"/></svg>
                         <span th:text="#{nav.migrations}">Dedicated migration</span>
                     </a>
@@ -96,21 +96,21 @@
                     <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
                 </button>
                 <div class="nav-menu">
-                    <a class="menu-item" th:href="@{/databases}">
+                    <a class="menu-item" th:href="@{/databases}" th:classappend="${activeNav == 'databases'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#hdd-network"/></svg>
                         <span th:text="#{nav.databases}">Connections</span>
                     </a>
                     <!--/* AI 菜单可由 sync.ai.enabled=false 整体隐藏，给锁死的内网部署一个干净的关法 */-->
-                    <a class="menu-item" th:if="${aiEnabled}" th:href="@{/ai}">
+                    <a class="menu-item" th:if="${aiEnabled}" th:href="@{/ai}" th:classappend="${activeNav == 'ai'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#cpu"/></svg>
                         <span th:text="#{nav.ai}">AI</span>
                     </a>
-                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/external-auth}">
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/external-auth}" th:classappend="${activeNav == 'oa'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#shield-check"/></svg>
                         <span th:text="#{nav.oa}">External authentication</span>
                     </a>
                     <!--/* 告警配置保存的是 Webhook 地址（一把 bearer 凭据），只对管理员可见 */-->
-                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/alert-settings}">
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/alert-settings}" th:classappend="${activeNav == 'alerts'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#activity"/></svg>
                         <span th:text="#{nav.alerts}">Alert notifications</span>
                     </a>
@@ -128,15 +128,15 @@
                     <svg class="ico nav-caret"><use href="#chevron-down"/></svg>
                 </button>
                 <div class="nav-menu">
-                    <a class="menu-item" th:href="@{/change-logs}">
+                    <a class="menu-item" th:href="@{/change-logs}" th:classappend="${activeNav == 'change-logs'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#clock-history"/></svg>
                         <span th:text="#{nav.changeLogs}">Change Log</span>
                     </a>
-                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/audits}">
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/audits}" th:classappend="${activeNav == 'audits'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#shield-check"/></svg>
                         <span th:text="#{nav.audits}">Audit log</span>
                     </a>
-                    <a class="menu-item" th:href="@{/system-logs}">
+                    <a class="menu-item" th:href="@{/system-logs}" th:classappend="${activeNav == 'system-logs'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#code-square"/></svg>
                         <span th:text="#{nav.systemLogs}">System log</span>
                     </a>
@@ -165,11 +165,11 @@
                           hidden>!</span>
                 </button>
                 <div class="nav-menu">
-                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/system-config}">
+                    <a class="menu-item" th:if="${isAdmin}" th:href="@{/system-config}" th:classappend="${activeNav == 'systemConfig'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#sliders"/></svg>
                         <span th:text="#{nav.systemConfig}">System settings</span>
                     </a>
-                    <a class="menu-item nav-settings" th:href="@{/settings}">
+                    <a class="menu-item nav-settings" th:href="@{/settings}" th:classappend="${activeNav == 'settings'} ? 'is-active' : ''">
                         <svg class="ico"><use href="#gear"/></svg><span th:text="#{nav.settings}">System info</span>
                         <!--/* 展开后的第二枚圆点：文案与请求参数都在顶部触发器那枚上，这里只负责显示；
                                app.js 把两枚一起揭开/收起。未开启更新检查时整块不渲染。 */-->
