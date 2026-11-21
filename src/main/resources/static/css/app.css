@@ -1359,9 +1359,9 @@ table.tbl a.truncate { display: block; }
   color: var(--brand); font-size: 11.5px; font-weight: 700; letter-spacing: .4px;
 }
 
-/* 模态框 */
+/* 模态框（层级高于 AI 悬浮助手，低于捐赠/升级弹窗） */
 .modal {
-  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 1080;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 1360;
   display: none; align-items: center; justify-content: center; padding: 24px;
 }
 .modal.open { display: flex; animation: modalFade .25s ease; }
@@ -2175,7 +2175,8 @@ a.type-card:focus-visible {
 /* ==========================================================================
    AI 运维助手悬浮窗
    收起：右下角渐变按钮；抽屉：380×560；拖拽调大小；最大化覆盖当前页面。
-   z-index：FAB 1340，面板 1350 —— 高于 toast(1080)，低于捐赠弹窗(1400)。
+   z-index：FAB 1340，面板 1350 —— 高于 toast(1080)，低于普通模态框(1360)
+   与捐赠弹窗(1400)，因此打开任何对话框时助手都不会盖在遮罩上。
    ========================================================================== */
 .support-widget { position: fixed; z-index: 1350; right: 20px; bottom: 20px; }
 .support-fab {

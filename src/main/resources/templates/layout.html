@@ -885,9 +885,7 @@
         'error.etl.queue.full': /*[[#{error.etl.queue.full}]]*/ '',
         'error.etl.not.found': /*[[#{error.etl.not.found}]]*/ '',
         'error.connection.missing': /*[[#{error.connection.missing}]]*/ '',
-        'error.project.no.objects': /*[[#{error.project.no.objects}]]*/ '',
         'error.project.cron.invalid': /*[[#{error.project.cron.invalid}]]*/ '',
-        'error.project.redis.target.required': /*[[#{error.project.redis.target.required}]]*/ '',
         'error.validate.empty': /*[[#{error.validate.empty}]]*/ '',
         'error.validate.noHeader': /*[[#{error.validate.noHeader}]]*/ '',
         'error.validate.unreachable': /*[[#{error.validate.unreachable}]]*/ '',
@@ -927,7 +925,21 @@
         'etl.batch.tablesFailed': /*[[#{etl.batch.tablesFailed}]]*/ '',
         'etl.batch.noTables': /*[[#{etl.batch.noTables}]]*/ '',
         'etl.batch.selectAll': /*[[#{etl.batch.selectAll}]]*/ '',
-        'etl.batch.existingTables': /*[[#{etl.batch.existingTables}]]*/ ''
+        'etl.batch.existingTables': /*[[#{etl.batch.existingTables}]]*/ '',
+        // 连接测试与专属迁移的 AJAX 结果（app.js / migration.js 通过 JyncUI.t 解析）。
+        'migration.test.success': /*[[#{migration.test.success}]]*/ '',
+        'migration.test.failed': /*[[#{migration.test.failed}]]*/ '',
+        'error.migration.connection.missing': /*[[#{error.migration.connection.missing}]]*/ '',
+        'error.migration.connection.not.found': /*[[#{error.migration.connection.not.found}]]*/ '',
+        'error.migration.connection.username.required': /*[[#{error.migration.connection.username.required}]]*/ '',
+        'error.migration.connection.apiKey.required': /*[[#{error.migration.connection.apiKey.required}]]*/ '',
+        'error.migration.connection.url.invalid': /*[[#{error.migration.connection.url.invalid}]]*/ '',
+        // Redis 重建与 AI 失败在浏览器端按 key 提示。
+        'error.project.redis.rebuild.busy': /*[[#{error.project.redis.rebuild.busy}]]*/ '',
+        'error.project.redis.targetMissing': /*[[#{error.project.redis.targetMissing}]]*/ '',
+        'error.project.redis.projectionMissing': /*[[#{error.project.redis.projectionMissing}]]*/ '',
+        'error.support.cancelled': /*[[#{error.support.cancelled}]]*/ '',
+        'error.ai.disabled': /*[[#{error.ai.disabled}]]*/ '',
     };
 </script>
 <script th:src="@{/js/theme.js(v=${appVersion})}"></script>
