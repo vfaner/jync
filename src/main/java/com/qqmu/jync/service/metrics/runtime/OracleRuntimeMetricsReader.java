@@ -66,7 +66,7 @@ public class OracleRuntimeMetricsReader implements RuntimeMetricsReader {
 
     private Map<String, Long> stats(Connection connection) throws SQLException {
         Map<String, Long> values = new HashMap<>();
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = TolerantReads.timedStatement(connection);
              ResultSet rs = statement.executeQuery(STATS_QUERY)) {
             while (rs.next()) {
                 String name = rs.getString(1);

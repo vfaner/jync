@@ -47,7 +47,7 @@ public class PostgresRuntimeMetricsReader implements RuntimeMetricsReader {
         Long counter;
         Long hits;
         Long reads;
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = TolerantReads.timedStatement(connection);
              ResultSet rs = statement.executeQuery(DATABASE_QUERY)) {
             if (!rs.next()) {
                 return new Reading(null, null, null, null);
@@ -61,7 +61,7 @@ public class PostgresRuntimeMetricsReader implements RuntimeMetricsReader {
     }
 
     private Integer lockWaits(Connection connection) {
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = TolerantReads.timedStatement(connection);
              ResultSet rs = statement.executeQuery(LOCK_QUERY)) {
             return rs.next() ? rs.getInt(1) : null;
         } catch (SQLException e) {

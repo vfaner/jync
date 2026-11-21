@@ -71,7 +71,7 @@ class DatabaseSampleTest {
     void everyConfiguredConnectionIsSampled() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(
                 config(10L), config(20L), config(30L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(
                 health(10L, true), health(20L, true), health(30L, true)));
 
         List<DbMetricSample> rows = sample.sample(NOW, false);
@@ -83,7 +83,7 @@ class DatabaseSampleTest {
     @Test
     void aConnectionNoProjectUsesIsStillSampled() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
 
         List<DbMetricSample> rows = sample.sample(NOW, false);
 
@@ -101,7 +101,7 @@ class DatabaseSampleTest {
     @Test
     void anUnhealthyConnectionStillGetsAFailureSample() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(
                 new DatabaseHealthService.Health(10L, false, 3000, "[SQLState 08S01] refused")));
 
         List<DbMetricSample> rows = sample.sample(NOW, false);
@@ -117,7 +117,7 @@ class DatabaseSampleTest {
     @Test
     void aRuntimeReadFailureDoesNotEraseTheHealthResult() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
         HikariDataSource pool = mock(HikariDataSource.class);
         when(dataSourceManager.createTransientDataSource(any())).thenReturn(pool);
         when(pool.getConnection()).thenAnswer(inv -> mock(Connection.class));
@@ -133,7 +133,7 @@ class DatabaseSampleTest {
     @Test
     void theSecondReadingTurnsTheCounterIntoAqps() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any()))
                 .thenReturn(Optional.of(new RuntimeMetricsReader.Reading(
@@ -151,7 +151,7 @@ class DatabaseSampleTest {
     @Test
     void aRestartedServerCounterDoesNotProduceANegativeQps() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any()))
                 .thenReturn(Optional.of(new RuntimeMetricsReader.Reading(1, 5000L, null, null)))
@@ -173,7 +173,7 @@ class DatabaseSampleTest {
     void aCounterMarkIsForgottenWhenTheConnectionLeavesTheSampleSet() throws Exception {
         when(configRepository.findAll())
                 .thenReturn(List.of(config(10L)), List.of(config(20L)), List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false)))
+        when(healthService.check(anyList(), eq(true), any()))
                 .thenReturn(List.of(health(10L, true)), List.of(health(20L, true)),
                         List.of(health(10L, true)));
         stubPool();
@@ -197,7 +197,7 @@ class DatabaseSampleTest {
     @Test
     void capacityStaysUnknownWhenTheReaderCannotQueryCatalogStatistics() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any())).thenReturn(Optional.empty());
         MetadataReader reader = mock(MetadataReader.class);
@@ -215,7 +215,7 @@ class DatabaseSampleTest {
     @Test
     void anEmptySchemaOnAReaderWithCatalogStatisticsIsZeroTables() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any())).thenReturn(Optional.empty());
         MetadataReader reader = mock(MetadataReader.class);
@@ -234,7 +234,7 @@ class DatabaseSampleTest {
     @Test
     void capacityIsOnlyReadWhenTheSlowerScheduleSaysSo() throws Exception {
         when(configRepository.findAll()).thenReturn(List.of(config(10L)));
-        when(healthService.check(anyList(), eq(false))).thenReturn(List.of(health(10L, true)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
         stubPool();
         when(router.read(any(), any())).thenReturn(Optional.empty());
         MetadataReader reader = mock(MetadataReader.class);
@@ -251,6 +251,41 @@ class DatabaseSampleTest {
         assertThat(rowsFrom(rows()).getTableCount()).isEqualTo(2);
         assertThat(rowsFrom(rows()).getRowCount()).isEqualTo(15);
         assertThat(rowsFrom(rows()).getBytes()).isEqualTo(1536);
+    }
+
+    /** 一个连接 save 失败（如保留修剪批量 DELETE 持锁）不能丢掉整轮其余连接的样本。 */
+    @Test
+    void oneSaveFailureDoesNotDropTheRestOfTheRound() throws Exception {
+        when(configRepository.findAll()).thenReturn(List.of(config(10L), config(20L)));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(
+                health(10L, true), health(20L, true)));
+        when(sampleRepository.save(any()))
+                .thenThrow(new RuntimeException("lock timeout"))
+                .thenReturn(null);
+
+        List<DbMetricSample> rows = sample.sample(NOW, false);
+
+        assertThat(rows).extracting(DbMetricSample::getConnectionId).containsExactly(20L);
+        verify(sampleRepository, org.mockito.Mockito.times(2)).save(any());
+    }
+
+    /** 连接被编辑指向另一台服务器（id 不变）：旧累计计数器不可比，QPS 置 null 而非假尖峰。 */
+    @Test
+    void editingTheConnectionResetsTheCounter() throws Exception {
+        DatabaseConfig c = config(10L);
+        c.setUpdatedAt(Instant.parse("2026-11-01T09:00:00Z"));
+        when(configRepository.findAll()).thenReturn(List.of(c));
+        when(healthService.check(anyList(), eq(true), any())).thenReturn(List.of(health(10L, true)));
+        stubPool();
+        when(router.read(any(), any()))
+                .thenReturn(Optional.of(new RuntimeMetricsReader.Reading(1, 1000L, null, null)))
+                .thenReturn(Optional.of(new RuntimeMetricsReader.Reading(1, 9000L, null, null)));
+
+        sample.sample(NOW, false);
+        c.setUpdatedAt(Instant.parse("2026-11-01T09:30:00Z"));   // 编辑连接，换了指向
+        List<DbMetricSample> second = sample.sample(NOW.plusSeconds(60), false);
+
+        assertThat(rowsFrom(second).getQps()).isNull();
     }
 
     private void stubPool() throws Exception {

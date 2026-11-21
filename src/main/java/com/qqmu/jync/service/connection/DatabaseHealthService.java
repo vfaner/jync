@@ -108,6 +108,17 @@ public class DatabaseHealthService {
      *              page load does not
      */
     public List<Health> check(List<DatabaseConfig> configs, boolean force) {
+        return check(configs, force, budget);
+    }
+
+    /**
+     * Checks with an explicit total budget. The performance sampler passes a budget scaled to
+     * the connection count and {@code force=true}: the page's fixed 8s is shared across every
+     * connection, so with several slow/unreachable databases the tail healthy ones would be
+     * judged "timeout" and recorded as down. Sampling runs in the background and can afford a
+     * longer window, and must not reuse the page's cached timeout verdicts.
+     */
+    public List<Health> check(List<DatabaseConfig> configs, boolean force, Duration budget) {
         if (configs == null || configs.isEmpty()) {
             return List.of();
         }
@@ -126,7 +137,7 @@ public class DatabaseHealthService {
             }
         }
         if (!pending.isEmpty()) {
-            probeAll(pending, results);
+            probeAll(pending, results, budget);
         }
         List<Health> ordered = new ArrayList<>(configs.size());
         for (DatabaseConfig config : configs) {
@@ -135,7 +146,7 @@ public class DatabaseHealthService {
         return ordered;
     }
 
-    private void probeAll(List<DatabaseConfig> pending, Map<Long, Health> results) {
+    private void probeAll(List<DatabaseConfig> pending, Map<Long, Health> results, Duration budget) {
         // A pool per request, gone when the request is: a long-lived executor would keep
         // threads alive for a page nobody is looking at.
         ExecutorService executor = Executors.newFixedThreadPool(

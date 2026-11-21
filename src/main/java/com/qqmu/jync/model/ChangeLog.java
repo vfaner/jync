@@ -25,7 +25,10 @@ import com.qqmu.jync.util.DurationFormat;
 @Entity
 @Table(name = "change_log", indexes = {
         @Index(name = "idx_changelog_project", columnList = "project_id"),
-        @Index(name = "idx_changelog_time", columnList = "occurred_at")
+        @Index(name = "idx_changelog_time", columnList = "occurred_at"),
+        // 项目性能页每 10s 按 project_id 等值 + occurred_at 范围聚合；复合索引让两者一起走索引，
+        // 避免 H2 在「扫该项目全部历史」与「扫时间窗内所有项目」之间二选一。ddl-auto=update 自动建。
+        @Index(name = "idx_changelog_project_time", columnList = "project_id, occurred_at")
 })
 @Getter
 @Setter

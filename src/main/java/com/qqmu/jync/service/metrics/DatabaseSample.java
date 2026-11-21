@@ -8,6 +8,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,7 +75,7 @@ public class DatabaseSample {
         this.sampleRepository = sampleRepository;
     }
 
-    private record CounterMark(Instant at, long counter) {
+    private record CounterMark(Instant at, long counter, Instant configUpdatedAt) {
     }
 
     public List<DbMetricSample> sample(Instant now, boolean includeCapacity) {
@@ -91,7 +92,10 @@ public class DatabaseSample {
             return List.of();
         }
         Map<Long, DatabaseHealthService.Health> healths = new LinkedHashMap<>();
-        for (DatabaseHealthService.Health health : healthService.check(configs, false)) {
+        // force=true 绕开连接页缓存（避免复用页面的超时判负）；预算按连接数缩放，让尾部
+        // 健康库在多/慢连接时也能被真实探测，而不是共享页面 8s 预算耗尽被判 down。
+        Duration samplingBudget = Duration.ofSeconds(Math.max(8, configs.size() * 3L));
+        for (DatabaseHealthService.Health health : healthService.check(configs, true, samplingBudget)) {
             if (health != null) {
                 healths.put(health.id(), health);
             }
@@ -105,8 +109,15 @@ public class DatabaseSample {
                     fillCapacity(config, row);
                 }
             }
-            sampleRepository.save(row);
-            rows.add(row);
+            try {
+                sampleRepository.save(row);
+                rows.add(row);
+            } catch (RuntimeException e) {
+                // 一个连接 save 失败（如保留修剪批量 DELETE 持锁期间 H2 锁超时）不能丢掉整轮
+                // 其余连接的样本；与 MetricsSampler 的逐项目隔离一致。
+                log.warn("Could not save DB metric sample for '{}': {}",
+                        config.getName(), e.getMessage());
+            }
         }
         return rows;
     }
@@ -136,22 +147,24 @@ public class DatabaseSample {
             row.setSessions(value.sessions());
             row.setCacheHitPercent(value.cacheHitPercent());
             row.setLockWaits(value.lockWaits());
-            row.setQps(qps(config.getId(), value.counter(), now));
+            row.setQps(qps(config.getId(), value.counter(), now, config.getUpdatedAt()));
         } catch (Exception e) {
             // No permission, no view, an analytic engine: the health sample still stands.
             log.debug("Runtime metrics unavailable for '{}': {}", config.getName(), e.getMessage());
         }
     }
 
-    private Double qps(Long connectionId, Long counter, Instant now) {
+    private Double qps(Long connectionId, Long counter, Instant now, Instant configUpdatedAt) {
         if (counter == null) {
             lastCounters.remove(connectionId);
             return null;
         }
-        CounterMark previous = lastCounters.put(connectionId, new CounterMark(now, counter));
-        if (previous == null) {
-            // Nothing to subtract from yet: null, not zero, so the chart does not claim a
-            // minute of silence that never happened.
+        CounterMark previous = lastCounters.put(connectionId,
+                new CounterMark(now, counter, configUpdatedAt));
+        if (previous == null || !Objects.equals(previous.configUpdatedAt(), configUpdatedAt)) {
+            // Nothing to subtract from yet, or the connection was edited to point at another
+            // server (same id): the old cumulative counter is not comparable. null, not a
+            // fabricated spike or gap; the next round heals it.
             return null;
         }
         long seconds = Duration.between(previous.at(), now).getSeconds();

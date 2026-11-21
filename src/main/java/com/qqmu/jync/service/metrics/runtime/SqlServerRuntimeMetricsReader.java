@@ -40,7 +40,8 @@ public class SqlServerRuntimeMetricsReader implements RuntimeMetricsReader {
             + "FROM sys.dm_os_performance_counters a "
             + "JOIN sys.dm_os_performance_counters b "
             + "ON a.object_name = b.object_name AND a.instance_name = b.instance_name "
-            + "WHERE a.object_name = 'SQLServer:Buffer Manager' "
+            // 命名实例的 object_name 是 'MSSQL$<INST>:Buffer Manager'，等值匹配默认实例会永远读不到。
+            + "WHERE a.object_name LIKE '%:Buffer Manager' "
             + "AND a.counter_name = 'Buffer cache hit ratio' "
             + "AND b.counter_name = 'Buffer cache hit ratio base'";
 
@@ -65,7 +66,7 @@ public class SqlServerRuntimeMetricsReader implements RuntimeMetricsReader {
 
     /** Numerator / base × 100; unknown when either row is missing or the base is zero. */
     private static Double bufferCacheHitPercent(Connection connection) throws SQLException {
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = TolerantReads.timedStatement(connection);
              ResultSet rs = statement.executeQuery(HIT_QUERY)) {
             if (!rs.next()) {
                 return null;

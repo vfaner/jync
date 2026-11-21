@@ -19,6 +19,9 @@ final class TolerantReads {
         T run() throws SQLException;
     }
 
+    /** Bounds each runtime query so a hung statistics view cannot stall the whole sampler. */
+    static final int QUERY_TIMEOUT_SECONDS = 10;
+
     private SQLException firstFailure;
 
     <T> T attempt(Query<T> query) {
@@ -38,8 +41,15 @@ final class TolerantReads {
         }
     }
 
+    /** A statement with a query timeout, for readers that build their own SQL. */
+    static Statement timedStatement(Connection connection) throws SQLException {
+        Statement statement = connection.createStatement();
+        statement.setQueryTimeout(QUERY_TIMEOUT_SECONDS);
+        return statement;
+    }
+
     static Long scalarLong(Connection connection, String sql) throws SQLException {
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = timedStatement(connection);
              ResultSet rs = statement.executeQuery(sql)) {
             return rs.next() ? parseLong(rs.getString(1)) : null;
         }

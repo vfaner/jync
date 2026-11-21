@@ -37,7 +37,7 @@ public class MySqlRuntimeMetricsReader implements RuntimeMetricsReader {
     @Override
     public Reading read(Connection connection) throws SQLException {
         Map<String, String> status = new HashMap<>();
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = TolerantReads.timedStatement(connection);
              ResultSet rs = statement.executeQuery(STATUS_QUERY)) {
             while (rs.next()) {
                 status.put(rs.getString(1), rs.getString(2));

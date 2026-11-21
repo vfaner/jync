@@ -30,7 +30,7 @@ public class Db2RuntimeMetricsReader implements RuntimeMetricsReader {
 
     @Override
     public Reading read(Connection connection) throws SQLException {
-        try (Statement statement = connection.createStatement();
+        try (Statement statement = TolerantReads.timedStatement(connection);
              ResultSet rs = statement.executeQuery(MONITOR_QUERY)) {
             if (!rs.next()) {
                 return new Reading(null, null, null, null);
