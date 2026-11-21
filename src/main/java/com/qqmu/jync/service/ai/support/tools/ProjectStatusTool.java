@@ -18,8 +18,6 @@ import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
 import com.qqmu.jync.service.ai.support.ToolContext;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
-import com.qqmu.jync.service.metrics.MetricsRange;
-import com.qqmu.jync.service.metrics.ProjectMetricsView;
 
 import tools.jackson.databind.JsonNode;
 
@@ -120,11 +118,8 @@ public class ProjectStatusTool implements SupportTool {
         }
         out.put("progress", progress);
 
-        ProjectMetricsView view = metrics.project(projectId, MetricsRange.LAST_HOUR);
-        Map<String, Object> current = new LinkedHashMap<>();
-        current.put("rowsTotal", view.current().get("rowsTotal"));
-        current.put("lag", view.current().get("lag"));
-        current.put("failures", view.current().get("failures"));
+        // 只取最新三个数字，不构建曲线/变更聚合（诊断高频调用，省两条 change_log 全扫描）。
+        Map<String, Double> current = metrics.projectCurrent(projectId);
         out.put("metrics", Map.of("window", "1h", "current", current));
         return out;
     }

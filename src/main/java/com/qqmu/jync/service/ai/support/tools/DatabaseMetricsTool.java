@@ -79,7 +79,7 @@ public class DatabaseMetricsTool implements SupportTool {
         } catch (IllegalArgumentException e) {
             return Map.of("error", e.getMessage());
         }
-        DbMetricsView view = metrics.database(databaseId, range);
+        DbMetricsView view = metrics.databaseCurrent(databaseId, range);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", view.ok());
         out.put("message", view.message());

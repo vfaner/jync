@@ -4,12 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
@@ -68,6 +70,38 @@ class MetricsQueryServiceTest {
         assertThat(MetricsRange.parse("7d")).isEqualTo(MetricsRange.LAST_WEEK);
         assertThat(MetricsRange.parse("nonsense")).isEqualTo(MetricsRange.LAST_DAY);
         assertThat(MetricsRange.parse(null)).isEqualTo(MetricsRange.LAST_DAY);
+    }
+
+    /** AI 工具轻量路径：只取最新数字，绝不触发 change_log 聚合扫描（诊断高频调用的真实负载）。 */
+    @Test
+    void projectCurrentReadsLatestValuesWithoutChangeLogScans() {
+        givenTasks(taskSample("2026-11-01T11:59:30Z", 10L, 100L, 2, "RUNNING"));
+
+        Map<String, Double> current = service.projectCurrent(7L);
+
+        assertThat(current.get("rowsTotal")).isEqualTo(100.0);
+        assertThat(current.get("failures")).isEqualTo(2.0);
+        verifyNoInteractions(changeLogs);
+    }
+
+    /** 数据库轻量路径：返回最新值与可用率，series 为空（不分桶）。 */
+    @Test
+    void databaseCurrentSkipsSeriesButKeepsCurrentAndUptime() {
+        DbMetricSample ok = new DbMetricSample();
+        ok.setSampledAt(Instant.parse("2026-11-01T11:59:00Z"));
+        ok.setOk(true);
+        ok.setSessions(7);
+        ok.setLatencyMs(12L);
+        when(dbSamples.findByConnectionIdAndSampledAtAfterOrderBySampledAtAsc(eq(3L), any()))
+                .thenReturn(List.of(ok));
+
+        DbMetricsView view = service.databaseCurrent(3L, MetricsRange.LAST_HOUR);
+
+        assertThat(view.series()).isEmpty();
+        assertThat(view.current().get("sessions")).isEqualTo(7.0);
+        assertThat(view.current().get("latency")).isEqualTo(12.0);
+        assertThat(view.uptimePercent()).isEqualTo(100.0);
+        assertThat(view.ok()).isTrue();
     }
 
     @Test

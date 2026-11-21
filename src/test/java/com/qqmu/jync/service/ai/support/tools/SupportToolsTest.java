@@ -34,7 +34,6 @@ import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.metrics.DbMetricsView;
 import com.qqmu.jync.service.metrics.MetricsQueryService;
 import com.qqmu.jync.service.metrics.MetricsRange;
-import com.qqmu.jync.service.metrics.ProjectMetricsView;
 
 import tools.jackson.databind.ObjectMapper;
 
@@ -181,7 +180,7 @@ class SupportToolsTest {
         DatabaseConfigService configs = mock(DatabaseConfigService.class);
         when(configs.findById(1L)).thenReturn(Optional.of(
                 db(1L, "prod", ConnectionRole.SOURCE, DatabaseType.MYSQL)));
-        when(metrics.database(1L, MetricsRange.LAST_HOUR))
+        when(metrics.databaseCurrent(1L, MetricsRange.LAST_HOUR))
                 .thenReturn(new DbMetricsView(true, null, Instant.parse("2026-11-19T00:00:00Z"),
                         99.5, List.of(), Map.of("sessions", 12.0)));
 
@@ -230,11 +229,8 @@ class SupportToolsTest {
         when(progressRows.findByProjectId(7L)).thenReturn(List.of(progressRow("orders")));
         when(changes.findFirstByProjectIdAndSuccessFalseOrderByOccurredAtDesc(7L))
                 .thenReturn(Optional.empty());
-        when(metrics.project(7L, MetricsRange.LAST_HOUR))
-                .thenReturn(new ProjectMetricsView(
-                        Instant.parse("2026-11-19T00:00:00Z"), "OK", List.of(),
-                        Map.of("rowsTotal", 100.0, "lag", 12.0, "failures", 0.0),
-                        List.of(), List.of()));
+        when(metrics.projectCurrent(7L))
+                .thenReturn(Map.of("rowsTotal", 100.0, "lag", 12.0, "failures", 0.0));
 
         var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
         var args = mapper.createObjectNode();
@@ -259,9 +255,7 @@ class SupportToolsTest {
         when(progressRows.findByProjectId(7L)).thenReturn(List.of());
         when(changes.findFirstByProjectIdAndSuccessFalseOrderByOccurredAtDesc(7L))
                 .thenReturn(Optional.empty());
-        when(metrics.project(7L, MetricsRange.LAST_HOUR))
-                .thenReturn(new ProjectMetricsView(null, "OK", List.of(),
-                        Map.of(), List.of(), List.of()));
+        when(metrics.projectCurrent(7L)).thenReturn(Map.of());
 
         var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
         var args = mapper.createObjectNode();

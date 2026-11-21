@@ -111,6 +111,26 @@ public class MetricsQueryService {
     }
 
     /**
+     * AI 工具只读最新几个数字与可用率，不需要曲线：跳过 6 条曲线的分桶。诊断类提问高频
+     * 调用，完整视图的开销白费。返回的视图 series 为空。
+     */
+    public DbMetricsView databaseCurrent(long connectionId, MetricsRange range) {
+        Instant to = clock.instant();
+        Instant from = to.minus(range.span());
+        List<DbMetricSample> samples = dbSamples
+                .findByConnectionIdAndSampledAtAfterOrderBySampledAtAsc(connectionId, from);
+        Map<String, Double> current = new LinkedHashMap<>();
+        current.put("latency", newest(samples, s -> s.isOk() ? number(s.getLatencyMs()) : null));
+        current.put("sessions", newest(samples, s -> number(s.getSessions())));
+        current.put("qps", newest(samples, DbMetricSample::getQps));
+        current.put("cacheHit", newest(samples, DbMetricSample::getCacheHitPercent));
+        current.put("locks", newest(samples, s -> number(s.getLockWaits())));
+        DbMetricSample last = samples.isEmpty() ? null : samples.get(samples.size() - 1);
+        return new DbMetricsView(last == null || last.isOk(), last == null ? null : last.getMessage(),
+                last == null ? null : last.getSampledAt(), uptime(samples), List.of(), current);
+    }
+
+    /**
      * One task's own curves. The shared process resources are deliberately absent: they belong
      * to the dashboard card (and to its admin-only feed), not to any one project.
      */
@@ -143,6 +163,21 @@ public class MetricsQueryService {
         return new ProjectMetricsView(last == null ? null : last.getSampledAt(),
                 last == null ? null : last.getStatus(), series, current,
                 changeShare(changes), hotObjects(projectId, from, to));
+    }
+
+    /**
+     * AI 工具只读最新的行数/延迟/失败三个数字：跳过 change_log 的两条聚合全扫描与曲线分桶。
+     * diagnose_project 每次症状提问都走这里，繁忙项目每小时上万条 change_log 时这是真实负载。
+     */
+    public Map<String, Double> projectCurrent(long projectId) {
+        Instant from = clock.instant().minus(MetricsRange.LAST_HOUR.span());
+        List<TaskMetricSample> samples = taskSamples
+                .findByProjectIdAndSampledAtAfterOrderBySampledAtAsc(projectId, from);
+        Map<String, Double> current = new LinkedHashMap<>();
+        current.put("rowsTotal", newest(samples, s -> number(s.getRowsTotal())));
+        current.put("lag", newest(samples, s -> number(s.getLagMs())));
+        current.put("failures", newest(samples, s -> number(s.getConsecutiveFailures())));
+        return current;
     }
 
     /** The shared process curves, for the one dashboard card that shows them. */
