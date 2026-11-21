@@ -3,7 +3,8 @@
 # Runs the real-database verification matrix locally. Not wired into CI and not
 # part of the default `mvn test` run; *IT classes are opt-in by name.
 #
-# Default suite: the two container ITs added in v1.12.0 (MariaDB, ClickHouse).
+# Default suite: the container ITs added in v1.12.0 (MariaDB, ClickHouse) plus the
+# 2.4.x CDC container ITs (SQL Server capture stream and chunked window scan).
 # JYNC_FULL_MATRIX=1 additionally runs the older Oracle / MySQL / openGauss /
 # SQL Server suites.
 #
@@ -69,6 +70,11 @@ fi
 # --- Default container suite (must work with Docker alone) ------------------
 run_test MariaDbPollingIT
 run_test ClickHouseSourceIT
+# SQL Server 2022 with SQL Server Agent: capture stream -> fold, and the bounded
+# (transaction-aligned) window scan. The second one is also what proved the
+# discovery SQL had been asking for columns cdc.change_tables does not have.
+run_test SqlServerCdcFoldContainerIT
+run_test SqlServerCdcChunkingContainerIT
 
 # --- Older container suites (heavier: Oracle images) -----------------------
 if [[ "${JYNC_FULL_MATRIX:-0}" == "1" ]]; then
@@ -90,6 +96,14 @@ fi
 if require_env YashanDbPollingIT JYNC_YASHAN_IT_URL JYNC_YASHAN_IT_USER JYNC_YASHAN_IT_PASSWORD \
         JYNC_YASHAN_IT_SCHEMA JYNC_YASHAN_IT_TARGET_SCHEMA; then
     run_test YashanDbPollingIT
+fi
+
+if require_env YStreamSavepointContainerIT JYNC_YASHAN_IT_URL JYNC_YASHAN_IT_USER JYNC_YASHAN_IT_PASSWORD; then
+    run_test YStreamSavepointContainerIT
+fi
+
+if require_env MongoToKingbaseByteBudgetIT JYNC_KINGBASE_IT_URL JYNC_KINGBASE_IT_USER JYNC_KINGBASE_IT_PASSWORD; then
+    run_test MongoToKingbaseByteBudgetIT
 fi
 
 if require_env DorisSourceIT JYNC_DORIS_IT_URL JYNC_DORIS_IT_USER JYNC_DORIS_IT_PASSWORD; then
