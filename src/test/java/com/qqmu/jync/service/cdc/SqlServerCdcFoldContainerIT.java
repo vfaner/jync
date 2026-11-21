@@ -74,8 +74,7 @@ class SqlServerCdcFoldContainerIT {
         try (Connection conn = connect(DATABASE); Statement st = conn.createStatement()) {
             st.execute("EXEC sys.sp_cdc_enable_db");
             st.execute("CREATE TABLE dbo.orders (id INT PRIMARY KEY, note NVARCHAR(50))");
-            st.execute("EXEC sys.sp_cdc_enable_table @source_schema='dbo',"
-                    + " @source_name='orders', @role_name=NULL, @supports_net_changes=1");
+            enableCdcTableWithAgentRetry(st, "orders");
             // 建实例时 Agent 可能还没来得及收到通知;显式启动一次,"已在运行"的报错忽略。
             try {
                 st.execute("EXEC msdb.dbo.sp_start_job N'cdc." + DATABASE + "_capture'");
@@ -280,5 +279,29 @@ class SqlServerCdcFoldContainerIT {
         String url = "jdbc:sqlserver://" + MSSQL.getHost() + ":" + MSSQL.getMappedPort(1433)
                 + ";databaseName=" + database + ";encrypt=false;trustServerCertificate=true";
         return DriverManager.getConnection(url, "sa", PASSWORD);
+    }
+
+    /**
+     * SQL Server Agent starts slowly under amd64 emulation; sp_cdc_enable_table fails with
+     * 14258/22836 ("SQLServerAgent is starting") until it accepts job steps. Retry only that
+     * condition, for up to 30 seconds.
+     */
+    private static void enableCdcTableWithAgentRetry(Statement st, String table)
+            throws SQLException, InterruptedException {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                st.execute("EXEC sys.sp_cdc_enable_table @source_schema='dbo',"
+                        + " @source_name='" + table + "', @role_name=NULL,"
+                        + " @supports_net_changes=1");
+                return;
+            } catch (SQLException e) {
+                String message = String.valueOf(e.getMessage());
+                boolean agentStarting = message.contains("14258") || message.contains("22836");
+                if (!agentStarting || attempt >= 30) {
+                    throw e;
+                }
+                Thread.sleep(1_000L);
+            }
+        }
     }
 }

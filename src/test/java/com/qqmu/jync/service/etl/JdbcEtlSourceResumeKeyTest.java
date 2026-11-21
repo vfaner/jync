@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.etl;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -234,5 +235,18 @@ class JdbcEtlSourceResumeKeyTest {
 
         verify(ps).setTimestamp(eq(1), eq(Timestamp.from(wall.toInstant(ZoneOffset.UTC))),
                 any(java.util.Calendar.class));
+    }
+
+    @Test
+    void aClickHouseResumeKeyIsBoundAsATimestampObject() throws Exception {
+        // clickhouse-jdbc 0.11 applies the JVM zone to LocalDateTime; the continuation
+        // boundary moved by the offset and the window matched the wrong rows.
+        PreparedStatement ps = mock(PreparedStatement.class);
+
+        JdbcEtlSource.bindResumeKey(ps, new EtlCheckpointValue(
+                Types.TIMESTAMP, "2026-01-01 00:41:39"), DatabaseType.CLICKHOUSE);
+
+        verify(ps).setObject(1, Timestamp.valueOf("2026-01-01 00:41:39"));
+        verify(ps, never()).setTimestamp(anyInt(), any(), any());
     }
 }

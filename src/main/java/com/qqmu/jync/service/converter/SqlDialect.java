@@ -55,6 +55,20 @@ public interface SqlDialect {
     }
 
     /**
+     * Whether a zone-less wall clock must travel as {@code setObject(java.sql.Timestamp)}
+     * instead of the {@code java.time} value.
+     *
+     * <p>ClickHouse JDBC 0.11 renders {@code LocalDateTime}/{@code setTimestamp} through the
+     * JVM default zone, so a cursor bound in Asia/Shanghai lands eight hours earlier on the
+     * server and the window matches nothing; the same fields sent as a Timestamp object are
+     * taken literally. Every other driver in the matrix reads {@code java.time} values as the
+     * wall clock itself.
+     */
+    default boolean bindsWallClockAsTimestampObject() {
+        return false;
+    }
+
+    /**
      * Whether a stream obtained from a result set stays readable after another column's
      * stream getter has been called on the same row. PostgreSQL, Oracle and MySQL keep the
      * streams independent; the SQL Server driver closes the previous stream as soon as the

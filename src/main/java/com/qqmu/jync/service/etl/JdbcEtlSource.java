@@ -487,6 +487,10 @@ final class JdbcEtlSource implements EtlSource {
                     java.time.LocalDateTime wall = wallClock(value);
                     if (wall == null) {
                         statement.setTimestamp(1, Timestamp.valueOf(value));
+                    } else if (JdbcRowMapper.bindsWallClockThroughTimestampObject(sourceType)) {
+                        // ClickHouse JDBC shifts LocalDateTime by the JVM zone; the Timestamp
+                        // object keeps the continuation boundary where the source put it.
+                        statement.setObject(1, Timestamp.valueOf(wall));
                     } else {
                         // The stored text is the wall clock the source rendered; binding it
                         // as a plain Timestamp (or via setObject on Oracle's and PgJDBC's

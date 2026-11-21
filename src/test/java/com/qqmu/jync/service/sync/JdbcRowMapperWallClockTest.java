@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.converter.OracleDialect;
+import com.qqmu.jync.service.converter.PollingSourceDialect;
 import com.qqmu.jync.service.converter.PostgresDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
@@ -238,6 +239,21 @@ class JdbcRowMapperWallClockTest {
         JdbcRowMapper.bindParameter(ps, 1, wall, new MySqlDialect());
 
         verify(ps).setObject(1, wall);
+        verify(ps, never()).setTimestamp(anyInt(), any(), any());
+    }
+
+    @Test
+    void aClickHouseCursorParameterIsBoundAsATimestampObject() throws Exception {
+        // clickhouse-jdbc 0.11 shifts LocalDateTime/setTimestamp by the JVM zone, so a
+        // 00:41 UTC watermark in Asia/Shanghai matched nothing. setObject(Timestamp) keeps
+        // the literal fields.
+        LocalDateTime wall = LocalDateTime.of(2026, 1, 1, 0, 41, 39);
+        PreparedStatement ps = mock(PreparedStatement.class);
+
+        JdbcRowMapper.bindParameter(ps, 1, wall,
+                new PollingSourceDialect(DatabaseType.CLICKHOUSE, '`', true));
+
+        verify(ps).setObject(1, Timestamp.valueOf(wall));
         verify(ps, never()).setTimestamp(anyInt(), any(), any());
     }
 

@@ -40,6 +40,13 @@ public class PollingSourceDialect extends GenericSqlDialect {
     }
 
     @Override
+    public boolean bindsWallClockAsTimestampObject() {
+        // ClickHouse JDBC shifts LocalDateTime into the server's view by the JVM zone;
+        // a Timestamp object goes through as the literal fields.
+        return type == DatabaseType.CLICKHOUSE;
+    }
+
+    @Override
     public boolean supportsOffsetPaging() {
         return offsetPaging;
     }

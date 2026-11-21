@@ -677,9 +677,17 @@ public final class JdbcRowMapper {
     public static void bindParameter(PreparedStatement ps, int idx, Object value,
                                      com.qqmu.jync.service.converter.SqlDialect dialect)
             throws SQLException {
-        if (value instanceof LocalDateTime && usesUtcCalendar(dialect)) {
-            bindWallClock(ps, idx, (LocalDateTime) value, true);
-            return;
+        if (value instanceof LocalDateTime wall) {
+            if (dialect != null && dialect.bindsWallClockAsTimestampObject()) {
+                // ClickHouse JDBC applies the JVM zone to LocalDateTime; the Timestamp object
+                // is sent literally and keeps the cursor boundary where the source put it.
+                ps.setObject(idx, Timestamp.valueOf(wall));
+                return;
+            }
+            if (usesUtcCalendar(dialect)) {
+                bindWallClock(ps, idx, wall, true);
+                return;
+            }
         }
         ps.setObject(idx, value);
     }
@@ -696,6 +704,17 @@ public final class JdbcRowMapper {
      * {@link com.qqmu.jync.model.DatabaseType} at hand — the ETL resume key is bound
      * against the source connection before a dialect is resolved.
      */
+    /**
+     * The ETL resume-key counterpart of
+     * {@link com.qqmu.jync.service.converter.SqlDialect#bindsWallClockAsTimestampObject()}:
+     * ClickHouse JDBC moves {@code LocalDateTime} by the JVM zone, so the continuation bound
+     * must travel as a Timestamp object.
+     */
+    public static boolean bindsWallClockThroughTimestampObject(
+            com.qqmu.jync.model.DatabaseType type) {
+        return type == com.qqmu.jync.model.DatabaseType.CLICKHOUSE;
+    }
+
     public static boolean bindsZoneLessThroughUtcCalendar(
             com.qqmu.jync.model.DatabaseType type) {
         if (type == null) {
