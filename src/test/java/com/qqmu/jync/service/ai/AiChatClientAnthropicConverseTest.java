@@ -107,7 +107,10 @@ class AiChatClientAnthropicConverseTest {
         });
 
         JsonNode body = mapper.readTree(requestBodies.get(0));
-        assertThat(body.path("system").asString()).isEqualTo("SYS");
+        // The system prompt is a cacheable text block, not a bare string.
+        assertThat(body.path("system").get(0).path("text").asString()).isEqualTo("SYS");
+        assertThat(body.path("system").get(0).path("cache_control").path("type").asString())
+                .isEqualTo("ephemeral");
         assertThat(body.path("tools").get(0).path("input_schema").path("type").asString())
                 .isEqualTo("object");
         assertThat(body.path("messages").get(0).path("role").asString()).isEqualTo("user");

@@ -5,9 +5,11 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletResponse;
@@ -59,11 +61,18 @@ public class SupportApiController {
     private final SupportActionService actions;
     private final SupportRunStore runs;
 
-    private final ExecutorService executor = Executors.newFixedThreadPool(2, r -> {
-        Thread t = new Thread(r, "ai-support-stream");
-        t.setDaemon(true);
-        return t;
-    });
+    /**
+     * Two workers with a short queue. An unbounded queue accepted every request, so during a
+     * burst the third user waited behind answers their own page had already given up on
+     * (180 s emitter) — the work still ran, held the provider's rate limit and the user's
+     * single-flight lock, and delivered to nobody. Overflow is reported instead.
+     */
+    private final ExecutorService executor = new ThreadPoolExecutor(2, 2, 0L,
+            TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(4), r -> {
+                Thread t = new Thread(r, "ai-support-stream");
+                t.setDaemon(true);
+                return t;
+            }, new ThreadPoolExecutor.AbortPolicy());
 
     public SupportApiController(SupportAssistantService assistant, AiProviderService providers,
                                 SupportActionService actions, SupportRunStore runs) {
@@ -115,7 +124,7 @@ public class SupportApiController {
             });
         } catch (RejectedExecutionException e) {
             assistant.finish(username);
-            sink.error("error.unexpected");
+            sink.error("error.support.busy");
             sink.doneAndComplete();
         }
         return emitter;

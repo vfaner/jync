@@ -504,6 +504,9 @@ public class AiChatClient {
 
             StringBuilder text = new StringBuilder();
             String[] served = {""};
+            // The provider says whether the reply stopped at the token budget; without this
+            // flag a cut-off answer reads exactly like a complete one.
+            boolean[] truncated = {false};
             // Keyed by the wire's index so interleaved or repeated fragments still join once.
             Map<Integer, PartialCall> partials = new TreeMap<>();
             StringBuilder rawBody = null;
@@ -545,6 +548,9 @@ public class AiChatClient {
                         served[0] = servedModel(root);
                     }
                     JsonNode choice = root.path("choices").path(0);
+                    if ("length".equals(choice.path("finish_reason").asString(""))) {
+                        truncated[0] = true;
+                    }
                     String piece = choice.path("delta").path("content").asString("");
                     if (!piece.isEmpty()) {
                         text.append(piece);
@@ -579,7 +585,8 @@ public class AiChatClient {
                 // 整段完成体同样带工具调用；丢了它们，对话会带着「我先查」结束，下一轮
                 // 也没有 tool 结果可回填。
                 return ToolChatResult.success(whole, bufferedToolCalls(protocol, root),
-                        servedModel(root), System.currentTimeMillis() - start);
+                        servedModel(root), System.currentTimeMillis() - start,
+                        truncatedInBuffered(protocol, root));
             }
             List<ToolCall> calls = new ArrayList<>();
             partials.forEach((index, call) -> {
@@ -594,7 +601,7 @@ public class AiChatClient {
                         call.name, call.args.toString()));
             });
             return ToolChatResult.success(text.toString(), calls, served[0],
-                    System.currentTimeMillis() - start);
+                    System.currentTimeMillis() - start, truncated[0]);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return ToolChatResult.failure("Interrupted", System.currentTimeMillis() - start, false);
@@ -648,7 +655,7 @@ public class AiChatClient {
         // Anthropic takes the system prompt as a top-level field and rejects a system role in
         // the message list; OpenAI-compatible endpoints expect it as the first message.
         if (hasSystem && anthropic) {
-            body.put("system", system);
+            putAnthropicSystem(body, system);
         }
         ArrayNode messages = body.putArray("messages");
         if (hasSystem && !anthropic) {
@@ -707,7 +714,7 @@ public class AiChatClient {
         boolean anthropic = protocol == AiProtocol.ANTHROPIC;
         boolean hasSystem = system != null && !system.isBlank();
         if (hasSystem && anthropic) {
-            body.put("system", system);
+            putAnthropicSystem(body, system);
         }
         ArrayNode messages = body.putArray("messages");
         if (hasSystem && !anthropic) {
@@ -927,6 +934,7 @@ public class AiChatClient {
             StringBuilder text = new StringBuilder();
             String[] served = {""};
             Map<Integer, PartialCall> partials = new TreeMap<>();
+            boolean[] truncated = {false};
             try (java.io.BufferedReader reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(body, StandardCharsets.UTF_8))) {
                 String line;
@@ -973,6 +981,12 @@ public class AiChatClient {
                             call.args.append(
                                     root.path("delta").path("partial_json").asString(""));
                         }
+                    } else if ("message_delta".equals(type)) {
+                        // Anthropic reports the stop reason on the delta message.
+                        if ("max_tokens".equals(root.path("delta").path("stop_reason")
+                                .asString(""))) {
+                            truncated[0] = true;
+                        }
                     } else if ("message_stop".equals(type)) {
                         break;
                     }
@@ -992,7 +1006,7 @@ public class AiChatClient {
                         call.name, call.args.toString()));
             });
             return ToolChatResult.success(text.toString(), calls, served[0],
-                    System.currentTimeMillis() - start);
+                    System.currentTimeMillis() - start, truncated[0]);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return ToolChatResult.failure("Interrupted", System.currentTimeMillis() - start, false);
@@ -1085,6 +1099,7 @@ public class AiChatClient {
 
             StringBuilder text = new StringBuilder();
             String[] served = {""};
+            boolean[] truncated = {false};
             List<ToolCall> calls = new ArrayList<>();
             try (java.io.BufferedReader reader = new java.io.BufferedReader(
                     new java.io.InputStreamReader(body, StandardCharsets.UTF_8))) {
@@ -1118,6 +1133,9 @@ public class AiChatClient {
                                 : fn.path("arguments").asString("");
                         calls.add(new ToolCall("call_" + calls.size(), name, argsJson));
                     }
+                    if ("length".equals(chunk.path("done_reason").asString(""))) {
+                        truncated[0] = true;
+                    }
                     if (chunk.path("done").asBoolean(false)) {
                         break;
                     }
@@ -1126,7 +1144,7 @@ public class AiChatClient {
                 watchdog.cancel(false);
             }
             return ToolChatResult.success(text.toString(), calls, served[0],
-                    System.currentTimeMillis() - start);
+                    System.currentTimeMillis() - start, truncated[0]);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return ToolChatResult.failure("Interrupted", System.currentTimeMillis() - start, false);
@@ -1265,6 +1283,19 @@ public class AiChatClient {
         return calls;
     }
 
+    /**
+     * Anthropic prompt caching: the system prompt is the same on every turn of a conversation,
+     * and marking it as an ephemeral cache block turns each later request's prefix into a
+     * cache read instead of a full re-billing (and lowers time-to-first-token).
+     */
+    private static void putAnthropicSystem(ObjectNode body, String system) {
+        ArrayNode blocks = body.putArray("system");
+        ObjectNode block = blocks.addObject();
+        block.put("type", "text");
+        block.put("text", system);
+        block.putObject("cache_control").put("type", "ephemeral");
+    }
+
     /** Endpoints that omit the call id get the same positional fallback the stream path uses. */
     private static String idOrFallback(String id, int index) {
         return id == null || id.isBlank() ? "call_" + index : id;
@@ -1367,16 +1398,47 @@ public class AiChatClient {
     /** Outcome of one streaming tool round: text seen so far plus the calls it asked for. */
     public record ToolChatResult(boolean success, String message, String text,
                                  List<ToolCall> toolCalls, String servedModel,
-                                 long elapsedMs, boolean toolUnsupported) {
+                                 long elapsedMs, boolean toolUnsupported, boolean truncated) {
+
+        /** The shape every caller had before the truncation flag existed. */
+        public ToolChatResult(boolean success, String message, String text,
+                              List<ToolCall> toolCalls, String servedModel,
+                              long elapsedMs, boolean toolUnsupported) {
+            this(success, message, text, toolCalls, servedModel, elapsedMs, toolUnsupported,
+                    false);
+        }
 
         static ToolChatResult success(String text, List<ToolCall> calls, String servedModel,
                                       long ms) {
-            return new ToolChatResult(true, "OK", text, calls, servedModel, ms, false);
+            return success(text, calls, servedModel, ms, false);
+        }
+
+        static ToolChatResult success(String text, List<ToolCall> calls, String servedModel,
+                                      long ms, boolean truncated) {
+            return new ToolChatResult(true, "OK", text, calls, servedModel, ms, false, truncated);
         }
 
         static ToolChatResult failure(String message, long ms, boolean toolUnsupported) {
-            return new ToolChatResult(false, message, "", List.of(), "", ms, toolUnsupported);
+            return new ToolChatResult(false, message, "", List.of(), "", ms, toolUnsupported,
+                    false);
         }
+    }
+
+    /**
+     * Whether a fully buffered (non-streaming) reply stopped at the token budget. A gateway
+     * that ignores {@code stream=true} answers in one body, and that body carries the stop
+     * reason the streaming chunks carry.
+     */
+    private static boolean truncatedInBuffered(AiProtocol protocol, JsonNode root) {
+        if (root == null) {
+            return false;
+        }
+        return switch (protocol) {
+            case ANTHROPIC -> "max_tokens".equals(root.path("stop_reason").asString(""));
+            case OLLAMA_NATIVE -> "length".equals(root.path("done_reason").asString(""));
+            case OPENAI, OLLAMA -> "length".equals(
+                    root.path("choices").path(0).path("finish_reason").asString(""));
+        };
     }
 
     /** Outcome of one chat call. */

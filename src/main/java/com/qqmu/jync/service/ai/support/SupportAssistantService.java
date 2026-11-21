@@ -348,6 +348,11 @@ public class SupportAssistantService {
                     }
                     // 这是给用户看的回答：整轮攒下的正文在这里一次下发（长正文已提前下发）。
                     answer.release();
+                    if (result.truncated()) {
+                        // The provider cut the reply at the token budget; a silent cut reads
+                        // like a complete answer.
+                        sink.delta(truncationSuffix(language));
+                    }
                     ok = true;
                     break;
                 }
@@ -422,6 +427,9 @@ public class SupportAssistantService {
                             return;
                         }
                         sink.delta(summary.text());
+                    }
+                    if (summary.truncated()) {
+                        sink.delta(truncationSuffix(language));
                     }
                     ok = true;
                     break;
@@ -620,6 +628,13 @@ public class SupportAssistantService {
                 ? "(The log was long, so its beginning and end were kept; paste the failing "
                         + "lines separately if the middle is missing.)\n\n"
                 : "（日志较长，已保留开头与结尾；如缺少关键行，请单独粘贴报错行。）\n\n";
+    }
+
+    /** Appended when the provider stopped the reply at the token budget. */
+    private static String truncationSuffix(String language) {
+        return language != null && language.startsWith("en")
+                ? "\n\n(Answer truncated at the length limit; ask me to continue in parts.)"
+                : "\n\n（回答达到长度上限，已截断；需要完整内容请让我分段继续。）";
     }
 
     /** A user message after trimming, plus whether an over-long log lost its middle. */
