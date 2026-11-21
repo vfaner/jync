@@ -132,10 +132,10 @@ class YStreamTransactionAssemblerTest {
     }
 
     /**
-     * Known limitation, pinned so it cannot change silently: the stream's SAVEPOINT and
-     * ROLLBACK_TO_SAVEPOINT LCRs carry no savepoint name, so a rollback can only mean "the
-     * innermost savepoint". Nested savepoints therefore restore the inner snapshot even
-     * when the source rolled back to an outer one — the rows of the outer window survive.
+     * The no-arg rollback (a defensive/legacy path with no SSN) restores the innermost
+     * savepoint. Real SAVEPOINT / ROLLBACK_TO_SAVEPOINT LCRs carry an SSN and roll back to the
+     * matching savepoint — see {@link #rollingBackToAnOlderSavepointBySsnDiscardsYoungerSavepointsAndTheirRows}
+     * — so nested savepoints are no longer limited to the innermost one.
      */
     @Test
     void aRollbackWithoutANameAlwaysRestoresTheInnermostSavepoint() {
