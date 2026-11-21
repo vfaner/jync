@@ -678,7 +678,7 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 - It can run the change-log prerequisite self-check for one project (archivelog, binlog format and
   retention, supplemental logging, replication or mining privileges, server-id collisions) and list
   every failing item. The check opens the source database and runs at most twice per conversation;
-  administrators and operators can run it on any project.
+  it runs only on projects the caller may edit, the same right the page's self-check button requires.
 - It lists the alert conditions active right now (sync failure, stuck polling, CDC stopped, drift,
   unhealthy connection, PG slot backlog, skipped DDL) and ETL task state: enabled, last run time,
   success and result line.

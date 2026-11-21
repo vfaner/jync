@@ -148,6 +148,7 @@ class OpsSupportToolsTest {
         Project project = project(7L, "orders");
         when(projects.findById(7L)).thenReturn(Optional.of(project));
         when(ctx.actor().canWrite()).thenReturn(true);
+        when(ctx.actor().canEdit("admin")).thenReturn(true);
         when(operations.probeProject(7L)).thenReturn(CdcProbeResult.of(List.of(
                 CdcProbeResult.Check.of("ARCHIVELOG", false, "LOG_MODE=NOARCHIVELOG"),
                 CdcProbeResult.Check.of("SUPPLEMENTAL_DB", true, "YES"))));
@@ -168,6 +169,7 @@ class OpsSupportToolsTest {
         ProjectService projects = mock(ProjectService.class);
         when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "orders")));
         when(ctx.actor().canWrite()).thenReturn(true);
+        when(ctx.actor().canEdit("admin")).thenReturn(true);
         when(operations.probeProject(7L))
                 .thenThrow(new IllegalArgumentException("cdc.probe.unsupported"));
 
@@ -180,26 +182,28 @@ class OpsSupportToolsTest {
     }
 
     /**
-     * Operators answer "why is this task not syncing" for every task they can see, not only
-     * the ones they own, so the self-check is open to both writer roles on any project.
+     * Probing dials the production source, so it follows the HTTP sibling's rule: only
+     * projects the caller may edit. A cross-owner probe would leak another user's source
+     * capabilities (privilege names, server settings) and pay for their source load.
      */
     @Test
-    void cdcProbeLetsAnOperatorCheckAProjectTheyDoNotOwn() throws Exception {
+    void cdcProbeRefusesAProjectTheOperatorCannotEdit() throws Exception {
         CdcOperationsService operations = mock(CdcOperationsService.class);
         ProjectService projects = mock(ProjectService.class);
         Project foreign = project(7L, "orders");
         foreign.setOwnerUsername("someone-else");
         when(projects.findById(7L)).thenReturn(Optional.of(foreign));
         when(ctx.actor().canWrite()).thenReturn(true);
-        when(operations.probeProject(7L)).thenReturn(CdcProbeResult.of(List.of(
-                CdcProbeResult.Check.of("ARCHIVELOG", true, "ARCHIVELOG"))));
+        when(ctx.actor().canEdit("someone-else")).thenReturn(false);
 
         var tool = new CdcProbeTool(operations, projects);
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
 
-        assertThat(run(tool, args)).contains("\"passed\":true");
-        verify(operations).probeProject(7L);
+        assertThat(tool.execute(args, ctx))
+                .isEqualTo(java.util.Map.of("error",
+                        "error.ownership.reference:orders"));
+        verifyNoInteractions(operations);
     }
 
     @Test
@@ -224,6 +228,7 @@ class OpsSupportToolsTest {
         ProjectService projects = mock(ProjectService.class);
         when(projects.findById(7L)).thenReturn(Optional.of(project(7L, "orders")));
         when(ctx.actor().canWrite()).thenReturn(true);
+        when(ctx.actor().canEdit("admin")).thenReturn(true);
         when(operations.probeProject(7L)).thenReturn(CdcProbeResult.of(List.of()));
 
         var tool = new CdcProbeTool(operations, projects);

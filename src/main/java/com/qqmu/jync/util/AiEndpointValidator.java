@@ -79,8 +79,11 @@ public final class AiEndpointValidator {
             }
             return addresses[0];
         } catch (UnknownHostException e) {
-            // Unresolvable host: the HTTP call will handle DNS failure
-            return null;
+            // An unresolvable host is refused, not passed through: a name that does not
+            // resolve for the validator but resolves for the HTTP client's connect-time
+            // lookup is exactly the DNS-rebinding shape (NXDOMAIN here, the metadata IP
+            // there). The probe would fail to connect anyway, so nothing usable is lost.
+            throw new IllegalArgumentException("error.ai.baseUrl.unresolved");
         }
     }
 

@@ -1053,6 +1053,25 @@ class CdcDdlTaskServiceTest {
     }
 
     @Test
+    void ddlEditGuardKeepsQuoteAndCaseDifferencesInsideLiterals() {
+        // 旧实现把引号/方括号字符的剥除与整体大写放在字面量之外也一样执行:
+        // DEFAULT 'a"b' 与 'ab'、'x' 与 'X' 都会被判成同一结构,结构护栏形同虚设。
+        assertThat(CdcDdlTaskService.normalizeDdl(
+                "ALTER TABLE t ADD COLUMN c VARCHAR(10) DEFAULT 'a\"b'"))
+                .isNotEqualTo(CdcDdlTaskService.normalizeDdl(
+                        "ALTER TABLE t ADD COLUMN c VARCHAR(10) DEFAULT 'ab'"));
+        assertThat(CdcDdlTaskService.normalizeDdl(
+                "ALTER TABLE t ADD COLUMN c VARCHAR(10) DEFAULT 'x'"))
+                .isNotEqualTo(CdcDdlTaskService.normalizeDdl(
+                        "ALTER TABLE t ADD COLUMN c VARCHAR(10) DEFAULT 'X'"));
+        // 字面量里出现的 COMMENT 字样属于数据,不得被当作注释子句丢掉。
+        assertThat(CdcDdlTaskService.normalizeDdl(
+                "ALTER TABLE t ADD COLUMN c VARCHAR(10) DEFAULT 'COMMENT x'"))
+                .isNotEqualTo(CdcDdlTaskService.normalizeDdl(
+                        "ALTER TABLE t ADD COLUMN c VARCHAR(10) DEFAULT ''"));
+    }
+
+    @Test
     void ddlEditGuardStillIgnoresSchemaQualificationAndQuoting() {
         // 不回归:容忍 schema 限定、标识符引号与大小写,否则映射项目的重试会被永久卡住。
         assertThat(CdcDdlTaskService.normalizeDdl(

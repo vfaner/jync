@@ -173,7 +173,7 @@ public class AiChatClient {
                 return ChatResult.success(extractText(protocol, root), servedModel(root),
                         endpoint, model, ms);
             }
-            String detail = extractError(response.body());
+            String detail = extractError(response.statusCode(), response.body());
             log.warn("AI request to '{}' failed: HTTP {} {}",
                     provider.getName(), response.statusCode(), detail);
             return ChatResult.failure("HTTP " + response.statusCode()
@@ -247,7 +247,7 @@ public class AiChatClient {
                     client.send(request, HttpResponse.BodyHandlers.ofInputStream());
 
             if (response.statusCode() / 100 != 2) {
-                String detail = extractError(readAll(response.body()));
+                String detail = extractError(response.statusCode(), readAll(response.body()));
                 log.warn("AI stream to '{}' failed: HTTP {} {}",
                         provider.getName(), response.statusCode(), detail);
                 return ChatResult.failure("HTTP " + response.statusCode()
@@ -497,7 +497,7 @@ public class AiChatClient {
             HttpResponse<java.io.InputStream> response = HTTP_CLIENT.send(request,
                     HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() / 100 != 2) {
-                String detail = extractError(readAll(response.body()));
+                String detail = extractError(response.statusCode(), readAll(response.body()));
                 boolean toolsRejected = toolsUnsupported(
                         response.statusCode(), detail, !tools.isEmpty());
                 log.warn("AI tool stream to '{}' failed: HTTP {} {}",
@@ -928,7 +928,7 @@ public class AiChatClient {
             HttpResponse<java.io.InputStream> response = HTTP_CLIENT.send(request,
                     HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() / 100 != 2) {
-                String detail = extractError(readAll(response.body()));
+                String detail = extractError(response.statusCode(), readAll(response.body()));
                 boolean toolsRejected = toolsUnsupported(
                         response.statusCode(), detail, !tools.isEmpty());
                 log.warn("AI tool stream to '{}' failed: HTTP {} {}",
@@ -1096,7 +1096,7 @@ public class AiChatClient {
             HttpResponse<java.io.InputStream> response = HTTP_CLIENT.send(request,
                     HttpResponse.BodyHandlers.ofInputStream());
             if (response.statusCode() / 100 != 2) {
-                String detail = extractError(readAll(response.body()));
+                String detail = extractError(response.statusCode(), readAll(response.body()));
                 boolean toolsRejected = toolsUnsupported(
                         response.statusCode(), detail, !tools.isEmpty());
                 log.warn("AI tool stream to '{}' failed: HTTP {} {}",
@@ -1365,8 +1365,14 @@ public class AiChatClient {
         return mentionsTools && rejected;
     }
 
-    /** Pulls the human-readable part out of an error body, falling back to a truncated body. */
-    private String extractError(String responseBody) {
+    /**
+     * Pulls the human-readable part out of an error body. A non-JSON body (a reverse proxy's
+     * HTML page) is itself the useful signal and is kept truncated; structured JSON without a
+     * recognised error/message field reports only the HTTP status — a cloud metadata endpoint
+     * answers JSON that is not an AI error at all, and echoing it would hand credentials to
+     * the test dialog and the warn log.
+     */
+    private String extractError(int statusCode, String responseBody) {
         if (responseBody == null || responseBody.isBlank()) {
             return "";
         }
@@ -1384,8 +1390,12 @@ public class AiChatClient {
             }
         } catch (JacksonException e) {
             // Not JSON: an HTML error page from a reverse proxy is itself the useful signal.
+            return truncate(responseBody);
         }
-        return truncate(responseBody);
+        // Structured JSON without a recognised error/message field: report the status, never
+        // the body. A cloud metadata endpoint answers 2xx/4xx JSON that is not an AI error at
+        // all — echoing it would hand credentials to the test dialog and the warn log.
+        return "HTTP " + statusCode;
     }
 
     private String truncate(String s) {

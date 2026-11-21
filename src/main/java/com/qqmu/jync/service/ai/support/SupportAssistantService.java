@@ -112,7 +112,7 @@ public class SupportAssistantService {
                - 任务运行状态、进度、最近失败、1 小时吞吐 → project_status
                - 变更日志（CDC）断流、位点、最近错误、跳过 DDL → cdc_status
                - 变更日志前提不明或怀疑源库日志与权限有问题 → cdc_probe 自检（会连源库，
-                 很贵，一次对话最多 2 次；管理员与运维都可查任意任务）
+                 很贵，一次对话最多 2 次；只能查自己有编辑权的任务）
                - ETL 任务失败与最近结果 → etl_status
                - ETL 任务「源有新数据、目标没变」或反复失败 → diagnose_etl_task：一次返回
                  启用状态、Cron 是否有效、是否在运行、最近结果与最近 20 次运行的行数；

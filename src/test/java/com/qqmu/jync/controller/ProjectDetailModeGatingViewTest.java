@@ -1,6 +1,10 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -288,5 +292,33 @@ class ProjectDetailModeGatingViewTest {
         assertThat(start).isPositive();
         assertThat(end).isGreaterThan(at);
         return page.substring(start, end + 1);
+    }
+
+    /**
+     * The detail page's live inspections dial the production source. The equivalent APIs are
+     * writer-only AND ownership-checked; a viewer or a non-owner opening the page must get
+     * the stored state, not the same probe (or pay ~15 s of source queries per tab load).
+     */
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void aViewerDoesNotTriggerLiveSourceReads() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
+
+        mvc.perform(get("/projects/1")).andExpect(status().isOk());
+
+        verify(projectService, never()).listSourceObjects(1L);
+        verify(projectService, never()).findUnindexedCursorTables(any(), any());
+        verify(projectService, never()).findStringConcatenationWarnings(any());
+        verifyNoInteractions(cdcOperationsService);
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void anAdminStillGetsTheLiveSourceListing() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
+
+        mvc.perform(get("/projects/1")).andExpect(status().isOk());
+
+        verify(projectService).listSourceObjects(1L);
     }
 }

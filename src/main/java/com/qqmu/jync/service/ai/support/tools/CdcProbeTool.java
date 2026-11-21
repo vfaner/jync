@@ -9,6 +9,7 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
@@ -75,6 +76,15 @@ public class CdcProbeTool implements SupportTool {
         }
         if (!ctx.actor().canWrite()) {
             return Map.of("error", AccessGuard.DENIED_KEY);
+        }
+        // Same rule as the HTTP sibling (/api/projects/*/cdc-probe): probing dials the
+        // production source, so it is limited to projects the caller may edit rather than
+        // "any project". The expensive siblings (row count, metrics) share this rule.
+        try {
+            Ownership.requireReferenceable(project.getOwnerUsername(), project.getName(),
+                    ctx.actor());
+        } catch (IllegalArgumentException e) {
+            return Map.of("error", e.getMessage());
         }
         if (ctx.increment("cdc_probe") > MAX_PROBES) {
             return Map.of("error", "error.support.tooManyQuestions");

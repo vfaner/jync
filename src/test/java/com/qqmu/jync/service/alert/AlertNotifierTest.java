@@ -103,7 +103,7 @@ class AlertNotifierTest {
         });
         server.start();
         try {
-            AlertNotifier notifier = new AlertNotifier();
+            AlertNotifier notifier = new AlertNotifier(true);
             String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/hook";
 
             boolean sent = notifier.sendNow(url, AlertWebhookFormat.WE_COM, "告警文本");
@@ -116,9 +116,22 @@ class AlertNotifierTest {
         }
     }
 
+    /**
+     * The stored URL was validated when it was saved, but alerts fire hours later: the
+     * send-time re-check must refuse a target that now resolves to loopback/private space
+     * (DNS change or rebinding) instead of posting task names there.
+     */
+    @Test
+    void aPrivateTargetIsRefusedAtSendTimeWhenPrivateWebhooksAreOff() {
+        AlertNotifier notifier = new AlertNotifier(false);
+
+        assertThat(notifier.sendNow("http://127.0.0.1:9/hook",
+                AlertWebhookFormat.GENERIC, "x")).isFalse();
+    }
+
     @Test
     void anUnreachableEndpointCostsNoException() {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         boolean sent = notifier.sendNow("http://127.0.0.1:1/hook",
                 AlertWebhookFormat.GENERIC, "x");
@@ -128,7 +141,7 @@ class AlertNotifierTest {
 
     @Test
     void aMalformedUrlCostsNoExceptionEither() {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         assertThat(notifier.sendNow("not a url", AlertWebhookFormat.GENERIC, "x")).isFalse();
     }
@@ -140,7 +153,7 @@ class AlertNotifierTest {
      */
     @Test
     void aBusinessRejectionOnHttp200IsReportedAsAFailure() throws Exception {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         withService(200, "{\"errcode\":93000,\"errmsg\":\"invalid webhook url\"}", url -> {
             assertThat(notifier.sendNow(url, AlertWebhookFormat.WE_COM, "告警")).isFalse();
@@ -154,7 +167,7 @@ class AlertNotifierTest {
 
     @Test
     void anErrcodeOfZeroIsAnAcceptedMessage() throws Exception {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         withService(200, "{\"errcode\":0,\"errmsg\":\"ok\"}", url -> {
             assertThat(notifier.sendNow(url, AlertWebhookFormat.DING_TALK, "x")).isTrue();
@@ -164,7 +177,7 @@ class AlertNotifierTest {
 
     @Test
     void feishuUsesItsCodeFieldForTheVerdict() throws Exception {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         withService(200, "{\"code\":19001,\"msg\":\"param invalid\"}", url -> {
             assertThat(notifier.sendNow(url, AlertWebhookFormat.FEISHU, "x")).isFalse();
@@ -174,7 +187,7 @@ class AlertNotifierTest {
 
     @Test
     void aGenericEndpointIsJudgedByStatusAlone() throws Exception {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         withService(200, "{\"errcode\":93000}", url ->
                 assertThat(notifier.sendNow(url, AlertWebhookFormat.GENERIC, "x")).isTrue());
@@ -182,7 +195,7 @@ class AlertNotifierTest {
 
     @Test
     void anHttpErrorIsRememberedWithItsStatus() throws Exception {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         withService(500, "boom", url -> {
             assertThat(notifier.sendNow(url, AlertWebhookFormat.GENERIC, "x")).isFalse();
@@ -192,7 +205,7 @@ class AlertNotifierTest {
 
     @Test
     void anUnreachableEndpointIsRememberedAsAFailedDelivery() {
-        AlertNotifier notifier = new AlertNotifier();
+        AlertNotifier notifier = new AlertNotifier(true);
 
         notifier.sendNow("http://127.0.0.1:1/hook", AlertWebhookFormat.GENERIC, "x");
 

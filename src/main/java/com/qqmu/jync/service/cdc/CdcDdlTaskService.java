@@ -1286,16 +1286,90 @@ public class CdcDdlTaskService {
     }
 
     static String normalizeDdl(String sql) {
-        String s = sql == null ? "" : sql.trim();
-        s = s.replaceAll("(?is)\\bCOMMENT\\s+'(?:[^']|'')*'", " ");
-        s = s.replaceAll("(?is)\\bCOMMENT\\s+\"(?:[^\"]|\"\")*\"", " ");
-        s = stripSchemaQualification(s);
-        s = s.replaceAll("[`\"\\[\\]]", "");
-        s = s.replaceAll("\\s+", " ").trim().toUpperCase(Locale.ROOT);
-        while (s.endsWith(";")) {
-            s = s.substring(0, s.length() - 1).trim();
+        String s = stripSchemaQualification(sql == null ? "" : sql.strip());
+        StringBuilder out = new StringBuilder(s.length());
+        boolean inLiteral = false;
+        boolean pendingSpace = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (inLiteral) {
+                // Literal content is kept verbatim, case and spacing included: DEFAULT 'a"b'
+                // and DEFAULT 'ab', or 'x' and 'X', are different statements. The old
+                // whole-string quote-strip and upper-casing ran inside literals too and made
+                // them compare equal — the "statement changed" rail let a semantically
+                // different statement through.
+                out.append(c);
+                if (c == '\'') {
+                    if (i + 1 < s.length() && s.charAt(i + 1) == '\'') {
+                        out.append('\'');
+                        i++;
+                    } else {
+                        inLiteral = false;
+                    }
+                }
+                continue;
+            }
+            if (c == '\'') {
+                if (pendingSpace && out.length() > 0) {
+                    out.append(' ');
+                }
+                pendingSpace = false;
+                out.append(c);
+                inLiteral = true;
+                continue;
+            }
+            if (c == '"' || c == '`' || c == '[' || c == ']') {
+                continue;   // identifier quoting: spelling differences are tolerated
+            }
+            if (Character.isWhitespace(c)) {
+                pendingSpace = true;
+                continue;
+            }
+            // COMMENT '...' / COMMENT "..." carries display text, not structure; drop the
+            // keyword together with the quoted text, but never a literal that merely
+            // contains the word.
+            if ((c == 'C' || c == 'c') && i + 7 <= s.length()
+                    && (i == 0 || !isIdentifierChar(s.charAt(i - 1)))
+                    && (i + 7 == s.length() || !isIdentifierChar(s.charAt(i + 7)))
+                    && s.regionMatches(true, i, "COMMENT", 0, 7)) {
+                int j = i + 7;
+                while (j < s.length() && Character.isWhitespace(s.charAt(j))) {
+                    j++;
+                }
+                if (j < s.length() && (s.charAt(j) == '\'' || s.charAt(j) == '"')) {
+                    char quote = s.charAt(j);
+                    int k = j + 1;
+                    while (k < s.length()) {
+                        if (s.charAt(k) == quote) {
+                            if (quote == '\'' && k + 1 < s.length() && s.charAt(k + 1) == '\'') {
+                                k += 2;
+                                continue;
+                            }
+                            k++;
+                            break;
+                        }
+                        k++;
+                    }
+                    i = k - 1;
+                    pendingSpace = out.length() > 0;
+                    continue;
+                }
+            }
+            if (pendingSpace && out.length() > 0) {
+                out.append(' ');
+            }
+            pendingSpace = false;
+            out.append(Character.toUpperCase(c));
         }
-        return s;
+        String result = out.toString().trim();
+        while (result.endsWith(";")) {
+            result = result.substring(0, result.length() - 1).trim();
+        }
+        return result;
+    }
+
+    private static boolean isIdentifierChar(char c) {
+        return Character.isLetterOrDigit(c) || c == '_' || c == '$';
     }
 
     /**

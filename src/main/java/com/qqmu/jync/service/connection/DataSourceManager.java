@@ -480,7 +480,11 @@ public class DataSourceManager {
             "EXCEPTIONINTERCEPTORS", "ALLOWMULTIQUERIES", "CONNECTIONATTRIBUTES",
             "AUTHENTICATIONPLUGINS", "SOCKETFACTORY", "SSLSOCKETFACTORY",
             "LOADBALANCESTRATEGY", "HA.LOADBALANCESTRATEGY", "PROPERTIESTRANSFORM",
-            "JAVA_OBJECT_SERIALIZER", "DEFAULT_TABLE_ENGINE");
+            "JAVA_OBJECT_SERIALIZER", "DEFAULT_TABLE_ENGINE",
+            // pgjdbc class-instantiation keys (the CVE-2022-21724 family) and Connector/J's
+            // lifecycle interceptors: same "name a class from the URL" shape as the above.
+            "SSLFACTORY", "SSLHOSTNAMEVERIFIER", "SSLPASSWORDCALLBACK",
+            "CONNECTIONLIFECYCLEINTERCEPTORS");
 
     private String appendExtraParams(String url, DatabaseConfig config) {
         String extra = config.getExtraParams();

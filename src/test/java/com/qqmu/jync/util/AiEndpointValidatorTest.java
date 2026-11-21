@@ -15,8 +15,22 @@ class AiEndpointValidatorTest {
 
     @Test
     void acceptsOrdinaryHttpsEndpoints() {
-        assertThatCode(() -> AiEndpointValidator.validateBaseUrl("https://api.example.com/v1"))
+        // A literal host keeps this independent of the test machine's DNS.
+        assertThatCode(() -> AiEndpointValidator.validateBaseUrl("https://10.1.2.3/v1"))
                 .doesNotThrowAnyException();
+    }
+
+    /**
+     * A name that does not resolve is refused, not passed through: the HTTP client re-resolves
+     * at connect time, so "NXDOMAIN for the validator, an internal IP for the client" is the
+     * DNS-rebinding shape. {@code .invalid} is reserved to never resolve.
+     */
+    @Test
+    void rejectsAHostThatDoesNotResolve() {
+        assertThatThrownBy(() -> AiEndpointValidator.validateBaseUrl(
+                "https://no-such-host.invalid/v1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.ai.baseUrl.unresolved");
     }
 
     @Test

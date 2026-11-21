@@ -83,7 +83,7 @@ class AiProviderServiceTest {
         AiProvider p = new AiProvider();
         p.setName(name);
         p.setProtocol(AiProtocol.OPENAI);
-        p.setBaseUrl("https://api.example.com/v1");
+        p.setBaseUrl("http://10.1.2.3/v1");
         p.setModel("some-model");
         return p;
     }
@@ -217,7 +217,7 @@ class AiProviderServiceTest {
 
         AiProvider edit = newProvider("p");
         edit.setId(saved.getId());
-        edit.setBaseUrl("https://elsewhere.example.com/v1");
+        edit.setBaseUrl("http://10.1.2.4/v1");
         AiProvider updated = service.save(edit, "");
 
         // The old success proved nothing about the new URL.
@@ -354,7 +354,7 @@ class AiProviderServiceTest {
     void anAnthropicThinkingBudgetThatDoesNotFitIsRefusedAtSaveTime() {
         AiProvider p = newProvider("anthropic-thinking");
         p.setProtocol(AiProtocol.ANTHROPIC);
-        p.setBaseUrl("https://api.anthropic.com");
+        p.setBaseUrl("https://10.1.2.5/v1");
         p.setReasoningEffort(AiReasoningEffort.HIGH);
         p.setMaxTokens(4096);
 
@@ -367,7 +367,7 @@ class AiProviderServiceTest {
     void anAnthropicProviderWithRoomForItsBudgetSaves() {
         AiProvider p = newProvider("anthropic-thinking-ok");
         p.setProtocol(AiProtocol.ANTHROPIC);
-        p.setBaseUrl("https://api.anthropic.com");
+        p.setBaseUrl("https://10.1.2.5/v1");
         p.setReasoningEffort(AiReasoningEffort.HIGH);
         p.setMaxTokens(16384);
 
@@ -392,7 +392,7 @@ class AiProviderServiceTest {
         // OFF 在 Anthropic 上就是"省略 thinking",不占预算。
         AiProvider p = newProvider("anthropic-off");
         p.setProtocol(AiProtocol.ANTHROPIC);
-        p.setBaseUrl("https://api.anthropic.com");
+        p.setBaseUrl("https://10.1.2.5/v1");
         p.setReasoningEffort(AiReasoningEffort.OFF);
         p.setMaxTokens(1024);
 

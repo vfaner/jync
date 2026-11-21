@@ -54,6 +54,7 @@ public class AlertNotifier {
     public record Delivery(Instant at, boolean ok, String detail) {
     }
 
+    private final boolean allowPrivateWebhook;
     private final HttpClient client;
     private final ExecutorService executor;
     private final AtomicReference<Delivery> lastDelivery = new AtomicReference<>();
@@ -61,6 +62,15 @@ public class AlertNotifier {
     private final AtomicLong lastWarnAt = new AtomicLong();
 
     public AlertNotifier() {
+        this(false);
+    }
+
+    /** Spring wiring: the same allow-private switch the save-time validation uses. */
+    @org.springframework.beans.factory.annotation.Autowired
+    public AlertNotifier(
+            @org.springframework.beans.factory.annotation.Value(
+                    "${alert.webhook.allow-private:false}") boolean allowPrivateWebhook) {
+        this.allowPrivateWebhook = allowPrivateWebhook;
         this.client = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
         this.executor = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "jync-alert-webhook");
@@ -87,6 +97,9 @@ public class AlertNotifier {
      * down is never allowed to break the caller.
      */
     public boolean sendNow(String url, AlertWebhookFormat format, String text) {
+        if (!addressStillAllowed(url)) {
+            return false;
+        }
         Delivery delivery;
         try {
             HttpRequest request = HttpRequest.newBuilder()
@@ -279,5 +292,28 @@ public class AlertNotifier {
     @PreDestroy
     public void shutdown() {
         executor.shutdownNow();
+    }
+
+    /**
+     * The stored URL was validated when it was saved, but alerts fire hours or days later:
+     * DNS may now answer with a link-local/metadata/RFC1918 address (rebinding), and the
+     * allow-private toggle was frozen at save time. Re-resolve immediately before
+     * connecting and refuse the send when any answer violates the current policy. An
+     * unresolvable host is still attempted — the POST will fail anyway, and an intranet
+     * webhook may legitimately be unresolvable from this node.
+     */
+    private boolean addressStillAllowed(String url) {
+        try {
+            WebhookAddressPolicy.check(
+                    java.net.InetAddress.getAllByName(java.net.URI.create(url).getHost()),
+                    allowPrivateWebhook);
+            return true;
+        } catch (java.net.UnknownHostException e) {
+            return true;
+        } catch (IllegalArgumentException e) {
+            log.warn("Refusing an alert webhook whose address no longer passes the policy: {}",
+                    e.getMessage());
+            return false;
+        }
     }
 }

@@ -326,6 +326,12 @@ public class ProjectController {
         }
         Project project = maybeProject.get();
         SyncConfig config = projectService.loadConfig(project);
+        // The live inspections below dial the production source. The equivalent APIs
+        // (/api/projects/*/preview|columns|cursor-candidates|cdc-probe|row-count|precheck)
+        // are writer-only AND ownership-checked for exactly that reason; a viewer or a
+        // non-owner opening the detail page must not get the same source probe (or pay
+        // ~15 s of source queries per tab load). Stored state still renders for everyone.
+        boolean liveSourceAllowed = AccessGuard.current().canEdit(project.getOwnerUsername());
 
         model.addAttribute("project", project);
         model.addAttribute("config", config);
@@ -442,7 +448,7 @@ public class ProjectController {
             // and preselect the CDC card when it passes. A failing probe must never block
             // rendering — same rule as B2 (a failed probe does not block saving).
             try {
-                cdcProbe = cdcOperationsService.probeProject(id);
+                cdcProbe = liveSourceAllowed ? cdcOperationsService.probeProject(id) : null;
                 cdcRecommended = cdcProbe != null && cdcProbe.passed();
                 if (cdcRecommended) {
                     if (isYashanSource) {
@@ -491,7 +497,7 @@ public class ProjectController {
         // cycle instead of letting the source load explain it. A snapshot read failure must
         // not take the page down — the banner is advisory.
         ProjectService.FullCompareLoadReport fullCompareLoad = null;
-        if (!isRedisTarget) {
+        if (!isRedisTarget && liveSourceAllowed) {
             try {
                 fullCompareLoad = projectService.inspectFullCompareLoad(id, config);
             } catch (RuntimeException e) {
@@ -505,7 +511,7 @@ public class ProjectController {
         // routine is created and only returns the wrong rows afterwards. Name the objects
         // here, where an override can still be supplied before the first run. Advisory — a
         // source that cannot answer loses the warning, not the page.
-        if (!isRedisTarget) {
+        if (!isRedisTarget && liveSourceAllowed) {
             try {
                 model.addAttribute("stringConcatWarnings",
                         projectService.findStringConcatenationWarnings(id));
@@ -530,7 +536,7 @@ public class ProjectController {
         // reaches the statement timeout on a large table. The sync log says so once; this is
         // where the operator who can add the index actually sees it. Advisory — a source
         // that cannot answer loses the hint, not the page.
-        if (!cdcActive) {
+        if (!cdcActive && liveSourceAllowed) {
             try {
                 model.addAttribute("unindexedCursorTables",
                         projectService.findUnindexedCursorTables(id, progressList));
@@ -552,6 +558,13 @@ public class ProjectController {
         model.addAttribute("cdcPosition", cdcPosition);
         model.addAttribute("cdcStats", cdcStats);
 
+        if (!liveSourceAllowed) {
+            // Same bundle key the failure path uses: the template already knows how to say
+            // "the source listing is unavailable" and every consumer of sourceObjects is
+            // null-safe.
+            model.addAttribute("sourceWarning", "msg.source.objects.unavailable");
+            return "project-detail";
+        }
         try {
             ProjectService.SourceObjects objects = projectService.listSourceObjects(id);
             model.addAttribute("sourceObjects", objects);
