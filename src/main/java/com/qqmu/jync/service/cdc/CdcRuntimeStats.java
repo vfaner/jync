@@ -407,9 +407,9 @@ public final class CdcRuntimeStats {
         if (table == null || n <= 0) {
             return;
         }
-        // compute() is exclusive per key with drain's removeIf path: a concurrent drain
-        // either hands off the old window first (these rows open a fresh one) or waits,
-        // but rows can never land in a window that was already removed.
+        // compute() is exclusive per key with the drain paths (which also use compute): a
+        // concurrent drain either hands off the old window first (these rows open a fresh
+        // one) or waits, so rows can never land in a window that was already removed.
         tableWindows.compute(table, (key, existing) -> {
             Window window = existing != null ? existing : new Window(clockMillis.getAsLong());
             if (isUpsert) {
@@ -434,29 +434,42 @@ public final class CdcRuntimeStats {
      */
     List<TableChange> drainDueWindows(long maxAgeMs, long nowMillis) {
         List<TableChange> due = new ArrayList<>();
-        tableWindows.entrySet().removeIf(entry -> {
-            Window window = entry.getValue();
-            if (nowMillis - window.openedAtMillis < maxAgeMs) {
-                return false;
-            }
-            if (window.upserts > 0 || window.deletes > 0) {
-                due.add(new TableChange(entry.getKey(), window.upserts, window.deletes));
-            }
-            return true;
-        });
+        // compute() shares the per-key update with addToWindow(): entrySet().removeIf() runs
+        // its predicate outside that update, so a row counted between the age check and the
+        // removal could ride the removed window out of the map (lost), and the scheduler's
+        // drain and shutdown's drainAllWindows() could both collect the same window (duplicate
+        // log row / duplicate markCdcDataApplied).
+        for (String table : tableWindows.keySet()) {
+            tableWindows.compute(table, (key, window) -> {
+                if (window == null) {
+                    return null;
+                }
+                if (nowMillis - window.openedAtMillis < maxAgeMs) {
+                    return window;
+                }
+                if (window.upserts > 0 || window.deletes > 0) {
+                    due.add(new TableChange(key, window.upserts, window.deletes));
+                }
+                return null;
+            });
+        }
         return due;
     }
 
     /** Removes and returns every open window (consumer shutdown: nothing stays unlogged). */
     public List<TableChange> drainAllWindows() {
         List<TableChange> all = new ArrayList<>();
-        tableWindows.entrySet().removeIf(entry -> {
-            Window window = entry.getValue();
-            if (window.upserts > 0 || window.deletes > 0) {
-                all.add(new TableChange(entry.getKey(), window.upserts, window.deletes));
-            }
-            return true;
-        });
+        for (String table : tableWindows.keySet()) {
+            tableWindows.compute(table, (key, window) -> {
+                if (window == null) {
+                    return null;
+                }
+                if (window.upserts > 0 || window.deletes > 0) {
+                    all.add(new TableChange(key, window.upserts, window.deletes));
+                }
+                return null;
+            });
+        }
         return all;
     }
 

@@ -259,7 +259,8 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
                     applied = drain(adapter);
-                } catch (Throwable e) {
+                } catch (Exception e) {
+                    // JDK Errors must kill this thread, not loop on unchanged state.
                     if (applyFailedThisCycle) {
                         applyFailures.incrementAndGet();
                     }

@@ -262,9 +262,14 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     if (result.nextLsn != null) {
                         fromLsn = result.nextLsn;
                     }
-                } catch (Throwable e) {
-                    // Any drain exception leaves fromLsn unchanged: the next iteration
-                    // re-reads the same interval (data-first at-least-once).
+                } catch (Exception e) {
+                    // Idempotent at-least-once: re-reading an interval is safe. But a flush
+                    // that failed late in the window already persisted the LSN of the
+                    // transactions before it, and re-scanning from the pre-cycle anchor would
+                    // re-apply those (real target writes, plus a "refusing to rewind" WARN per
+                    // transaction). Anchor on the newest persisted LSN: it is the first
+                    // transaction that was NOT committed, so nothing below it is lost.
+                    fromLsn = newestPersistedLsn(projectId, fromLsn);
                     if (applyFailedThisCycle) {
                         applyFailures.incrementAndGet();
                     }
@@ -1228,6 +1233,26 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     }
 
     private boolean applyStrikeOut() { return applyFailures.get() > MAX_APPLY_FAILURES; }
+
+    /**
+     * The persisted LSN when it is ahead of {@code anchor}, else the anchor itself. LSNs from
+     * {@code CONVERT(varchar, lsn, 1)} are fixed-width lowercase hex with a {@code 0x} prefix,
+     * so lexicographic order is LSN order; a value in any other shape is ignored rather than
+     * compared.
+     */
+    private String newestPersistedLsn(long projectId, String anchor) {
+        try {
+            return positionStore.find(projectId)
+                    .map(CdcPosition::getLsn)
+                    .filter(lsn -> lsn != null && anchor != null
+                            && lsn.length() == anchor.length()
+                            && lsn.compareToIgnoreCase(anchor) > 0)
+                    .orElse(anchor);
+        } catch (RuntimeException e) {
+            // A metadata hiccup must not turn into a second failure: keep the anchor.
+            return anchor;
+        }
+    }
 
     private void fatalStop(long projectId, Throwable failure, CdcFailureClassifier.Kind kind) {
         // F-13: SQL Server has no parse stage, so a TRANSIENT park is always the

@@ -64,6 +64,13 @@ class LogMinerCdcConsumerTest {
             this.batches = new ArrayList<>(java.util.Arrays.asList(batches));
         }
 
+        /** Third ctor arg is currentScnAtOpen — the session's high water. */
+        @SafeVarargs
+        FakeSession(long highWaterScn, List<LogMinerSession.Row>... batches) {
+            super(null, 0L, highWaterScn, null, null);
+            this.batches = new ArrayList<>(java.util.Arrays.asList(batches));
+        }
+
         @Override
         public List<LogMinerSession.Row> nextBatch() {
             if (batches.isEmpty()) {
@@ -193,6 +200,55 @@ class LogMinerCdcConsumerTest {
         assertThat(t.isAlive()).isFalse();
         verify(taskStore, never()).recordCdcFailure(anyLong(), any());
         verify(lock).close();
+    }
+
+    /**
+     * A healthy session with no tracked DML (idle tables, only untracked traffic) never
+     * reaches flushTransaction, so the persisted SCN used to stay at the last committed CSCN
+     * while the archive retention clock kept running. A restart then opened LogMiner at a
+     * purged SCN (ORA-01291 → PURGED) and parked the project over data that was never lost.
+     * The drained session's high water must be persisted even when nothing was applied.
+     */
+    @Test
+    void anIdleDrainStillPersistsTheSessionHighWater() throws Exception {
+        Project project = project(12L);
+        SyncLockService.LockHandle lock = boundedLock(2);
+        SyncContext ctx = SyncContext.builder().project(project)
+                .config(new SyncConfig()).sourceConfig(new DatabaseConfig()).build();
+        CdcPositionStore positionStore = mock(CdcPositionStore.class);
+        when(positionStore.find(12L)).thenReturn(Optional.of(scnPosition(12L, 100L)));
+        DataSourceManager dataSourceManager = mock(DataSourceManager.class);
+        // The CDB probe runs on the source connection before the session opens; an empty
+        // result set answers "not a CDB" (or "no con_id") without a live server.
+        Connection sourceConn = mock(Connection.class);
+        Statement probeStmt = mock(Statement.class);
+        ResultSet emptyRs = mock(ResultSet.class);
+        when(emptyRs.next()).thenReturn(false);
+        when(probeStmt.executeQuery(anyString())).thenReturn(emptyRs);
+        when(sourceConn.createStatement()).thenReturn(probeStmt);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+
+        FakeSession session = new FakeSession(500L,
+                java.util.Collections.<LogMinerSession.Row>emptyList());
+        LogMinerSessionFactory factory = (c, s, b) -> session;
+        SyncProperties properties = new SyncProperties();
+        properties.getCdc().setReconnectBackoffMs(1L);
+        properties.getCdc().setReconnectBackoffMaxMs(1L);
+        properties.getCdc().getLogminer().setIdlePollMs(1);
+
+        LogMinerCdcConsumer consumer = new LogMinerCdcConsumer(project, lock, ctx,
+                positionStore, mock(CdcBaselineService.class), mock(SyncTaskStore.class),
+                mock(SyncStateWriter.class), dataSourceManager, new CdcRuntimeStats(),
+                properties, factory);
+        Thread t = new Thread(consumer);
+        t.start();
+        Thread.sleep(300);
+        consumer.requestStop();
+        t.join(5_000);
+
+        // The idle loop may open several sessions in the test window; every drained one must
+        // report its high water.
+        verify(positionStore, org.mockito.Mockito.atLeastOnce()).advanceScn(12L, 500L);
     }
 
     @Test

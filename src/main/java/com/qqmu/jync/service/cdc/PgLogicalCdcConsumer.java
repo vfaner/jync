@@ -303,7 +303,11 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     stats.setLastError(null);
                     connectedAtNs.set(System.nanoTime());
                     rowsDrained = drain(conn, slotName);
-                } catch (Throwable e) {
+                } catch (Exception e) {
+                    // JDK Errors (OOM, StackOverflow) must kill this thread, not re-enter the
+                    // reconnect loop for the same state: the cycle's catch used to swallow
+                    // them, so a heap exhausted while decoding one huge transaction retried
+                    // forever and never reached any strike-out.
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
                     if (applyFailedThisCycle) {
@@ -521,6 +525,14 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 }
                                 resetSpiller();
                                 advanceSlot(conn, slotName, commitLsn);
+                                // The slot is the resume authority and it just moved; persist
+                                // the same LSN even when this transaction carried no tracked
+                                // rows. Leaving it behind keeps cdc_position.lsn (and the
+                                // panel) stuck at the last committed transaction, and after a
+                                // slot recreation the gap check reads that ancient LSN and
+                                // reports a purge that never happened. Monotonic/equal is a
+                                // no-op for the flushTransaction path above.
+                                positionStore.advanceLsn(projectId, commitLsn);
                                 lastCommitLsn = commitLsn;
                                 // 延迟只认 COMMIT 行里的提交时刻(include-timestamp /
                                 // openGauss 自带);没有时间戳的服务器至少刷新「上次事件」,

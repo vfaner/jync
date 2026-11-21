@@ -257,7 +257,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     // the next session opens at CURRENT_SCN, not at the baseline.
                     lastScn = session.highWaterScn();
                     session.close();
-                } catch (Throwable e) {
+                } catch (Exception e) {
+                    // JDK Errors (OOM, StackOverflow) must kill this thread rather than
+                    // re-enter the reconnect loop on unchanged state.
                     // drain's per-row parse skips are counted separately (parseFailures),
                     // and only an APPLY failure escalates: a connect/open failure is the
                     // source being unreachable for a few seconds, which backoff-retry
@@ -695,6 +697,16 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 }
                 throw e;
             }
+        }
+        if (cursorDrained) {
+            // A healthy session with no tracked DML (idle tables, only untracked traffic,
+            // only skipped rows) never reaches flushTransaction, so the persisted SCN would
+            // stay frozen at the last committed CSCN while the archive retention clock keeps
+            // running. A restart then opens LogMiner at an SCN whose logs are already purged
+            // (ORA-01291 → PURGED) and parks a project over data that was never lost. The
+            // whole cursor was consumed, so THIS session's high water is safe to persist —
+            // the same deliberate-skip semantics the binlog and SQL Server empty windows use.
+            positionStore.advanceScn(projectId, session.highWaterScn());
         }
         return applied;
     }
