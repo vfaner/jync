@@ -20,7 +20,11 @@ import java.util.Map;
 final class YStreamTransactionAssembler {
 
     private final CdcTransactionBuffer buffer = new CdcTransactionBuffer();
-    private final Deque<CdcTransactionBuffer> savepoints = new ArrayDeque<>();
+    private final Deque<Savepoint> savepoints = new ArrayDeque<>();
+
+    /** 一个 savepoint 快照及其 SSN；回滚按 SSN 匹配具体 savepoint。 */
+    private record Savepoint(long ssn, CdcTransactionBuffer snapshot) {
+    }
 
     /**
      * Starts a new transaction.
@@ -50,16 +54,32 @@ final class YStreamTransactionAssembler {
      *         transaction budget, because the copies live on the heap until the commit
      */
     int savepoint() {
+        return savepoint(0L);
+    }
+
+    int savepoint(long ssn) {
         int heldRows = buffer.size();
-        savepoints.push(buffer.copy());
+        savepoints.push(new Savepoint(ssn, buffer.copy()));
         return heldRows;
     }
 
     /** Restores the innermost savepoint; a stray rollback (no savepoint) is a no-op. */
     void rollbackToSavepoint() {
-        CdcTransactionBuffer snapshot = savepoints.peek();
-        if (snapshot != null) {
-            buffer.restoreFrom(snapshot);
+        rollbackToSavepoint(0L);
+    }
+
+    /**
+     * Rolls back to the savepoint with the given SSN, discarding younger savepoints. A stack
+     * with no SSNs could only restore the most recent savepoint — a ROLLBACK TO an older one
+     * would restore the wrong snapshot and resurrect rolled-back rows.
+     */
+    void rollbackToSavepoint(long ssn) {
+        while (!savepoints.isEmpty() && savepoints.peekFirst().ssn() > ssn) {
+            savepoints.pollFirst();
+        }
+        Savepoint target = savepoints.peekFirst();
+        if (target != null) {
+            buffer.restoreFrom(target.snapshot());
         }
     }
 

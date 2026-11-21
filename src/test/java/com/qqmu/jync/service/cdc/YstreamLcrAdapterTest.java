@@ -122,6 +122,20 @@ class YstreamLcrAdapterTest {
                 .isEqualTo(Kind.XACT_ROLLBACK_TO_SAVEPOINT);
     }
 
+    /** 真实厂商的 SAVEPOINT / ROLLBACK LCR 携带 SSN；回滚要按此匹配 savepoint。 */
+    @Test
+    void aSavepointLcrCarriesItsSsn() {
+        YStreamEvent sp = YstreamLcrAdapter.toEvent(
+                new com.sics.ystream.result.YstreamXactSavepoint(0, 777L, null, 0, 0));
+        assertThat(sp.kind()).isEqualTo(Kind.XACT_SAVEPOINT);
+        assertThat(sp.savepointSsn()).isEqualTo(777L);
+
+        YStreamEvent rb = YstreamLcrAdapter.toEvent(
+                new com.sics.ystream.result.YstreamXactRollbackToSavepoint(0, 777L, null, 0, 0));
+        assertThat(rb.kind()).isEqualTo(Kind.XACT_ROLLBACK_TO_SAVEPOINT);
+        assertThat(rb.savepointSsn()).isEqualTo(777L);
+    }
+
     @Test
     void theCommitLcrCarriesThePositionJyncStores() {
         YStreamEvent event = YstreamLcrAdapter.toEvent(xact(XactType.COMMIT, position(42L)));

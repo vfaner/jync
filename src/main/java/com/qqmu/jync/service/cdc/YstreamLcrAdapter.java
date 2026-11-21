@@ -21,6 +21,8 @@ import com.sics.ystream.result.YstreamDdlInterface;
 import com.sics.ystream.result.YstreamDmlInterface;
 import com.sics.ystream.result.YstreamLcrInterface;
 import com.sics.ystream.result.YstreamXactInterface;
+import com.sics.ystream.result.YstreamXactRollbackToSavepoint;
+import com.sics.ystream.result.YstreamXactSavepoint;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -89,9 +91,22 @@ final class YstreamLcrAdapter implements YStreamClientAdapter {
             return new YStreamEvent(Kind.IGNORED, null, null, null, null, null, false, position);
         }
         switch (type) {
-            case YSTREAM_XACT:
-                return YStreamEvent.xact(xactKind(((YstreamXactInterface) lcr).getXactType()),
-                        position);
+            case YSTREAM_XACT: {
+                YstreamXactInterface xact = (YstreamXactInterface) lcr;
+                Kind kind = xactKind(xact.getXactType());
+                // SAVEPOINT / ROLLBACK 携带 SSN：回滚要按 SSN 匹配到具体 savepoint，不能恒取
+                // 最近一个（否则回滚到非最近 savepoint 会复活已回滚的行）。
+                // instanceof 而非硬转：只有这两个具体类型才携带 SSN，其它实现（含测试
+                // 替身）退回无名回滚，kind 保持不变。
+                if (kind == Kind.XACT_SAVEPOINT && xact instanceof YstreamXactSavepoint savepoint) {
+                    return YStreamEvent.savepoint(savepoint.getSsn(), position);
+                }
+                if (kind == Kind.XACT_ROLLBACK_TO_SAVEPOINT
+                        && xact instanceof YstreamXactRollbackToSavepoint rollback) {
+                    return YStreamEvent.rollbackToSavepoint(rollback.getSsn(), position);
+                }
+                return YStreamEvent.xact(kind, position);
+            }
             case YSTREAM_DML:
                 return dmlEvent((YstreamDmlInterface) lcr, position);
             case YSTREAM_DDL: {

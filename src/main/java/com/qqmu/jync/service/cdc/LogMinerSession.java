@@ -186,17 +186,49 @@ public class LogMinerSession implements AutoCloseable {
             buf = new StringBuilder();
             pending.put(rsId, buf);
         }
-        if (buf.length() > 0) {
-            buf.append('\n');
-        }
+        // 续片逐字拼接：Oracle 按 4000 字节任意偏移切片，插入 '\n' 会把源值里不存在的换行
+        // 写进字符串字面量（>4KB 内联文本必中，静默 corruption）。
         buf.append(fragment);
-        String text = buf.toString();
-        String trimmed = text.trim();
-        if (trimmed.endsWith(";")) {
+        if (endsComplete(buf)) {
             pending.remove(rsId);
-            return text;
+            return buf.toString();
         }
         return null;
+    }
+
+    /**
+     * 引号感知的语句完整判定：最后一个非空白字符是 ';' 且该 ';' 不在引号内。旧实现裸判
+     * {@code endsWith(";")} 会把切在字面量内的分号当成终止符，提前产出半截语句（后续残片
+     * 再拼一条假语句），构建出源里不存在的 SQL。'' / "" 转义按两字符处理，标识符内的另一类
+     * 引号不参与计数。
+     */
+    private static boolean endsComplete(CharSequence text) {
+        int end = text.length() - 1;
+        while (end >= 0 && Character.isWhitespace(text.charAt(end))) {
+            end--;
+        }
+        if (end < 0 || text.charAt(end) != ';') {
+            return false;
+        }
+        boolean inSingle = false;
+        boolean inDouble = false;
+        for (int i = 0; i < end; i++) {
+            char c = text.charAt(i);
+            if (c == '\'' && !inDouble) {
+                if (inSingle && i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                    i++;                        // '' 转义，仍在字面量内部
+                } else {
+                    inSingle = !inSingle;
+                }
+            } else if (c == '"' && !inSingle) {
+                if (inDouble && i + 1 < text.length() && text.charAt(i + 1) == '"') {
+                    i++;
+                } else {
+                    inDouble = !inDouble;
+                }
+            }
+        }
+        return !inSingle && !inDouble;
     }
 
     /** END_LOGMNR quietly; the cursor and result set are closed with the source pooled conn. */

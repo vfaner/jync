@@ -27,16 +27,28 @@ import com.qqmu.jync.service.cdc.YStreamPositionCodec.YStreamPosition;
  *                   0 when the LCR carries none — transaction boundaries and DDLs do not.
  *                   This is the only honest source for the lag gauge: the time the row
  *                   reaches us is not how far behind the source is.
+ * @param savepointSsn SAVEPOINT / ROLLBACK_TO_SAVEPOINT 的 SSN（其余 LCR 为 0）。回滚按此
+ *                  匹配具体 savepoint 而非恒取最近一个，否则回滚到非最近 savepoint 会复活
+ *                  已回滚的行。
  */
 public record YStreamEvent(Kind kind, Operation operation, String schema, String table,
                            Map<String, Object> newValues, Map<String, Object> oldValues,
-                           boolean chunked, YStreamPosition position, long sourceTimeMillis) {
+                           boolean chunked, YStreamPosition position, long sourceTimeMillis,
+                           long savepointSsn) {
 
     /** Compatibility form for LCRs that carry no source time. */
     public YStreamEvent(Kind kind, Operation operation, String schema, String table,
                         Map<String, Object> newValues, Map<String, Object> oldValues,
                         boolean chunked, YStreamPosition position) {
-        this(kind, operation, schema, table, newValues, oldValues, chunked, position, 0L);
+        this(kind, operation, schema, table, newValues, oldValues, chunked, position, 0L, 0L);
+    }
+
+    /** Compatibility form for LCRs that carry a source time but no savepoint SSN. */
+    public YStreamEvent(Kind kind, Operation operation, String schema, String table,
+                        Map<String, Object> newValues, Map<String, Object> oldValues,
+                        boolean chunked, YStreamPosition position, long sourceTimeMillis) {
+        this(kind, operation, schema, table, newValues, oldValues, chunked, position,
+                sourceTimeMillis, 0L);
     }
 
     /** What a YStream LCR is; the client's {@code LcrType} plus the xact subtypes. */
@@ -62,11 +74,21 @@ public record YStreamEvent(Kind kind, Operation operation, String schema, String
     }
 
     public static YStreamEvent savepoint(YStreamPosition position) {
-        return xact(Kind.XACT_SAVEPOINT, position);
+        return savepoint(0L, position);
+    }
+
+    public static YStreamEvent savepoint(long ssn, YStreamPosition position) {
+        return new YStreamEvent(Kind.XACT_SAVEPOINT, null, null, null, null, null, false,
+                position, 0L, ssn);
     }
 
     public static YStreamEvent rollbackToSavepoint(YStreamPosition position) {
-        return xact(Kind.XACT_ROLLBACK_TO_SAVEPOINT, position);
+        return rollbackToSavepoint(0L, position);
+    }
+
+    public static YStreamEvent rollbackToSavepoint(long ssn, YStreamPosition position) {
+        return new YStreamEvent(Kind.XACT_ROLLBACK_TO_SAVEPOINT, null, null, null, null, null,
+                false, position, 0L, ssn);
     }
 
     public static YStreamEvent row(Operation operation, String schema, String table,

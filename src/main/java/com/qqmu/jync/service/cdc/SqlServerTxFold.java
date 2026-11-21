@@ -1,6 +1,8 @@
 package com.qqmu.jync.service.cdc;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,8 +63,11 @@ final class SqlServerTxFold {
 
     /** txLsn (ascending) -> binding -> folded buffer. */
     private final TreeMap<String, Map<CdcTableBinding, Buffer>> byTx = new TreeMap<>();
-    /** binding -> last op=3 image awaiting its paired op=4. */
-    private final Map<CdcTableBinding, Map<String, Object>> pendingBefore = new LinkedHashMap<>();
+    /** binding -> FIFO queue of op=3 before-images awaiting their paired op=4. A set-based
+     *  UPDATE emits several op=3 rows before their op=4 counterparts; a single slot overwrote
+     *  all but the last, mis-pairing moved-PK updates and leaving ghost rows on the target. */
+    private final Map<CdcTableBinding, Deque<Map<String, Object>>> pendingBefore =
+            new LinkedHashMap<>();
 
     /** txLsn -> per-transaction buffer cap; see {@link CdcTransactionBudget}. */
     private final Map<String, CdcTransactionBudget> budgets = new LinkedHashMap<>();
@@ -81,14 +86,21 @@ final class SqlServerTxFold {
     void accept(String txLsn, CdcTableBinding binding, int op, Map<String, Object> row) {
         switch (op) {
             case 3:
-                // Update-before: never applied on its own; the paired op=4 decides
-                // whether the old PK needs a delete.
-                pendingBefore.put(binding, row);
+                // Update-before: never applied on its own; the paired op=4 decides whether
+                // the old PK needs a delete. Queue FIFO so the k-th op=4 pairs with the k-th
+                // op=3 — correct whether the capture interleaves per row or emits all op=3
+                // then all op=4 (a single slot overwrote all but the last).
+                pendingBefore.computeIfAbsent(binding, k -> new ArrayDeque<>()).addLast(row);
                 return;
             case 4: {
-                Map<String, Object> before = pendingBefore.remove(binding);
                 Buffer buf = buffer(txLsn, binding);
                 appendUpsert(txLsn, buf, binding, row);
+                Deque<Map<String, Object>> befores = pendingBefore.get(binding);
+                Map<String, Object> before = befores == null || befores.isEmpty()
+                        ? null : befores.pollFirst();
+                if (befores != null && befores.isEmpty()) {
+                    pendingBefore.remove(binding);
+                }
                 if (before != null && CdcPrimaryKey.changed(before, row, binding)) {
                     appendDelete(txLsn, buf, binding, before);
                 }

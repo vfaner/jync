@@ -404,6 +404,35 @@ class LogMinerSessionTest {
         session.close();
     }
 
+    /**
+     * 切在字符串字面量内的 ';' 不能被当成语句终止符（否则产出半截语句 + 后续残片再拼假语句），
+     * 续片也须逐字拼接、不注入 '\n'（Oracle 按 4000 字节任意偏移切片，换行会写进源值）。
+     */
+    @Test
+    void aSemicolonInsideAStringLiteralDoesNotEndTheStatementEarlyNorInjectANewline()
+            throws SQLException {
+        Fixture fx = new Fixture(1000L,
+                new String[]{"/arch/1.log"}, new String[]{"/redo/cur.log"});
+        LogMinerSession session = LogMinerSession.openDefault(fx.conn, 500L, 1000);
+
+        when(fx.rows.next()).thenReturn(true, true, false);
+        when(fx.rows.getString(1)).thenReturn("77", "77");
+        when(fx.rows.getLong(2)).thenReturn(510L, 510L);
+        when(fx.rows.getString(3)).thenReturn("txA", "txA");
+        when(fx.rows.getString(4)).thenReturn("INSERT", "INSERT");
+        when(fx.rows.getString(5)).thenReturn("SRC", "SRC");
+        when(fx.rows.getString(6)).thenReturn("T", "T");
+        when(fx.rows.getString(7)).thenReturn(
+                "insert into \"SRC\".\"T\" values ('a;", "b');");
+        when(fx.rows.getTimestamp(8)).thenReturn(new Timestamp(0L));
+
+        List<LogMinerSession.Row> batch = session.nextBatch();
+
+        assertThat(batch).hasSize(1);
+        assertThat(batch.get(0).sqlRedo).contains("'a;b'").doesNotContain("\n");
+        session.close();
+    }
+
     @Test
     void nextBatchStopsAtTheRowCapAndResumesWithoutLosingRows() throws SQLException {
         // A large mining window (the consumer was down for hours) must not be materialised

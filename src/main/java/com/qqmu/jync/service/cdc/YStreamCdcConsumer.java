@@ -554,10 +554,10 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                 // The snapshot duplicates everything folded so far; charge those copies to the
                 // transaction budget so a savepoint-per-row transaction parks with a clear
                 // verdict instead of growing the heap until it OOMs and replays forever.
-                budget.addSavepointSnapshot(tx.savepoint());
+                budget.addSavepointSnapshot(tx.savepoint(event.savepointSsn()));
                 return 0;
             case XACT_ROLLBACK_TO_SAVEPOINT:
-                tx.rollbackToSavepoint();
+                tx.rollbackToSavepoint(event.savepointSsn());
                 return 0;
             case DDL:
                 onDdl(event);

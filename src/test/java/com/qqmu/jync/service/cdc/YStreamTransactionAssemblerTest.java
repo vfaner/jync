@@ -100,6 +100,22 @@ class YStreamTransactionAssemblerTest {
                 .containsExactly(1);
     }
 
+    /** 回滚到更早的 savepoint（按 SSN）须丢弃更年轻的 savepoint 及其行，而非恢复最近一个。 */
+    @Test
+    void rollingBackToAnOlderSavepointBySsnDiscardsYoungerSavepointsAndTheirRows() {
+        assembler.begin();
+        assembler.upsert(binding, row(1, "before"));
+        assembler.savepoint(100L);
+        assembler.upsert(binding, row(2, "after-sp1"));
+        assembler.savepoint(200L);
+        assembler.upsert(binding, row(3, "after-sp2"));
+
+        assembler.rollbackToSavepoint(100L);
+
+        assertThat(assembler.take().upserts().get(binding))
+                .extracting(r -> r.get("ID")).containsExactly(1);
+    }
+
     @Test
     void rollingBackToTheSameSavepointTwiceIsRepeatable() {
         assembler.begin();

@@ -244,6 +244,26 @@ class SqlServerTxFoldTest {
         assertThat(ids(buf.deletes())).containsExactly(1L, 2L);
     }
 
+    /**
+     * 集合式 UPDATE：所有 op=3 先到、所有 op=4 后到（按 __$seqval）。单槽只留最后一个 before，
+     * 前半行取错 before、后半行 before=null——移 PK 时旧键删错/漏删，目标留幽灵行。
+     * FIFO 队列按到达序把第 k 个 op=4 配给第 k 个 op=3。
+     */
+    @Test
+    void aSetBasedUpdatePairsEachBeforeWithItsOwnAfter() {
+        SqlServerTxFold fold = new SqlServerTxFold();
+        CdcTableBinding b = ordersBinding();
+        // 行 1、2 的 PK 分别移到 101、102：全部 before 先到，全部 after 后到。
+        fold.accept(TX_A, b, 3, row(1L, "v"));
+        fold.accept(TX_A, b, 3, row(2L, "v"));
+        fold.accept(TX_A, b, 4, row(101L, "v"));
+        fold.accept(TX_A, b, 4, row(102L, "v"));
+
+        SqlServerTxFold.Buffer buf = buffer(fold, TX_A, b);
+        assertThat(ids(buf.upserts())).containsExactly(101L, 102L);
+        assertThat(ids(buf.deletes())).containsExactly(1L, 2L);
+    }
+
     @Test
     void aTransactionOverTheRowCapIsRefused() {
         // 一个源事务 = 一个目标提交,行只能在内存里等 COMMIT。超限必须立刻非瞬态失败,
