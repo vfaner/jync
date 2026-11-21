@@ -307,7 +307,7 @@ class SecurityConfigTest {
         assertThat(statusOf(get("/api/upgrade/status").with(asOps()))).isEqualTo(403);
 
         for (String path : new String[] {"/system-config/update-check", "/external-auth",
-                "/alert-settings", "/ai/1/delete", "/change-logs/clear"}) {
+                "/alert-settings", "/ai/1/delete", "/change-logs/purge", "/audits/purge"}) {
             org.springframework.test.web.servlet.MvcResult result =
                     mvc.perform(post(path).with(asOps()).with(csrf())).andReturn();
             assertThat(result.getResponse().getRedirectedUrl()).as(path).isEqualTo("/?denied");

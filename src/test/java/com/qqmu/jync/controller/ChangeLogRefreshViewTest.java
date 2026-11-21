@@ -43,8 +43,8 @@ import com.qqmu.jync.service.auth.SyncUserDetails;
  * break and invisible in a unit test:
  *
  * <ul>
- *   <li>the controls landing <em>inside</em> the {@code th:if="${isAdmin}"} that wraps "clear
- *       logs" — refreshing is a read, and a viewer who can read the log needs it most;
+ *   <li>the controls landing <em>inside</em> the {@code th:if="${isAdmin}"} that wraps the
+ *       purge button — refreshing is a read, and a viewer who can read the log needs it most;
  *   <li>the new {@code log.refresh.*} keys missing from a bundle, which Thymeleaf renders as
  *       {@code ??log.refresh??} rather than failing.
  * </ul>
@@ -122,7 +122,7 @@ class ChangeLogRefreshViewTest {
         assertThat(html)
                 .contains("data-role=\"log-refresh\"")
                 .contains("data-role=\"log-auto\"")
-                .contains("/change-logs/clear");
+                .contains("data-open-modal=\"log-purge-modal\"");
     }
 
     /**

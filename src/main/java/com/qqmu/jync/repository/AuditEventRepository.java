@@ -1,8 +1,13 @@
 package com.qqmu.jync.repository;
 
+import java.time.Instant;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.query.Param;
 
 import com.qqmu.jync.model.AuditEvent;
 
@@ -10,9 +15,10 @@ import com.qqmu.jync.model.AuditEvent;
  * Persistence for the admin audit trail.
  *
  * <p>Extends the marker {@link Repository} instead of {@code CrudRepository}/{@code JpaRepository}
- * so that the append-only guarantee is structural: no delete or deleteAll method exists to call,
- * and nothing in the codebase can remove audit rows by accident or by admin request. Paging is
- * the only read shape the UI needs.
+ * so that no generic delete exists to call by accident. The trail is append-only by default;
+ * the single exception is the administrator's explicit date-based purge below, which always
+ * keeps today's rows and whose own act is recorded as a new audit event — so a purge can trim
+ * history but never erase the record of itself.
  */
 public interface AuditEventRepository extends Repository<AuditEvent, Long> {
 
@@ -21,4 +27,13 @@ public interface AuditEventRepository extends Repository<AuditEvent, Long> {
     Page<AuditEvent> findAll(Pageable pageable);
 
     long count();
+
+    /**
+     * The admin date purge: everything strictly before the cutoff (the start of the day after
+     * the selected day). Bulk, not a derived delete — the detail column is a LOB and loading
+     * every row just to remove it would pay for contents nobody reads.
+     */
+    @Modifying
+    @Query("delete from AuditEvent a where a.occurredAt < :cutoff")
+    int deleteByOccurredAtBefore(@Param("cutoff") Instant cutoff);
 }

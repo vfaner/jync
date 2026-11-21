@@ -8,7 +8,6 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.time.Instant;
@@ -156,15 +155,19 @@ class ChangeLogPagerViewTest {
     }
 
     @Test
-    void clearingKeepsTheFailureFilterInTheRedirect() throws Exception {
-        mvc.perform(post("/change-logs/clear")
+    void thePurgeCarriesTheFailureFilterScope() throws Exception {
+        when(changeLogService.purgeBefore(any(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq(true))).thenReturn(1);
+
+        mvc.perform(post("/change-logs/purge")
                         .with(org.springframework.security.test.web.servlet.request
                                 .SecurityMockMvcRequestPostProcessors.csrf())
+                        .param("date", java.time.LocalDate.now().minusDays(1).toString())
                         .param("failedOnly", "true").with(asAdmin()))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(redirectedUrl("/change-logs?failedOnly=true"));
-        // The hidden flag must reach the service: ignoring it wiped the whole log.
-        verify(changeLogService).clear(null, true);
+                .andExpect(status().isOk());
+        // The hidden flag must reach the service: ignoring it purged successes too.
+        verify(changeLogService).purgeBefore(any(), org.mockito.ArgumentMatchers.isNull(),
+                org.mockito.ArgumentMatchers.eq(true));
     }
 
     @Test

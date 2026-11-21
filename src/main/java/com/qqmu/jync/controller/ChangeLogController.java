@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
-import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.dto.Pager;
 import com.qqmu.jync.model.ChangeLog;
@@ -90,30 +89,40 @@ public class ChangeLogController {
         model.addAttribute("targetDatabaseName", ddlTaskService == null
                 ? null : ddlTaskService.targetDatabaseName(projectId));
         model.addAttribute("failedOnly", errorsOnly);
+        // The purge picker may not offer today: today's rows always survive a date purge.
+        model.addAttribute("purgeMaxDate",
+                com.qqmu.jync.util.LogPurgeDates.maxSelectable().toString());
         return "change-logs";
     }
 
     /**
-     * Clears change-log entries. When a project filter is active, only that project's logs
-     * are removed; otherwise the entire audit trail is wiped. Under the errors-only filter
-     * the clear removes just the failed entries the user is actually looking at.
+     * Date-based purge of change-log entries, scoped like the page: a project filter narrows
+     * to that project, the errors-only filter narrows to failed entries. The selected day is
+     * included; today always survives and open DDL tasks are never removed. Answers JSON so
+     * the modal can toast the localized count without a page round-trip.
      */
-    @PostMapping("/change-logs/clear")
-    public String clear(@RequestParam(required = false) Long projectId,
-                        @RequestParam(required = false, defaultValue = "false") Boolean failedOnly,
-                        RedirectAttributes flash) {
-        boolean failedOnlyFilter = Boolean.TRUE.equals(failedOnly);
-        changeLogService.clear(projectId, failedOnlyFilter);
-        flash.addFlashAttribute("message", "log.clear.success");
-        StringBuilder url = new StringBuilder("/change-logs");
-        boolean hasProject = projectId != null;
-        if (hasProject) {
-            url.append("?projectId=").append(projectId);
+    @PostMapping("/change-logs/purge")
+    @ResponseBody
+    public Map<String, Object> purge(@RequestParam("date") String date,
+                                     @RequestParam(required = false) Long projectId,
+                                     @RequestParam(required = false, defaultValue = "false")
+                                     Boolean failedOnly) {
+        java.time.LocalDate day;
+        try {
+            day = java.time.LocalDate.parse(date);
+        } catch (java.time.format.DateTimeParseException e) {
+            return Map.of("success", false, "message", text("log.purge.date.invalid"));
         }
-        if (failedOnlyFilter) {
-            url.append(hasProject ? '&' : '?').append("failedOnly=true");
+        try {
+            int removed = changeLogService.purgeBefore(day, projectId,
+                    Boolean.TRUE.equals(failedOnly));
+            return Map.of("success", true, "message", text("log.purge.success", removed));
+        } catch (IllegalArgumentException e) {
+            return Map.of("success", false, "message", text(e.getMessage()));
+        } catch (RuntimeException e) {
+            log.warn("Change-log purge failed: {}", e.toString());
+            return Map.of("success", false, "message", text("error.unexpected"));
         }
-        return "redirect:" + url;
     }
 
     /**
@@ -196,6 +205,18 @@ public class ChangeLogController {
         } catch (RuntimeException e) {
             log.warn("DDL task action failed unexpectedly: {}", e.toString());
             return Map.of("success", false, "message", text("error.unexpected"));
+        }
+    }
+
+    /** Localised sentence with {0}-style arguments, for counts in the AJAX toast. */
+    private String text(String key, Object... args) {
+        if (messageSource == null) {
+            return key;
+        }
+        try {
+            return messageSource.getMessage(key, args, LocaleContextHolder.getLocale());
+        } catch (NoSuchMessageException ignored) {
+            return key;
         }
     }
 

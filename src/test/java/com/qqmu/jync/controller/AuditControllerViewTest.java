@@ -98,7 +98,7 @@ class AuditControllerViewTest {
     }
 
     @Test
-    void thePageOffersNoWayToRemoveAnEntry() throws Exception {
+    void thePageOffersNoRowLevelRemovalOnlyTheAdminDatePurge() throws Exception {
         when(auditService.count()).thenReturn(1L);
         AuditEvent login = AuditEvent.of("admin", AuditAction.LOGIN,
                 "Signed in from 127.0.0.1");
@@ -109,10 +109,12 @@ class AuditControllerViewTest {
         String page = render();
 
         // The layout contributes exactly two POST forms (logout, password modal); the audit
-        // page itself must add none — no clear, no delete, no row action of any kind.
+        // page adds none — the date purge is a button + JSON fetch, not a form, and there is
+        // no per-row delete of any kind.
         int postForms = java.util.regex.Pattern.compile("method=\"post\"")
                 .matcher(page).results().mapToInt(m -> 1).sum();
         assertThat(postForms).isEqualTo(2);
         assertThat(page).doesNotContain("data-role=\"api-btn\"");
+        assertThat(page).contains("data-open-modal=\"log-purge-modal\"");
     }
 }

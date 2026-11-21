@@ -5,6 +5,9 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -14,8 +17,9 @@ import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.repository.ChangeLogRepository;
 
 /**
- * Clearing the change log erases history, so the clear itself must land in the append-only
- * audit trail — with the row count and the scope, which is all an investigator has left.
+ * Purging the change log erases history, so the purge itself must land in the admin audit
+ * trail — with the row count, the cutoff day and the scope, which is all an investigator has
+ * left once the rows are gone.
  */
 @ExtendWith(MockitoExtension.class)
 class ChangeLogServiceAuditTest {
@@ -23,29 +27,32 @@ class ChangeLogServiceAuditTest {
     @Mock private ChangeLogRepository repository;
     @Mock private AdminAuditService auditService;
 
+    private final LocalDate yesterday = LocalDate.now(ZoneId.systemDefault()).minusDays(1);
+
     @Test
-    void aFullClearAuditsTheTotalRowCount() {
-        when(repository.deleteAllBulkKeepingOpenDdlTasks()).thenReturn(42);
+    void anUnscopedPurgeAuditsTheTotalRowCountAndCutoff() {
+        when(repository.purgeBefore(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.isNull(), eq(false))).thenReturn(42);
         ChangeLogService service = new ChangeLogService(repository, auditService);
 
-        service.clear(null, false);
+        service.purgeBefore(yesterday, null, false);
 
-        verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
-                contains("42"));
-        verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
-                contains("@scope:all"));
+        verify(auditService).record(eq(AuditAction.CHANGELOG_PURGE), contains("|42|"));
+        verify(auditService).record(eq(AuditAction.CHANGELOG_PURGE),
+                contains("|" + yesterday + "|"));
+        verify(auditService).record(eq(AuditAction.CHANGELOG_PURGE), contains("@scope:all"));
     }
 
     @Test
-    void aProjectScopedClearAuditsTheProjectAndRowCount() {
-        when(repository.deleteByProjectIdKeepingOpenDdlTasks(7L)).thenReturn(3);
+    void aProjectScopedPurgeAuditsTheProjectAndRowCount() {
+        when(repository.purgeBefore(org.mockito.ArgumentMatchers.any(), eq(7L), eq(false)))
+                .thenReturn(3);
         ChangeLogService service = new ChangeLogService(repository, auditService);
 
-        service.clear(7L, false);
+        service.purgeBefore(yesterday, 7L, false);
 
-        verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
+        verify(auditService).record(eq(AuditAction.CHANGELOG_PURGE),
                 contains("@scope:project:7"));
-        verify(auditService).record(eq(AuditAction.CHANGELOG_CLEAR),
-                contains("3"));
+        verify(auditService).record(eq(AuditAction.CHANGELOG_PURGE), contains("|3|"));
     }
 }

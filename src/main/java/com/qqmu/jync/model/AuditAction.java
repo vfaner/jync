@@ -1,10 +1,11 @@
 package com.qqmu.jync.model;
 
 /**
- * The kinds of events the append-only admin audit trail records.
+ * The kinds of events the admin audit trail records.
  *
  * <p>Kept small on purpose: sign-ins, destructive or hard-to-attribute mutations, and the
- * clearing of the change log (which otherwise erases its own accountability).
+ * trimming of either log (which otherwise erases its own accountability). The trail is
+ * append-only by default; a date-based purge is itself one of these events.
  */
 public enum AuditAction {
     /** A form login that succeeded. */
@@ -27,6 +28,10 @@ public enum AuditAction {
     DB_DELETE,
     /** Change-log history was cleared. */
     CHANGELOG_CLEAR,
+    /** Change-log history on or before a chosen day was purged (open DDL tasks kept). */
+    CHANGELOG_PURGE,
+    /** Audit history on or before a chosen day was purged by an administrator. */
+    AUDIT_PURGE,
     /** A diagnostics bundle was exported, including logs and configuration shape. */
     DIAGNOSTICS_EXPORT,
     /** A Redis cache target was created or updated. */

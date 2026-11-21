@@ -52,31 +52,28 @@ public class ChangeLogService {
     }
 
     /**
-     * Clears change-log entries. With a project id only that project's logs are removed;
-     * with null the entire audit trail is wiped. When {@code failedOnly} is set — the
-     * errors-only filter is active — only failed entries go, in the same scope.
+     * Removes change-log entries on or before {@code day} (the whole selected day included),
+     * scoped like the page the operator is looking at: a project id narrows to that project,
+     * {@code failedOnly} narrows to failed entries. Open skipped-DDL tasks are work, not
+     * history, and survive every purge; today's entries always survive, so a date purge can
+     * never wipe the log in one go — there is deliberately no clear-all.
      *
-     * <p>Because this erases history, the act itself is written to the append-only admin
-     * audit trail with the row count and scope — the one record a clear can never remove.
+     * <p>Because this erases history, the act itself is written to the admin audit trail with
+     * the row count, cutoff and scope — the one record a purge can never remove.
+     *
+     * @return how many entries were removed
+     * @throws IllegalArgumentException {@code log.purge.date.invalid} for a null/too-new day
      */
     @Transactional
-    public void clear(Long projectId, boolean failedOnly) {
-        int removed;
-        if (failedOnly) {
-            removed = projectId != null
-                    ? repository.deleteByProjectIdAndSuccessFalse(projectId)
-                    : repository.deleteAllSuccessFalse();
-        } else {
-            // Not deleteByProjectId: that unfiltered delete exists for project deletion,
-            // and reuse here also wiped the DDL tasks still waiting for an administrator.
-            removed = projectId != null
-                    ? repository.deleteByProjectIdKeepingOpenDdlTasks(projectId)
-                    : repository.deleteAllBulkKeepingOpenDdlTasks();
-        }
-        auditService.record(AuditAction.CHANGELOG_CLEAR,
-                AuditDetail.of("audit.detail.changelogClear", String.valueOf(removed),
+    public int purgeBefore(java.time.LocalDate day, Long projectId, boolean failedOnly) {
+        java.time.Instant cutoff = com.qqmu.jync.util.LogPurgeDates.cutoffFor(day);
+        int removed = repository.purgeBefore(cutoff, projectId, failedOnly);
+        auditService.record(AuditAction.CHANGELOG_PURGE,
+                AuditDetail.of("audit.detail.changelogPurge", String.valueOf(removed),
+                        day.toString(),
                         failedOnly ? "@failedOnly:true" : "@failedOnly:false",
                         projectId != null
                                 ? "@scope:project:" + projectId : "@scope:all"));
+        return removed;
     }
 }

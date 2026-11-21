@@ -42,13 +42,11 @@
                     th:disabled="${pager.page > 1}"
                     th:title="${pager.page > 1} ? #{log.refresh.firstPageOnly} : null">
                 <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{log.refresh.auto}">Auto</span></button>
-            <form method="post" th:if="${isAdmin}" th:action="@{/change-logs/clear}"
-                  th:data-confirm="#{log.clear.confirm}">
-                <input type="hidden" name="projectId" th:value="${selectedProjectId}">
-                <input type="hidden" name="failedOnly" th:if="${failedOnly}" value="true">
-                <button type="submit" class="btn btn-ghost btn-warn">
-                    <svg class="ico"><use href="#trash"/></svg><span th:text="#{log.clear}">Clear</span></button>
-            </form>
+            <!--/* 没有「清空」：删除只能按日期选，且今天的记录永远留下。范围跟随当前
+                   筛选（项目 / 仅失败），由弹窗里的隐藏域带给服务端。 */-->
+            <button type="button" class="btn btn-ghost btn-warn" th:if="${isAdmin}"
+                    data-open-modal="log-purge-modal">
+                <svg class="ico"><use href="#trash"/></svg><span th:text="#{log.purge}">Delete by date</span></button>
         </div>
     </div>
 
@@ -165,6 +163,42 @@
                         th:text="#{log.ddl.retry}">Replay missing rows</button>
                 <button type="button" class="btn btn-primary btn-sm" data-role="ddl-execute"
                         th:text="#{log.ddl.execute}">Execute on target</button>
+            </div>
+        </div>
+    </div>
+
+
+    <!--/* 按日期删除弹窗：通用开合走 app.js 的 data-open/close-modal，提交与提示在
+           bindLogPurge 里；截止日期上限由服务端给（昨天），今天永远删不到。 */-->
+    <div class="modal" id="log-purge-modal" aria-hidden="true" role="dialog" aria-modal="true"
+         th:if="${isAdmin}" th:attr="data-purge-url=@{/change-logs/purge}">
+        <div class="modal-mask" data-close-modal="log-purge-modal"></div>
+        <div class="modal-dialog" style="max-width:460px">
+            <button type="button" class="modal-close" data-close-modal="log-purge-modal"
+                    th:aria-label="#{common.cancel}">×</button>
+            <div class="modal-head">
+                <h3 th:text="#{log.purge.title}">Delete logs</h3>
+            </div>
+            <div class="preview-body" style="text-align:left;border:none;">
+                <p class="help small muted" th:text="#{log.purge.hint}">Deletes records on or
+                    before the selected date; today is always kept.</p>
+                <p class="help small muted" th:text="#{log.purge.ddlHint}">Open DDL tasks are
+                    never deleted.</p>
+                <div class="field">
+                    <label for="purge-date" th:text="#{log.purge.date}">Cutoff date</label>
+                    <input type="date" id="purge-date" class="input" data-role="purge-date"
+                           th:max="${purgeMaxDate}">
+                </div>
+                <input type="hidden" name="projectId" data-purge-scope
+                       th:value="${selectedProjectId}">
+                <input type="hidden" name="failedOnly" data-purge-scope
+                       th:if="${failedOnly}" value="true">
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-ghost btn-sm"
+                        data-close-modal="log-purge-modal" th:text="#{common.cancel}">Cancel</button>
+                <button type="button" class="btn btn-warn btn-sm" data-role="purge-confirm"
+                        th:text="#{log.purge.confirm}">Delete</button>
             </div>
         </div>
     </div>

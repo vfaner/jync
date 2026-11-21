@@ -564,11 +564,16 @@ services.
 
 ## Audit log
 
-Logs → Audit is append-only: no account, including the administrator, can edit or delete rows. It
-records login success and failure with source, project and connection create/update/delete, force
-unlock, capture-strategy switches, CDC baseline rebuilds, change-log cleanup, dedicated migration
-and ETL writes, config-package import/export, diagnostics exports and AI assistant questions, each
-with time, user, action and detail. Filter by action or user to reconstruct who changed what.
+Logs → Audit log is append-only by default: no account can edit rows. An administrator may purge
+by date (everything on or before the selected day; today's rows always survive, so there is no
+clear-all), and the purge itself is recorded as a new audit event (actor, cutoff, count) — the
+trim can never erase its own trace. It records login success and failure with source, project and
+connection create/update/delete, force unlock, capture-strategy switches, CDC baseline rebuilds,
+date purges of either log, dedicated migration and ETL writes, config-package import/export,
+diagnostics exports and AI assistant questions, each with time, user, action and detail. Filter by
+action or user to reconstruct who changed what. Logs → Change log offers the same date-based
+deletion scoped to the current filter (project / errors only); open DDL tasks are pending work and
+are never deleted, and sync.change-log-retention-days prunes automatically as a backstop.
 
 ## Diagnostics bundle
 

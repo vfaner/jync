@@ -12,9 +12,10 @@ import com.qqmu.jync.repository.AuditEventRepository;
 import com.qqmu.jync.util.CurrentActor;
 
 /**
- * Writes to — and reads from — the append-only admin audit trail.
+ * Writes to — and reads from — the admin audit trail.
  *
- * <p>There is intentionally no update or delete here; see
+ * <p>Append-only by default: there is no update, and the only delete is the administrator's
+ * explicit date-based {@link #purgeBefore}, which keeps today's rows and records itself. See
  * {@link AuditEventRepository}. Mutation callers record inside their own transaction, so an
  * audit row stands or falls with the change it describes: a rolled-back delete leaves no
  * claim that it happened.
@@ -61,6 +62,23 @@ public class AdminAuditService {
     public Page<AuditEvent> page(int page, int size) {
         return repository.findAll(
                 PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "id")));
+    }
+
+    /**
+     * Removes audit events on or before {@code day} (the whole selected day included) and
+     * records the purge itself — actor, cutoff and row count — so the trim is accountable.
+     * Today's events always survive; a day of today or later is refused.
+     *
+     * @return how many events were removed
+     * @throws IllegalArgumentException {@code log.purge.date.invalid} for a null/too-new day
+     */
+    @Transactional
+    public int purgeBefore(java.time.LocalDate day) {
+        java.time.Instant cutoff = com.qqmu.jync.util.LogPurgeDates.cutoffFor(day);
+        int removed = repository.deleteByOccurredAtBefore(cutoff);
+        record(AuditAction.AUDIT_PURGE, com.qqmu.jync.service.audit.AuditDetail.of(
+                "audit.detail.auditPurge", String.valueOf(removed), day.toString()));
+        return removed;
     }
 
     /** Strips CR/LF and control characters, trims, caps the length; falls back when blank. */

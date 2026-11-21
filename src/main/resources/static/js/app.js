@@ -3852,6 +3852,49 @@
    * 用户名下拉：点击展开/收起，点菜单外或 Esc 收起；
    * 菜单里的退出项提交隐藏表单（CSRF 隐藏域由服务端渲染）。
    */
+  /**
+   * 变更日志 / 审计日志共用的「按日期删除」弹窗。开合走通用 data-open/close-modal；
+   * 这里只负责提交：日期 + 弹窗自带的范围隐藏域 → 服务端 JSON（已本地化的条数文案），
+   * 成功后提示并刷新列表。截止日期上限由服务端渲染（昨天），今天永远删不到。
+   */
+  function bindLogPurge() {
+    var modal = document.getElementById('log-purge-modal');
+    if (!modal) return;
+    var url = modal.getAttribute('data-purge-url');
+    var dateInput = modal.querySelector('[data-role="purge-date"]');
+    var confirmBtn = modal.querySelector('[data-role="purge-confirm"]');
+    if (!url || !dateInput || !confirmBtn) return;
+    var busy = false;
+    confirmBtn.addEventListener('click', function () {
+      if (busy) return;
+      var day = dateInput.value;
+      if (!day) { dateInput.focus(); return; }
+      var body = new URLSearchParams();
+      body.set('date', day);
+      modal.querySelectorAll('input[data-purge-scope]').forEach(function (input) {
+        if (input.value) body.set(input.name, input.value);
+      });
+      busy = true;
+      confirmBtn.disabled = true;
+      postJson(url, body).then(function (res) {
+        busy = false;
+        confirmBtn.disabled = false;
+        if (res && res.success) {
+          setModalOpen('log-purge-modal', false);
+          toast(res.message, 'ok');
+          // 列表与计数都变了；稍等让提示被看见再刷新。
+          window.setTimeout(function () { window.location.reload(); }, 900);
+        } else {
+          toast((res && res.message) || t('error.unexpected'), 'danger');
+        }
+      }).catch(function () {
+        busy = false;
+        confirmBtn.disabled = false;
+        toast(t('error.network'), 'danger');
+      });
+    });
+  }
+
   function bindUserMenu() {
     var groups = document.querySelectorAll('.nav-group');
 
@@ -4470,6 +4513,7 @@
     bindDatabaseHealth();
     bindDonate();
     bindGenericModals();
+    bindLogPurge();
     bindNavUpdateBadge();
     bindUpdatePrompt();
     bindArtifactDismiss();

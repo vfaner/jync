@@ -263,6 +263,24 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     int deleteAllBulkKeepingOpenDdlTasks();
 
     /**
+     * The date-based purge's scope: an optional project and an optional errors-only filter,
+     * mirroring the page the operator is looking at, plus the same open-DDL-task protection
+     * every other removal path uses. Null project / false failedOnly mean "no restriction".
+     */
+    String PURGE_SCOPE = " and (:projectId is null or c.projectId = :projectId)"
+            + " and (:failedOnly = false or c.success = false)" + CLEARABLE;
+
+    /**
+     * Removes entries on or before the cutoff day (the caller passes the start of the next
+     * day), in bulk and keeping open DDL tasks. Returns the number of rows removed so the
+     * service can audit the real count.
+     */
+    @Modifying
+    @Query("delete from ChangeLog c where c.occurredAt < :cutoff" + PURGE_SCOPE)
+    int purgeBefore(@Param("cutoff") Instant cutoff, @Param("projectId") Long projectId,
+                    @Param("failedOnly") boolean failedOnly);
+
+    /**
      * Retention pruning for the audit trail.
      *
      * <p>A bulk update/delete query requires a transaction, and the caller (the pruner) must
