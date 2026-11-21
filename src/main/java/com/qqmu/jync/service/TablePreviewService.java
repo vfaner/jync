@@ -224,9 +224,20 @@ public class TablePreviewService {
             // TDengine's driver reports VARCHAR and BINARY identically and answers getObject
             // with byte[], so a text cell would show as "<binary N bytes>". Text columns are
             // read through getString; every other source keeps getObject.
-            Object value = sourceType == DatabaseType.TDENGINE
-                    && meta.getColumnType(i) == java.sql.Types.VARCHAR
-                    ? rs.getString(i) : rs.getObject(i);
+            int colType = meta.getColumnType(i);
+            Object value;
+            if (sourceType == DatabaseType.TDENGINE && colType == java.sql.Types.VARCHAR) {
+                value = rs.getString(i);
+            } else if (sourceType != null
+                    && sourceType.getFamily() == DatabaseType.DialectFamily.MYSQL
+                    && (colType == java.sql.Types.TIMESTAMP
+                        || colType == java.sql.Types.TIMESTAMP_WITH_TIMEZONE)) {
+                // 与同步读取一致：MySQL TIMESTAMP 按墙钟读，避免 getTimestamp 在
+                // serverTimezone=UTC 下按连接时区重解而偏移（预览曾显示 05:06、库存 21:06）。
+                value = rs.getString(i);
+            } else {
+                value = rs.getObject(i);
+            }
             // Connector/J with tinyInt1isBit (the default) reports MySQL TINYINT(1) as BIT
             // and answers getObject with Boolean, so a status cell holding 5 renders as
             // "true" — the modal would hide whether the sync wrote the right value at all.

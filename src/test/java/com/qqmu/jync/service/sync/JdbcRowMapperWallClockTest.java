@@ -41,9 +41,11 @@ import com.qqmu.jync.service.monitor.CursorStrategy;
  *
  * <p>{@code getObject(idx, LocalDateTime.class)} hands back the stored wall clock
  * unchanged, and {@code setObject(idx, LocalDateTime)} writes it back unchanged. These
- * tests pin that both the row path and the cursor/watermark path use it, and that
- * zone-aware columns (MySQL {@code TIMESTAMP}, {@code TIMESTAMPTZ}) keep their instant
- * reads.
+ * tests pin that both the row path and the cursor/watermark path use it. MySQL-protocol
+ * {@code TIMESTAMP} is read as the session wall clock too (getString): getTimestamp
+ * reinterprets it in connectionTimeZone and shifts it under serverTimezone=UTC. Only
+ * genuinely zone-aware types ({@code TIMESTAMPTZ}, {@code TIMESTAMP WITH TIME ZONE})
+ * keep their instant reads.
  */
 class JdbcRowMapperWallClockTest {
 
@@ -100,18 +102,20 @@ class JdbcRowMapperWallClockTest {
     }
 
     @Test
-    void aMysqlTimestampColumnKeepsItsInstantRead() throws Exception {
-        // MySQL 的 TIMESTAMP 自带时区语义,getTimestamp 的瞬时读取是正确行为。
-        Timestamp instant = Timestamp.valueOf("2026-10-13 12:34:56");
+    void aMysqlTimestampColumnIsReadAsTheSessionWallClock() throws Exception {
+        // MySQL TIMESTAMP 经 getTimestamp 会在 serverTimezone=UTC 下按连接时区重解墙钟,
+        // 服务器在 +8 时区时整整偏 8 小时(预览显示 05:06、库存 21:06,内容校验逐行误报)。
+        // getString 返回服务器显示的墙钟字面量,目标 DATETIME 原样落库——与 DATETIME 分支一致,
+        // 且在任意连接时区参数下都正确(真库探针验证)。
         ResultSet rs = mockRow(Types.TIMESTAMP, "TIMESTAMP");
-        when(rs.getTimestamp(1)).thenReturn(instant);
+        when(rs.getString(1)).thenReturn("2026-10-12 21:06:26");
         when(rs.wasNull()).thenReturn(false);
 
         Map<String, Object> row = JdbcRowMapper.readRow(rs, List.of("c"),
                 List.of(Types.TIMESTAMP), List.of("TIMESTAMP"), DatabaseType.MYSQL);
 
-        assertThat(row.get("c")).isEqualTo(instant);
-        verify(rs, never()).getObject(1, LocalDateTime.class);
+        assertThat(row.get("c")).isEqualTo("2026-10-12 21:06:26");
+        verify(rs, never()).getTimestamp(1);
     }
 
     @Test

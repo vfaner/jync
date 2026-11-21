@@ -362,10 +362,19 @@ public final class JdbcRowMapper {
             // bind side casts it explicitly (?::timestamp on PG-family targets).
             return rs.getString(idx);
         }
-        if (isZoneAwareTimestampName(typeName)
-                || (sourceType != null
-                        && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType
-                                .DialectFamily.MYSQL)) {
+        if (sourceType != null
+                && sourceType.getFamily() == com.qqmu.jync.model.DatabaseType
+                        .DialectFamily.MYSQL) {
+            // MySQL-protocol TIMESTAMP carries the session wall clock. getTimestamp
+            // reinterprets it in connectionTimeZone (the templates pin serverTimezone=UTC),
+            // shifting it by the session offset when the server runs in another zone — the
+            // preview showed 05:06 for a stored 21:06 and the content audit flagged every
+            // row. getString returns the literal the server displayed; the target DATETIME
+            // binds it verbatim, exactly like the DATETIME branch above. Probed correct
+            // under every connection tz setting.
+            return rs.getString(idx);
+        }
+        if (isZoneAwareTimestampName(typeName)) {
             return rs.getTimestamp(idx);
         }
         return readWallClock(rs, idx);
