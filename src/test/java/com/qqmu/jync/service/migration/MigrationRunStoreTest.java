@@ -34,10 +34,12 @@ class MigrationRunStoreTest {
     @Mock private MigrationTaskRepository taskRepository;
 
     private MigrationRunStore store;
+    private MigrationNodeId nodeId;
 
     @BeforeEach
     void setUp() {
-        store = new MigrationRunStore(runRepository, taskRepository);
+        nodeId = new MigrationNodeId();
+        store = new MigrationRunStore(runRepository, taskRepository, nodeId);
     }
 
     @Test
@@ -51,6 +53,8 @@ class MigrationRunStoreTest {
         assertThat(run.getStatus()).isEqualTo(MigrationRunStatus.RUNNING);
         assertThat(run.getTriggerType()).isEqualTo(MigrationRunTrigger.SCHEDULE);
         assertThat(run.getStartedAt()).isNotNull();
+        // The owner is what lets another node's recovery leave a live run alone.
+        assertThat(run.getRunNode()).isEqualTo(nodeId.id());
     }
 
     @Test

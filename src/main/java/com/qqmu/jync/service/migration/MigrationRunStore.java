@@ -29,11 +29,14 @@ public class MigrationRunStore {
 
     private final MigrationRunRepository runRepository;
     private final MigrationTaskRepository taskRepository;
+    private final MigrationNodeId nodeId;
 
     public MigrationRunStore(MigrationRunRepository runRepository,
-                             MigrationTaskRepository taskRepository) {
+                             MigrationTaskRepository taskRepository,
+                             MigrationNodeId nodeId) {
         this.runRepository = runRepository;
         this.taskRepository = taskRepository;
+        this.nodeId = nodeId;
     }
 
     @Transactional
@@ -42,6 +45,8 @@ public class MigrationRunStore {
         run.setMigrationTaskId(taskId);
         run.setStatus(MigrationRunStatus.RUNNING);
         run.setTriggerType(trigger);
+        // Which JVM owns it: startup recovery on another node must leave this row alone.
+        run.setRunNode(nodeId.id());
         run.setStartedAt(Instant.now());
         return runRepository.save(run);
     }

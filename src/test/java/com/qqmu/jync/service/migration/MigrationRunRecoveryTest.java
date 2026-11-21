@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.time.Instant;
@@ -30,10 +31,31 @@ class MigrationRunRecoveryTest {
     @Mock private MigrationTaskRepository taskRepository;
 
     private MigrationRunRecovery recovery;
+    private MigrationNodeId nodeId;
 
     @BeforeEach
     void setUp() {
-        recovery = new MigrationRunRecovery(runRepository, taskRepository);
+        nodeId = new MigrationNodeId();
+        recovery = new MigrationRunRecovery(runRepository, taskRepository, nodeId);
+    }
+
+    /**
+     * In a multi-node deployment the row may belong to another live node; rewriting it
+     * INTERRUPTED would mark a running migration failed and freeze its progress counter.
+     */
+    @Test
+    void aRunOwnedByAnotherLiveNodeIsLeftAlone() {
+        MigrationRun foreign = running(2L, 9L);
+        foreign.setRunNode("another-node");
+        when(runRepository.findByStatus(MigrationRunStatus.RUNNING))
+                .thenReturn(List.of(foreign));
+
+        int recovered = recovery.recoverInterrupted();
+
+        assertThat(recovered).isZero();
+        assertThat(foreign.getStatus()).isEqualTo(MigrationRunStatus.RUNNING);
+        verify(runRepository, never()).save(any());
+        verifyNoInteractions(taskRepository);
     }
 
     @Test

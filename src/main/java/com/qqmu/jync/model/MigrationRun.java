@@ -52,6 +52,14 @@ public class MigrationRun {
     @Column(name = "trigger_type", nullable = false, length = 16)
     private MigrationRunTrigger triggerType;
 
+    /**
+     * The JVM instance that started this run. Startup recovery marks a RUNNING row
+     * INTERRUPTED only when it belongs to this node (or predates the column, so it cannot
+     * belong to anyone): another node's live run must not be rewritten as failed.
+     */
+    @Column(name = "run_node", length = 64)
+    private String runNode;
+
     @Column(name = "started_at", nullable = false)
     private Instant startedAt;
 
