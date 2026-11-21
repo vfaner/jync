@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -70,6 +71,34 @@ class EsToEasysearchEngineTest {
         connection.setBaseUrl(url);
         connection.setAuthType(MigrationConnectionAuthType.NONE);
         return connection;
+    }
+
+    /**
+     * The scroll page is buffered whole before the bulk budget can split it, so its size
+     * must follow the average document size — a 1000-document page of 1 MB documents would
+     * otherwise be a multi-gigabyte allocation.
+     */
+    @Test
+    void theScrollPageIsCappedByTheAverageDocumentSize() throws Exception {
+        SearchHttpClient client = mock(SearchHttpClient.class);
+        EsToEasysearchOptions option = EsToEasysearchOptions.parse((ObjectNode) JSON.readTree(
+                "{\"batchSize\":1000,\"maxBulkBytes\":10485760}"));
+        // 100 documents, 100 MiB total -> 1 MiB average -> a page of ~10 documents.
+        when(client.get("/orders/_stats")).thenReturn(JSON.readTree(
+                "{\"_all\":{\"total\":{\"docs\":{\"count\":100},"
+                        + "\"store\":{\"size_in_bytes\":104857600}}}}"));
+        assertThat(EsToEasysearchEngine.scrolledPageSize(client, "/orders", option))
+                .isEqualTo(10);
+    }
+
+    @Test
+    void anUnavailableStatsEndpointKeepsTheConfiguredBatchSize() throws Exception {
+        SearchHttpClient client = mock(SearchHttpClient.class);
+        EsToEasysearchOptions option = EsToEasysearchOptions.parse((ObjectNode) JSON.readTree(
+                "{\"batchSize\":500}"));
+        when(client.get("/orders/_stats")).thenThrow(new IllegalStateException("403"));
+        assertThat(EsToEasysearchEngine.scrolledPageSize(client, "/orders", option))
+                .isEqualTo(500);
     }
 
     private static JsonNode options(String overrides) throws Exception {

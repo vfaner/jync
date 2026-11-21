@@ -3,6 +3,12 @@ package com.qqmu.jync.service.migration.connection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+import jakarta.annotation.PreDestroy;
 
 import org.bson.Document;
 import org.springframework.stereotype.Component;
@@ -23,8 +29,26 @@ public class MongoConnectionAdapter implements MigrationConnectionKindAdapter {
 
     private final MongoMigrationClientFactory clientFactory;
 
+    /**
+     * Discovery used to call {@code estimatedDocumentCount()} once per collection in
+     * sequence: a database with a few thousand collections paid a few thousand round trips
+     * before the page rendered. The count is a metadata read and the driver client is
+     * thread-safe, so a small fixed pool turns that into a handful of batches. Bounded on
+     * purpose — this must not become a load generator against a production server.
+     */
+    private final ExecutorService countPool = Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "mongo-discovery-count");
+        t.setDaemon(true);
+        return t;
+    });
+
     public MongoConnectionAdapter(MongoMigrationClientFactory clientFactory) {
         this.clientFactory = clientFactory;
+    }
+
+    @PreDestroy
+    void shutdown() {
+        countPool.shutdownNow();
     }
 
     @Override
@@ -114,19 +138,43 @@ public class MongoConnectionAdapter implements MigrationConnectionKindAdapter {
         try (MongoClient client = clientFactory.open(connection)) {
             MongoDatabase database = client.getDatabase(clientFactory.database(connection));
             List<String> names = database.listCollectionNames().into(new ArrayList<>());
-            List<MigrationDiscoveryItem> items = new ArrayList<>();
+            List<String> matched = new ArrayList<>();
             for (String name : names) {
                 if (name.startsWith("system.") && !systemAsked) {
                     continue;
                 }
-                if (!MigrationGlob.matchesAny(name, effective)) {
-                    continue;
+                if (MigrationGlob.matchesAny(name, effective)) {
+                    matched.add(name);
                 }
-                items.add(new MigrationDiscoveryItem(name,
-                        database.getCollection(name).estimatedDocumentCount(),
+            }
+            // Counts in parallel, results kept in the names' order so the page is stable.
+            List<Future<Long>> counts = new ArrayList<>(matched.size());
+            for (String name : matched) {
+                counts.add(countPool.submit(
+                        () -> database.getCollection(name).estimatedDocumentCount()));
+            }
+            List<MigrationDiscoveryItem> items = new ArrayList<>(matched.size());
+            for (int i = 0; i < matched.size(); i++) {
+                items.add(new MigrationDiscoveryItem(matched.get(i), awaitCount(counts.get(i)),
                         "", "", ""));
             }
             return items;
+        }
+    }
+
+    /** The count from one pool task, rethrowing the driver's own failure unchanged. */
+    private static long awaitCount(Future<Long> count) {
+        try {
+            return count.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("MongoDB discovery was interrupted", e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException(cause);
         }
     }
 

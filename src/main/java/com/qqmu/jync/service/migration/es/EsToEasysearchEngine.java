@@ -231,7 +231,7 @@ final class EsToEasysearchEngine {
                                       MigrationCancellation cancellation,
                                       Progress counters, MigrationProgressListener progress) {
         ObjectNode query = JSON.createObjectNode();
-        query.put("size", options.getBatchSize());
+        query.put("size", scrolledPageSize(sourceClient, sourcePath, options));
         ArrayNode sort = query.putArray("sort");
         sort.add("_doc");
         query.put("_source", true);
@@ -346,6 +346,31 @@ final class EsToEasysearchEngine {
 
     private static long count(SearchHttpClient client, String indexPath) {
         return client.get(indexPath + "/_count").path("count").asLong(0);
+    }
+
+    /**
+     * The scroll page size. One page is buffered whole — the response string AND its parsed
+     * JSON tree — before {@code maxBulkBytes} can split the target writes, so the configured
+     * batch size alone does not bound memory: 1000 documents of 1 MB each is a 2 GB page.
+     * The index stats give the average document size, and the page is capped at roughly one
+     * bulk budget's worth. Stats that are unavailable (permissions, version, empty index)
+     * fall back to the configured size.
+     */
+    static int scrolledPageSize(SearchHttpClient client, String indexPath,
+                                EsToEasysearchOptions options) {
+        try {
+            JsonNode total = client.get(indexPath + "/_stats").path("_all").path("total");
+            long bytes = total.path("store").path("size_in_bytes").asLong(0);
+            long docs = total.path("docs").path("count").asLong(0);
+            if (bytes > 0 && docs > 0) {
+                long average = Math.max(1, bytes / docs);
+                long cap = Math.max(1, options.getMaxBulkBytes() / average);
+                return (int) Math.max(1, Math.min(options.getBatchSize(), cap));
+            }
+        } catch (RuntimeException e) {
+            // Discovery must not fail because a stats endpoint is restricted.
+        }
+        return options.getBatchSize();
     }
 
     /** Returns how many sampled documents have a target {@code _source} unlike the source's. */
