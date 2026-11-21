@@ -73,6 +73,9 @@ import com.qqmu.jync.service.auth.oa.OaAuthConfigService;
 @Service
 public class ConfigImportService {
 
+    /** Both singleton configuration rows are created with this id; there is no sequence. */
+    private static final long SINGLETON_ID = 1L;
+
     /** What the page reports after a successful import. */
     public record ImportResult(int databases,
                                int redisTargets,
@@ -513,10 +516,10 @@ public class ConfigImportService {
     }
 
     private void saveAlertConfig(ConfigPackageDtos.AlertConfigDto dto, String webhook) {
-        AlertConfig config = alertConfig.findAll().stream().findFirst().orElseGet(() -> {
+        AlertConfig config = alertConfig.findById(SINGLETON_ID).orElseGet(() -> {
             // The singleton's id is assigned by hand; there is no sequence to generate it.
             AlertConfig fresh = new AlertConfig();
-            fresh.setId(1L);
+            fresh.setId(SINGLETON_ID);
             return fresh;
         });
         config.setEnabled(dto.enabled());
@@ -537,9 +540,9 @@ public class ConfigImportService {
     }
 
     private void saveOaAuthConfig(ConfigPackageDtos.OaAuthConfigDto dto, String secret) {
-        OaAuthConfig config = oaAuthConfig.findAll().stream().findFirst().orElseGet(() -> {
+        OaAuthConfig config = oaAuthConfig.findById(SINGLETON_ID).orElseGet(() -> {
             OaAuthConfig fresh = new OaAuthConfig();
-            fresh.setId(1L);
+            fresh.setId(SINGLETON_ID);
             return fresh;
         });
         config.setEnabled(dto.enabled());

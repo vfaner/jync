@@ -67,6 +67,9 @@ import com.qqmu.jync.util.CryptoUtil;
 @Service
 public class ConfigExportService {
 
+    /** Both singleton configuration rows are created with this id; there is no sequence. */
+    private static final long SINGLETON_ID = 1L;
+
     /** What the caller writes to the browser, plus the figures the audit entry records. */
     public record ConfigPackage(byte[] bytes,
                                 String filename,
@@ -260,10 +263,10 @@ public class ConfigExportService {
                 etlTasks.findAll().stream().map(ConfigExportService::toDto).toList(),
                 migrationTasks.findAll().stream().map(ConfigExportService::toDto).toList(),
                 aiProviders.findAll().stream().map(ConfigExportService::toDto).toList(),
-                alertConfig.findAll().stream().findFirst()
+                alertConfig.findById(SINGLETON_ID)
                         .map(ConfigExportService::toDto)
                         .orElseGet(ConfigExportService::defaultAlertConfig),
-                oaAuthConfig.findAll().stream().findFirst()
+                oaAuthConfig.findById(SINGLETON_ID)
                         .map(ConfigExportService::toDto)
                         .orElseGet(() -> toDto(new OaAuthConfig())),
                 users.findAll().stream().map(ConfigExportService::toDto).toList(),

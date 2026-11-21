@@ -12,7 +12,6 @@ import org.springframework.stereotype.Component;
 import com.qqmu.jync.config.MetricsProperties;
 import com.qqmu.jync.model.AppMetricSample;
 import com.qqmu.jync.model.Project;
-import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.model.TaskMetricSample;
 import com.qqmu.jync.model.TaskStatus;
@@ -151,10 +150,9 @@ public class MetricsSampler {
     }
 
     private TaskMetricSample taskSample(Long projectId, Instant now) {
-        List<SyncProgress> progress = progressRepository.findByProjectId(projectId);
-        long progressRows = progress.stream()
-                .mapToLong(p -> p.getRowsSyncedTotal() == null ? 0L : p.getRowsSyncedTotal())
-                .sum();
+        // Summed in SQL: loading every progress row pulled its @Lob cursor value once a
+        // minute per project just to add up rowsSyncedTotal.
+        long progressRows = progressRepository.sumRowsSyncedByProject(projectId);
         // A CDC consumer's changes never reach SyncProgress: the polling engine writes the
         // baseline and then stops, so those rows are the only record of what CDC delivered —
         // without them a streaming project charts as permanently idle. A consumer owned by

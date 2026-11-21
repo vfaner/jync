@@ -24,7 +24,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import com.qqmu.jync.config.MetricsProperties;
 import com.qqmu.jync.model.Project;
-import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.model.TaskMetricSample;
 import com.qqmu.jync.model.TaskStatus;
@@ -71,7 +70,7 @@ class MetricsSamplerTaskTest {
     void theRowDeltaIsTheDifferenceFromThePreviousSample() {
         Project project = project(1L);
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(progress(1L, 160L)));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(160L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.of(previous(1L, 100L)));
 
@@ -86,7 +85,7 @@ class MetricsSamplerTaskTest {
     @Test
     void theFirstSampleHasNoDelta() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(progress(1L, 160L)));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(160L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.empty());
 
@@ -100,7 +99,7 @@ class MetricsSamplerTaskTest {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
         // The baseline wrote 100 rows into the progress table; everything after it is
         // applied by the CDC consumer and never touches SyncProgress.
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(progress(1L, 100L)));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(100L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.of(previous(1L, 100L)));
         CdcRuntimeStats stats = runningConsumer(25L);
@@ -115,13 +114,10 @@ class MetricsSamplerTaskTest {
 
     @Test
     void aRunningCdcConsumerMeasuresLagFromItsOwnLastEvent() {
-        // The progress row still carries the baseline's last change, ten minutes old. For a
-        // CDC project that timestamp never moves again, so trusting it would report a healthy
-        // stream as permanently stalled.
+        // For a CDC project the polling baseline's timestamps never move again; lag must come
+        // from the consumer's own last event, not from a frozen progress/explicit pass time.
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        SyncProgress stale = progress(1L, 100L);
-        stale.setLastSyncTime(NOW.minus(Duration.ofMinutes(10)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(stale));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(100L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.empty());
         when(cdcConsumerManager.statsFor(1L)).thenReturn(runningConsumer(0L));
@@ -135,7 +131,7 @@ class MetricsSamplerTaskTest {
     @Test
     void aDisconnectedCdcConsumerLeavesLagEmpty() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(progress(1L, 100L)));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(100L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.empty());
         CdcRuntimeStats stats = new CdcRuntimeStats();
@@ -156,9 +152,7 @@ class MetricsSamplerTaskTest {
     @Test
     void aRunningPollingTaskMeasuresLagFromItsLastSuccessfulCycle() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        SyncProgress idle = progress(1L, 100L);
-        idle.setLastSyncTime(NOW.minus(Duration.ofHours(10)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(idle));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(100L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.empty());
         SyncTask task = new SyncTask();
@@ -176,9 +170,7 @@ class MetricsSamplerTaskTest {
         // Nothing is polling, so "how long since the last cycle" is not a delay reading —
         // it is just the age of a stopped engine. The lag card must stay empty.
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        SyncProgress idle = progress(1L, 100L);
-        idle.setLastSyncTime(NOW.minus(Duration.ofHours(10)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(idle));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(100L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.empty());
         SyncTask task = new SyncTask();
@@ -196,9 +188,7 @@ class MetricsSamplerTaskTest {
         // Just started: the first cycle has not finished, so there is nothing to measure
         // from — the stale progress timestamp must not stand in for it.
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        SyncProgress idle = progress(1L, 100L);
-        idle.setLastSyncTime(NOW.minus(Duration.ofHours(10)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(idle));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(100L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.empty());
         SyncTask task = new SyncTask();
@@ -216,7 +206,7 @@ class MetricsSamplerTaskTest {
         // drops back to zero. Nothing was un-synced; the sample that sees the drop cannot tell
         // how many rows the reset hid, so it must leave a gap rather than chart a negative bar.
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(progress(1L, 40L)));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(40L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.of(previous(1L, 100L)));
 
@@ -230,7 +220,7 @@ class MetricsSamplerTaskTest {
     @Test
     void theTaskVerdictIsCopiedFromTheTaskRow() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L)));
-        when(progressRepository.findByProjectId(1L)).thenReturn(List.of(progress(1L, 10L)));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenReturn(10L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(1L))
                 .thenReturn(Optional.empty());
         SyncTask task = new SyncTask();
@@ -248,8 +238,8 @@ class MetricsSamplerTaskTest {
     @Test
     void oneFailingProjectDoesNotSkipTheOthers() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L), project(2L)));
-        when(progressRepository.findByProjectId(1L)).thenThrow(new IllegalStateException("boom"));
-        when(progressRepository.findByProjectId(2L)).thenReturn(List.of(progress(2L, 5L)));
+        when(progressRepository.sumRowsSyncedByProject(1L)).thenThrow(new IllegalStateException("boom"));
+        when(progressRepository.sumRowsSyncedByProject(2L)).thenReturn(5L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(2L))
                 .thenReturn(Optional.empty());
 
@@ -278,8 +268,8 @@ class MetricsSamplerTaskTest {
      */
     @Test
     void anOnDemandSampleRecordsAProjectThePeriodicSamplerWouldSkip() {
-        when(progressRepository.findByProjectId(7L))
-                .thenReturn(List.of(progress(7L, 10_000_052L)));
+        when(progressRepository.sumRowsSyncedByProject(7L))
+                .thenReturn(10_000_052L);
         when(taskMetricRepository.findTopByProjectIdOrderBySampledAtDesc(7L))
                 .thenReturn(Optional.empty());
 
@@ -294,7 +284,7 @@ class MetricsSamplerTaskTest {
     @Test
     void anOnDemandSampleFailureIsContained() {
         // Metrics are a sidecar: a broken sample must never reach the sync cycle.
-        when(progressRepository.findByProjectId(7L))
+        when(progressRepository.sumRowsSyncedByProject(7L))
                 .thenThrow(new IllegalStateException("boom"));
 
         assertThatCode(() -> sampler.sampleProject(7L)).doesNotThrowAnyException();
@@ -328,13 +318,6 @@ class MetricsSamplerTaskTest {
         project.setId(id);
         project.setName("p" + id);
         return project;
-    }
-
-    private SyncProgress progress(Long projectId, long rows) {
-        SyncProgress progress = new SyncProgress();
-        progress.setProjectId(projectId);
-        progress.setRowsSyncedTotal(rows);
-        return progress;
     }
 
     /** A consumer owned by this node: connected, with a just-recorded event. */

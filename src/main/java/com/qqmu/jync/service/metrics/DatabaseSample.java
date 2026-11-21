@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.metrics;
 
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -104,10 +105,7 @@ public class DatabaseSample {
         for (DatabaseConfig config : configs) {
             DbMetricSample row = newRow(config, now, healths.get(config.getId()));
             if (row.isOk()) {
-                fillRuntime(config, row, now);
-                if (includeCapacity) {
-                    fillCapacity(config, row);
-                }
+                fillMetrics(config, row, now, includeCapacity);
             }
             try {
                 sampleRepository.save(row);
@@ -135,23 +133,52 @@ public class DatabaseSample {
         return row;
     }
 
-    private void fillRuntime(DatabaseConfig config, DbMetricSample row, Instant now) {
+    /**
+     * Runtime and capacity figures over ONE transient pool. Each used to open its own pool and
+     * login, so a capacity-due round paid two Hikari startups and two connections per
+     * configured database — on a sampler that runs every minute against production servers.
+     * Either read failing on its own still leaves the other one (and the health sample) intact.
+     */
+    private void fillMetrics(DatabaseConfig config, DbMetricSample row, Instant now,
+                             boolean includeCapacity) {
+        MetadataReader reader = includeCapacity
+                ? readerFactory.forType(config.effectiveType()) : null;
+        boolean capacityDue = reader != null && reader.reportsTableStats();
         try (HikariDataSource pool = dataSourceManager.createTransientDataSource(config);
              Connection connection = pool.getConnection()) {
-            Optional<RuntimeMetricsReader.Reading> reading =
-                    router.read(config.effectiveType(), connection);
-            if (reading.isEmpty()) {
-                return;
+            try {
+                readRuntime(config, row, now, connection);
+            } catch (Exception e) {
+                // No permission, no view, an analytic engine: the health sample still stands.
+                log.debug("Runtime metrics unavailable for '{}': {}", config.getName(),
+                        e.getMessage());
             }
-            RuntimeMetricsReader.Reading value = reading.get();
-            row.setSessions(value.sessions());
-            row.setCacheHitPercent(value.cacheHitPercent());
-            row.setLockWaits(value.lockWaits());
-            row.setQps(qps(config.getId(), value.counter(), now, config.getUpdatedAt()));
+            if (capacityDue) {
+                try {
+                    readCapacity(config, row, connection, reader);
+                } catch (Exception e) {
+                    log.debug("Capacity unavailable for '{}': {}", config.getName(),
+                            e.getMessage());
+                }
+            }
         } catch (Exception e) {
-            // No permission, no view, an analytic engine: the health sample still stands.
-            log.debug("Runtime metrics unavailable for '{}': {}", config.getName(), e.getMessage());
+            log.debug("Metrics connection unavailable for '{}': {}", config.getName(),
+                    e.getMessage());
         }
+    }
+
+    private void readRuntime(DatabaseConfig config, DbMetricSample row, Instant now,
+                             Connection connection) throws Exception {
+        Optional<RuntimeMetricsReader.Reading> reading =
+                router.read(config.effectiveType(), connection);
+        if (reading.isEmpty()) {
+            return;
+        }
+        RuntimeMetricsReader.Reading value = reading.get();
+        row.setSessions(value.sessions());
+        row.setCacheHitPercent(value.cacheHitPercent());
+        row.setLockWaits(value.lockWaits());
+        row.setQps(qps(config.getId(), value.counter(), now, config.getUpdatedAt()));
     }
 
     private Double qps(Long connectionId, Long counter, Instant now, Instant configUpdatedAt) {
@@ -173,32 +200,27 @@ public class DatabaseSample {
         return seconds <= 0 || delta < 0 ? null : delta / (double) seconds;
     }
 
-    private void fillCapacity(DatabaseConfig config, DbMetricSample row) {
-        MetadataReader reader = readerFactory.forType(config.effectiveType());
-        if (!reader.reportsTableStats()) {
-            // No catalog query for this product: an empty answer means "cannot tell", and
-            // writing it as zero would draw zero tables for a database full of them.
-            return;
+    /**
+     * The "capacity" figures need a catalog query; {@code reportsTableStats()} says whether
+     * the product has one. An empty answer means "cannot tell", and writing it as zero would
+     * draw zero tables for a database full of them.
+     */
+    private void readCapacity(DatabaseConfig config, DbMetricSample row, Connection connection,
+                              MetadataReader reader) throws SQLException {
+        String schema = config.getSchemaName();
+        if (schema == null || schema.isBlank()) {
+            schema = reader.resolveDefaultSchema(connection);
         }
-        try (HikariDataSource pool = dataSourceManager.createTransientDataSource(config);
-             Connection connection = pool.getConnection()) {
-            String schema = config.getSchemaName();
-            if (schema == null || schema.isBlank()) {
-                schema = reader.resolveDefaultSchema(connection);
-            }
-            Map<String, MetadataReader.TableStat> stats = reader.estimateTableStats(connection, schema);
-            long rows = 0;
-            long bytes = 0;
-            for (MetadataReader.TableStat stat : stats.values()) {
-                rows += stat.rows() == null ? 0 : stat.rows();
-                bytes += stat.bytes() == null ? 0 : stat.bytes();
-            }
-            row.setTableCount(stats.size());
-            row.setRowCount(rows);
-            row.setBytes(bytes);
-        } catch (Exception e) {
-            log.debug("Capacity unavailable for '{}': {}", config.getName(), e.getMessage());
+        Map<String, MetadataReader.TableStat> stats = reader.estimateTableStats(connection, schema);
+        long rows = 0;
+        long bytes = 0;
+        for (MetadataReader.TableStat stat : stats.values()) {
+            rows += stat.rows() == null ? 0 : stat.rows();
+            bytes += stat.bytes() == null ? 0 : stat.bytes();
         }
+        row.setTableCount(stats.size());
+        row.setRowCount(rows);
+        row.setBytes(bytes);
     }
 
     private String truncate(String message) {

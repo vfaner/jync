@@ -18,6 +18,15 @@ public interface SyncProgressRepository extends JpaRepository<SyncProgress, Long
 
     List<SyncProgress> findByProjectId(Long projectId);
 
+    /**
+     * Delivered rows for one project, summed in the database. Loading the rows instead pulled
+     * every object's {@code last_sync_value} LOB (it is a @Lob column) once a minute per
+     * project, only to add up one numeric column.
+     */
+    @Query("select coalesce(sum(p.rowsSyncedTotal), 0) from SyncProgress p "
+            + "where p.projectId = :projectId")
+    long sumRowsSyncedByProject(@Param("projectId") Long projectId);
+
     /** Tracked-object counts for every project in one query, instead of one query per project. */
     @Query("select p.projectId, count(p) from SyncProgress p "
             + "where p.objectType = :objectType group by p.projectId")
