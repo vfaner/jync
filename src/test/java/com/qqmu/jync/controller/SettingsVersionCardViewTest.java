@@ -366,6 +366,23 @@ class SettingsVersionCardViewTest {
     }
 
     @Test
+    void aContainerProcessGetsImageUpdateCommandsInsteadOfAJarSwap() throws Exception {
+        System.setProperty("jync.container", "true");
+        try {
+            String html = render(base()
+                    .state(VersionInfo.State.UP_TO_DATE)
+                    .latestVersion("1.1.1").latestTag("v1.1.1")
+                    .build());
+
+            assertThat(html).contains("data-container=\"true\"")
+                    .contains("docker pull vfaner/jync:latest")
+                    .contains("docker compose up -d");
+        } finally {
+            System.clearProperty("jync.container");
+        }
+    }
+
+    @Test
     void viewerStillGetsThePlainReleasePageButtonAndNoUpgradeDialog() throws Exception {
         String page = renderAs(UserRole.VIEWER, base()
                 .state(VersionInfo.State.UPDATE_AVAILABLE)

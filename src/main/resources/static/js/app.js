@@ -2494,6 +2494,43 @@
 
     var pollTimer = null;
 
+    // 容器内没有可替换的 jar：把同一套弹窗改成镜像更新说明，避免误点后失败。
+    if (modal.getAttribute('data-container') === 'true') {
+      var containerBox = modal.querySelector('[data-role="upgrade-container"]');
+      var containerCmd = modal.querySelector('[data-role="upgrade-container-cmd"]');
+      var copyBtn = modal.querySelector('[data-role="upgrade-copy"]');
+      show(sourceGroup, false);
+      show(progressBox, false);
+      show(actionsIdle, false);
+      show(actionsReady, false);
+      show(actionsRestarting, false);
+      show(restartWarn, false);
+      show(messageBox, false);
+      show(containerBox, true);
+      if (copyBtn && containerCmd) {
+        copyBtn.addEventListener('click', function () {
+          var text = containerCmd.textContent.trim();
+          function copied() { toast(t('settings.upgradeContainerCopied'), 'ok'); }
+          function fallback() {
+            var area = document.createElement('textarea');
+            area.value = text;
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            try { document.execCommand('copy'); copied(); } catch (e) { /* 用户可手工选中 */ }
+            document.body.removeChild(area);
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(copied).catch(fallback);
+          } else {
+            fallback();
+          }
+        });
+      }
+      return;
+    }
+
     function selectedSource() {
       var checked = modal.querySelector('input[name="upgrade-source"]:checked');
       return checked ? checked.value : 'GITEE';

@@ -26,7 +26,28 @@ docker build -t jync:2.4.4 .
 
 `application.yml` 里这些是相对路径（`./data`、`./logs`），工作目录固定为 `/app`，所以挂卷即生效，无需改配置。
 
-## 2. Docker 单机部署
+## 2. 官方镜像
+
+发布 tag 时由 `.github/workflows/docker-release.yml` 构建双架构镜像（linux/amd64 + linux/arm64）。Docker Hub 推送需要仓库 Secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`；未配置时仍会推 GHCR，也可在 Actions 页面手动运行该工作流。
+
+```bash
+docker pull vfaner/jync:2.4.4
+docker run -d --name jync -p 8080:8080 \
+  -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
+  -e TZ=Asia/Shanghai --restart unless-stopped vfaner/jync:2.4.4
+```
+
+也可以直接用根目录的 `docker-compose.release.yml`（官方镜像、不本地构建）：
+
+```bash
+docker compose -f docker-compose.release.yml up -d
+```
+
+备用镜像：`ghcr.io/vfaner/jync:2.4.4`。国内访问 Docker Hub 不稳定时配置 registry mirror，或使用 GHCR / 私有镜像仓库。
+
+> **容器内不要使用应用内的「一键升级」替换 jar**：jar 在镜像层，容器内也没有 Docker socket。v2.4.4 起页面在容器中会把升级按钮改为展示 `docker pull` / `docker compose up -d` 命令；自动更新可选 Watchtower（compose 文件内有示例注释）。
+
+## 3. Docker 单机部署（本地构建）
 
 ```bash
 docker run -d --name jync \
@@ -57,7 +78,7 @@ docker run ... \
 
 打开 <http://localhost:8080>，默认账号 `admin` / `view`，密码 `123456`，**首次登录必须先修改密码**（未修改前只能停留在改密页）。
 
-## 3. Docker Compose
+## 4. Docker Compose
 
 **内置 H2**：仓库根目录自带 `docker-compose.yml`（数据落在宿主机 `./data`、`./logs`）：
 
@@ -89,7 +110,7 @@ docker compose -f deploy/docker-compose.mysql.yml up -d --build
 - 已有 H2 数据要迁到这些示例：先在旧实例「系统管理 → 系统配置 → 配置包」导出，启动示例后再导入；直接启动只会得到一个空库，见[元数据库迁移](configuration.md#元数据库迁移)。
 - Oracle 示例用社区维护的 `gvenzl/oracle-free` 镜像；宿主机为 arm64 且拉不到对应变体时，取消文件里 `platform: linux/amd64` 的注释用 amd64 模拟运行。
 
-## 4. Kubernetes 部署
+## 5. Kubernetes 部署
 
 清单在 `deploy/k8s/`，用 Kustomize 组织：
 
@@ -113,7 +134,7 @@ kubectl -n jync rollout status deploy/jync
 - **Ingress**：`ingress.yaml` 是可选件，域名/TLS/注解按集群情况改；没有 Ingress Controller 就从 `kustomization.yaml` 里移除。清单里已放宽 nginx-ingress 的代理超时到 300s——大表手动「立即同步」与连接测试可能超过默认的 60s。
 - **安全上下文**：`runAsNonRoot: true`、`runAsUser: 10001`，与镜像内用户一致。
 
-## 5. 环境变量
+## 6. 环境变量
 
 Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无需改镜像或配置文件。常用的：
 
@@ -144,7 +165,7 @@ Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无�
 
 > 密钥类变量（`SYNC_CRYPTO_*`、`SPRING_DATASOURCE_PASSWORD`）在 K8s 里放 Secret，用 `secretKeyRef` 引用，不要写进清单明文。**多实例（元数据库换成外部 MySQL 等）时尤其要显式设置 `SYNC_CRYPTO_*`**：自动生成的密钥依附于本地 H2 文件，外部元数据库场景下没有这个文件，不设就只能用发行包里的公开默认值。
 
-## 6. 多实例部署
+## 7. 多实例部署
 
 Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**：
 
@@ -159,25 +180,29 @@ Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**�
 
 多实例场景请显式设置 `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT`（见上一节）：自动生成的密钥保存在本地 `<库名>.key`，外部元数据库场景下没有这个文件。若确实在同一台机器上用同一份 H2 数据目录起了多个进程，升级后的首次启动只有一个进程会执行密钥轮换，其余进程会在轮换期间拒绝启动并提示稍后重试（否则它会一直使用公开默认密钥加密新凭据）；轮换完成后重新启动即可。
 
-## 7. 升级与备份
+## 8. 升级与备份
 
 从 2.3.0 及更早版本升级时，首次启动会自动把元数据库的枚举列改为文本并删除旧的取值检查约束（H2 / MySQL / PostgreSQL / Oracle 均适用，日志逐条列出，无需手工 DDL），升级前仍建议按下面的备份步骤留一份。
 
 ```bash
-# Docker：换镜像标签重建容器，数据卷不动
-docker pull registry.example.com/qqmu/jync:2.4.4
-docker compose up -d
+# Docker（官方镜像）：换标签重建容器，数据卷不动
+docker pull vfaner/jync:2.4.4
+docker compose -f docker-compose.release.yml up -d
+
+# Docker（本地构建）：重新 build 后重建
+docker compose up -d --build
 
 # K8s：改 kustomization.yaml 的 newTag 后
 kubectl apply -k deploy/k8s/
 ```
 
-- 元数据表结构走 `ddl-auto: update` 自动演进，无需手工迁移。
+- 元数据表结构走 `ddl-auto: update` 自动演进，无需手工迁移；从 2.4.3 升级会新增 `migration_run.run_node` 与 `sync_progress.full_load_without_cursor` 两列。
+- **容器内不要用应用内「一键升级」换 jar**：页面会识别容器环境并把按钮改为展示 `docker pull` / `docker compose up -d` 命令，服务端也会拒绝直接替换请求。宿主机自动更新可加 Watchtower（`docker-compose.release.yml` 内有示例注释）。
 - 自 v2.0.0 起内嵌 H2 固定为 2.1.214，可直接打开 1.x 写在 `/app/data/jync.mv.db` 的旧格式文件；**不要把镜像里的 H2 换成 2.2+**，否则旧库会报 `Unsupported database file version`。
 - **升级前备份 `/app/data`**（H2 库文件）；停机期间源库的变更由游标机制在重启后自动补齐。
 - 从旧版 SyncTool（≤ 1.2.x）升级：把旧 `synctool.mv.db` 放进 `/app/data`，首启时 `LegacyStoreMigration` 会自动改名接管。
 
-## 8. 排障
+## 9. 排障
 
 | 现象 | 处理 |
 |---|---|

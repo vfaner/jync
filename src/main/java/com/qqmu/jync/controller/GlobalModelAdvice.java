@@ -126,6 +126,12 @@ public class GlobalModelAdvice {
      * Running artifact version with a leading {@code v} for the header and footer, or
      * {@code null} for IDE runs without {@code build-info.properties} (templates then hide it).
      */
+    /** True when the upgrade button should explain image replacement instead of jar swap. */
+    @ModelAttribute("containerDeployment")
+    public boolean containerDeployment() {
+        return com.qqmu.jync.config.DeploymentMode.isContainer();
+    }
+
     @ModelAttribute("appVersion")
     public String appVersion() {
         BuildProperties props = buildProperties.getIfAvailable();

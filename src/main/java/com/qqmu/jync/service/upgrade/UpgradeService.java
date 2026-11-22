@@ -38,6 +38,7 @@ import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
+import com.qqmu.jync.config.DeploymentMode;
 import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.service.version.ArtifactComparison;
 import com.qqmu.jync.service.version.ReleaseFeed;
@@ -335,6 +336,11 @@ public class UpgradeService {
      * failing feed call or download lands in {@link Phase#FAILED} for the poller to show.
      */
     public void start(String sourceName) {
+        if (DeploymentMode.isContainer()) {
+            // The jar is an image layer here; pulling + recreating the container is the only
+            // safe update. Refuse even a direct API call that skipped the page's dialog.
+            throw new IllegalStateException(text("error.upgrade.container"));
+        }
         if (!busy.compareAndSet(false, true)) {
             throw new IllegalStateException(text("error.upgrade.busy"));
         }

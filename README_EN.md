@@ -130,6 +130,14 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
   -jar jync.jar --spring.config.additional-location=file:./application.yml
 ```
 
+Container deployment (official images built by GitHub Actions on tags, amd64 + arm64):
+
+```bash
+docker pull vfaner/jync:2.4.4
+docker compose -f docker-compose.release.yml up -d
+# Mirror: ghcr.io/vfaner/jync:2.4.4; in a container upgrade by pulling the new image
+```
+
 Open `http://<host>:8080` and sign in with `admin / 123456`, `ops / 123456` or `view / 123456`;
 the first login forces a password change. Production deployment, external metadata stores,
 Docker / Kubernetes, HTTPS and upgrade/backup are covered in the

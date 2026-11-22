@@ -501,7 +501,8 @@
      th:data-start-url="@{/api/upgrade/start}"
      th:data-status-url="@{/api/upgrade/status}"
      th:data-restart-url="@{/api/upgrade/restart}"
-     th:data-login-url="@{/login/local}">
+     th:data-login-url="@{/login/local}"
+     th:data-container="${containerDeployment}">
     <div class="modal-mask" data-close-modal="upgrade-modal"></div>
     <div class="modal-dialog">
         <button type="button" class="modal-close" data-close-modal="upgrade-modal"
@@ -510,6 +511,19 @@
         </button>
         <div class="modal-head">
             <h3 th:text="#{settings.upgradeTitle}">One-click upgrade</h3>
+        </div>
+
+        <!--/* 容器部署：jar 在镜像层，不能换文件；这里给出镜像更新命令。
+               普通 jar 部署仍然显示下面的下载源与替换流程。 */-->
+        <div class="field" data-role="upgrade-container" hidden>
+            <div class="help" th:text="#{settings.upgradeContainerHint}">Container deployment</div>
+            <pre class="mono" data-role="upgrade-container-cmd"
+                 style="margin:10px 0;padding:12px;white-space:pre-wrap;word-break:break-all">docker pull vfaner/jync:latest
+docker compose up -d</pre>
+            <button type="button" class="btn btn-ghost btn-sm" data-role="upgrade-copy"
+                    th:text="#{settings.upgradeContainerCopy}">Copy commands</button>
+            <div class="help" th:text="#{settings.upgradeContainerData}" style="margin-top:10px">Data volumes are kept.</div>
+            <div class="help" th:text="#{settings.upgradeContainerK8s}">Kubernetes</div>
         </div>
 
         <div class="field" data-role="upgrade-source-group">
@@ -837,6 +851,7 @@
         'conversion.draftCached': /*[[#{conversion.draftCached}]]*/ '',
         'conversion.draftFailed': /*[[#{conversion.draftFailed}]]*/ '',
         'conversion.draftTruncated': /*[[#{conversion.draftTruncated}]]*/ '',
+        'settings.upgradeContainerCopied': /*[[#{settings.upgradeContainerCopied}]]*/ '',
         'date.clear': /*[[#{date.clear}]]*/ '',
         'date.today': /*[[#{date.today}]]*/ '',
         'date.prevMonth': /*[[#{date.prevMonth}]]*/ '',

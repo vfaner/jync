@@ -145,6 +145,8 @@ class UpgradeServiceTest {
 
     @BeforeEach
     void setUp() throws Exception {
+        // CI 也可能跑在容器里；这个类测的是 jar 替换流程，显式声明成非容器。
+        System.setProperty("jync.container", "false");
         jarFile = tempDir.resolve("app").resolve("jync.jar");
         Files.createDirectories(jarFile.getParent());
         Files.write(jarFile, makeFatJar("old-jar-bytes"));
@@ -153,6 +155,11 @@ class UpgradeServiceTest {
         feed = new FakeFeed();
         launcher = new RecordingLauncher();
         shutdown = new RecordingShutdown();
+    }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearDeploymentOverride() {
+        System.clearProperty("jync.container");
     }
 
     private UpgradeService service(String currentVersion, ScriptedDownloader downloader) {
@@ -677,6 +684,21 @@ class UpgradeServiceTest {
         assertThat(Files.readAllBytes(jarFile)).isEqualTo(nextJar);
         assertThat(Files.readAllBytes(tempDir.resolve("app/jync.jar.bak"))).isEqualTo(oldJar);
         assertThat(svc.status().targetVersion()).isEqualTo("1.8.0");
+    }
+
+    @Test
+    void aContainerProcessRefusesTheJarSwap() {
+        System.setProperty("jync.container", "true");
+        try {
+            ScriptedDownloader downloader = new ScriptedDownloader();
+            UpgradeService svc = service("1.7.2", downloader);
+
+            assertThatThrownBy(() -> svc.start("GITEE"))
+                    .isInstanceOf(IllegalStateException.class);
+            assertThat(svc.status().phase()).isEqualTo(UpgradeService.Phase.IDLE);
+        } finally {
+            System.clearProperty("jync.container");
+        }
     }
 
     @Test

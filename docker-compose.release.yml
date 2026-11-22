@@ -1,0 +1,21 @@
+# Jync 捷同 · 使用官方镜像的单机部署（不本地构建）
+#   docker compose -f docker-compose.release.yml up -d
+#   浏览器打开 http://localhost:8080（初始 admin / ops / view，密码 123456，登录后请立即修改）
+# 升级：修改下方 image 的 tag，执行 docker compose -f docker-compose.release.yml up -d；
+#       数据卷 ./data、./logs 会保留，不要删除。
+services:
+  jync:
+    image: vfaner/jync:2.4.4
+    container_name: jync
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      TZ: Asia/Shanghai
+      # 页面上的「一键升级」在容器内会改为展示镜像更新命令；
+      # 若要让宿主机自动拉取新镜像，可自行加 Watchtower，例如：
+      # labels:
+      #   - "com.centurylinklabs.watchtower.enable=true"
+    restart: unless-stopped
