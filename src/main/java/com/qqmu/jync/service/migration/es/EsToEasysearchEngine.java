@@ -80,6 +80,10 @@ final class EsToEasysearchEngine {
 
         List<IndexResult> results = new ArrayList<>();
         boolean cancelled = false;
+        // Two connection rows may point at the SAME cluster (a common way to test a copy).
+        // With the default SAME naming and OVERWRITE this would delete the source index
+        // before a single document is read, and the run would report SUCCESS 0/0.
+        boolean sameEndpoint = sameEndpoint(source, target);
         for (EsIndexSupport.IndexSummary summary : indices) {
             String targetIndex;
             try {
@@ -97,7 +101,7 @@ final class EsToEasysearchEngine {
             try {
                 cancellation.check();
                 results.add(migrateIndex(options, sourceClient, targetClient, summary.index(),
-                        targetIndex, cancellation, progressCounters, progress));
+                        targetIndex, sameEndpoint, cancellation, progressCounters, progress));
             } catch (MigrationCancelledException e) {
                 results.add(new IndexResult(summary.index(), targetIndex, Status.CANCELLED,
                         progressCounters.read, progressCounters.written, "cancelled"));
@@ -138,11 +142,18 @@ final class EsToEasysearchEngine {
                                      SearchHttpClient sourceClient,
                                      SearchHttpClient targetClient,
                                      String sourceIndex, String targetIndex,
+                                     boolean sameEndpoint,
                                      MigrationCancellation cancellation,
                                      Progress progressCounters,
                                      MigrationProgressListener progress) {
         String sourcePath = "/" + segment(sourceIndex);
         String targetPath = "/" + segment(targetIndex);
+        if (sameEndpoint
+                && options.getWriteMode() == EsToEasysearchOptions.WriteMode.OVERWRITE
+                && targetIndex.equals(sourceIndex)) {
+            return new IndexResult(sourceIndex, targetIndex, Status.FAILED, 0, 0,
+                    "refusing to overwrite the source index on the same cluster");
+        }
         List<String> warnings = new ArrayList<>();
 
         JsonNode settings = options.isCopySettings()
@@ -471,5 +482,26 @@ final class EsToEasysearchEngine {
     private static final class Progress {
         long read;
         long written;
+    }
+
+    /** Same endpoint after trimming a trailing slash; host case does not identify a cluster. */
+    private static boolean sameEndpoint(MigrationConnection a, MigrationConnection b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        String left = normalizeEndpoint(a.getBaseUrl());
+        String right = normalizeEndpoint(b.getBaseUrl());
+        return !left.isEmpty() && left.equalsIgnoreCase(right);
+    }
+
+    private static String normalizeEndpoint(String url) {
+        if (url == null) {
+            return "";
+        }
+        String value = url.trim();
+        while (value.endsWith("/")) {
+            value = value.substring(0, value.length() - 1);
+        }
+        return value;
     }
 }

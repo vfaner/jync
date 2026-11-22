@@ -47,6 +47,24 @@ class LoginLockoutFilterTest {
     }
 
     @Test
+    void aPostWithoutTheUsernameFieldStillObeysTheLockout() throws Exception {
+        // The failure handler records the null-username pair under "|ip"; the gate used to
+        // skip the check when the field was absent, so that counter could grow forever.
+        lock(null, "10.0.0.9");
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/login");
+        request.setServletPath("/login");
+        request.addParameter("password", "wrong");
+        request.setRemoteAddr("10.0.0.9");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertThat(response.getRedirectedUrl()).isEqualTo("/login?locked");
+        assertThat(chain.getRequest()).isNull();
+    }
+
+    @Test
     void passesAnOpenPostThrough() throws Exception {
         MockHttpServletRequest request = loginPost("admin");
         request.setRemoteAddr("10.0.0.9");

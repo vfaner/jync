@@ -400,6 +400,16 @@ public final class CdcEventApplier {
                             JdbcRowMapper.bind(update, row, plan.updateBindOrder, plan.types,
                                     ctx.getTargetDialect(), lobTracker);
                             if (update.executeUpdate() == 0) {
+                                // Drivers that report CHANGED rows answer 0 when the row
+                                // already holds exactly these values (an overlapping
+                                // baseline replay, or an update to the same content).
+                                // Existence decides: present = no-op, absent = a different
+                                // unique constraint rejected the insert and it must surface.
+                                if (rowExists(targetConn, row, plan)) {
+                                    log.debug("Row already present with identical values in {};"
+                                            + " re-delivery is a no-op", plan.targetTable);
+                                    continue;
+                                }
                                 throw e;
                             }
                         } else if (UniqueViolations.isUniqueViolation(e)) {

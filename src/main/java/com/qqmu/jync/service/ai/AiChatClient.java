@@ -170,6 +170,10 @@ public class AiChatClient {
                 // One parse: both the reply text and the served-model field are read off
                 // the same tree, and a completion body can be large.
                 JsonNode root = parseOrNull(response.body());
+                String streamError = streamErrorText(root);
+                if (streamError != null) {
+                    return ChatResult.failure(streamError, endpoint, model, ms);
+                }
                 return ChatResult.success(extractText(protocol, root), servedModel(root),
                         endpoint, model, ms, truncatedInBuffered(protocol, root));
             }
@@ -322,6 +326,11 @@ public class AiChatClient {
                         if (chunk == null) {
                             continue;
                         }
+                        String streamError = streamErrorText(chunk);
+                        if (streamError != null) {
+                            return ChatResult.failure(streamError, endpoint, model,
+                                    System.currentTimeMillis() - start);
+                        }
                         if (served[0].isEmpty()) {
                             served[0] = servedModel(chunk);
                         }
@@ -371,6 +380,11 @@ public class AiChatClient {
                     if (root == null) {
                         continue;
                     }
+                    String streamError = streamErrorText(root);
+                    if (streamError != null) {
+                        return ChatResult.failure(streamError, endpoint, model,
+                                System.currentTimeMillis() - start);
+                    }
                     if (served[0].isEmpty()) {
                         served[0] = servedModel(root);
                     }
@@ -407,6 +421,11 @@ public class AiChatClient {
                     // Buffered reply from a gateway that ignored stream=true: one sink call,
                     // same contract as complete() would have given.
                     JsonNode root = parseOrNull(rawBody.toString());
+                    String streamError = streamErrorText(root);
+                    if (streamError != null) {
+                        return ChatResult.failure(streamError, endpoint, model,
+                                System.currentTimeMillis() - start);
+                    }
                     String whole = extractText(protocol, root);
                     if (!whole.isEmpty()) {
                         sink.accept(whole);
@@ -584,6 +603,11 @@ public class AiChatClient {
                     if (root == null) {
                         continue;
                     }
+                    String streamError = streamErrorText(root);
+                    if (streamError != null) {
+                        return ToolChatResult.failure(streamError,
+                                System.currentTimeMillis() - start, false);
+                    }
                     if (served[0].isEmpty()) {
                         served[0] = servedModel(root);
                     }
@@ -618,6 +642,11 @@ public class AiChatClient {
             }
             if (rawBody != null) {
                 JsonNode root = parseOrNull(rawBody.toString());
+                String streamError = streamErrorText(root);
+                if (streamError != null) {
+                    return ToolChatResult.failure(streamError,
+                            System.currentTimeMillis() - start, false);
+                }
                 String whole = extractText(protocol, root);
                 if (!whole.isEmpty()) {
                     sink.accept(whole);
@@ -999,6 +1028,11 @@ public class AiChatClient {
                     if (root == null) {
                         continue;
                     }
+                    String streamError = streamErrorText(root);
+                    if (streamError != null) {
+                        return ToolChatResult.failure(streamError,
+                                System.currentTimeMillis() - start, false);
+                    }
                     String type = root.path("type").asString("");
                     if (served[0].isEmpty()) {
                         served[0] = servedModel(root);
@@ -1159,6 +1193,11 @@ public class AiChatClient {
                     JsonNode chunk = parseOrNull(line);
                     if (chunk == null) {
                         continue;
+                    }
+                    String streamError = streamErrorText(chunk);
+                    if (streamError != null) {
+                        return ToolChatResult.failure(streamError,
+                                System.currentTimeMillis() - start, false);
                     }
                     if (served[0].isEmpty()) {
                         served[0] = servedModel(chunk);
@@ -1481,6 +1520,31 @@ public class AiChatClient {
             return new ToolChatResult(false, message, "", List.of(), "", ms, toolUnsupported,
                     false);
         }
+    }
+
+    /**
+     * The provider's in-stream error text, or null. Anthropic emits
+     * {@code {"type":"error","error":{...}}} after HTTP 200 (overloaded/rate limit), and
+     * OpenAI-compatible gateways may send a bare {@code {"error":...}}; both must fail the
+     * call instead of returning the partial text as a successful answer.
+     */
+    private static String streamErrorText(JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+        JsonNode error = node.path("error");
+        if (!error.isMissingNode() && !error.isNull()) {
+            if (error.isTextual() && !error.asString("").isBlank()) {
+                return error.asString("");
+            }
+            String message = error.path("message").asString("");
+            return message.isBlank() ? "stream error" : message;
+        }
+        if ("error".equals(node.path("type").asString(""))) {
+            String message = node.path("message").asString("");
+            return message.isBlank() ? "stream error" : message;
+        }
+        return null;
     }
 
     /**

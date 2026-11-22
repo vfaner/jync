@@ -98,6 +98,22 @@ class EtlPrecheckServiceVariablesTest {
     }
 
     @Test
+    void aVariableThatCompletesALimitIsReportedLikeTheRunWouldRefuseIt() {
+        // The raw form has a placeholder; the resolved form carries LIMIT. The run refuses
+        // the latter for a resumable mode, so the precheck must not stay green.
+        EtlTask task = task("SELECT id FROM src WHERE x = ${v}");
+        task.setWriteMode(EtlWriteMode.APPEND);
+        task.setResumeKeyColumn("id");
+        task.setVariables("v=1 LIMIT 10");
+
+        EtlPrecheckResult result = service.check(task, h2(1L), h2(2L), connections);
+
+        assertThat(result.passed()).isFalse();
+        assertThat(result.checks()).anySatisfy(check ->
+                assertThat(check.code()).isEqualTo("error.etl.resume.limit"));
+    }
+
+    @Test
     void aMongoSourceSqlIsNotResolved() {
         EtlTask task = task("not sql ${nope}");
         task.setSourceCollection("orders");

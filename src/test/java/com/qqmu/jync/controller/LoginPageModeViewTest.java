@@ -52,6 +52,13 @@ class LoginPageModeViewTest {
     }
 
     @Test
+    void theUsernameHintNamesEverySeededAccount() throws Exception {
+        // The three seeded accounts include ops; a hint listing only admin/view made the
+        // operator account effectively undiscoverable on the login page.
+        assertThat(page("/login/local")).contains("admin、ops 或 view");
+    }
+
+    @Test
     void passwordModeShowsBothForms() throws Exception {
         config.setEnabled(true);
         config.setMode(OaAuthConfig.Mode.PASSWORD);

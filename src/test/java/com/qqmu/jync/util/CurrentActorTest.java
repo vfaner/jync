@@ -33,6 +33,19 @@ class CurrentActorTest {
     }
 
     @Test
+    void anAnonymousTokenIsSystemNotAnonymousUser() {
+        // AnonymousAuthenticationToken reports authenticated; its name would otherwise be
+        // written into the audit trail as if a real user had acted.
+        SecurityContextHolder.getContext().setAuthentication(
+                new org.springframework.security.authentication.AnonymousAuthenticationToken(
+                        "key", "anonymousUser",
+                        java.util.List.of(new org.springframework.security.core.authority
+                                .SimpleGrantedAuthority("ROLE_ANONYMOUS"))));
+
+        assertThat(CurrentActor.username()).isEqualTo("system");
+    }
+
+    @Test
     void theSignedInNameIsUsedWhenAuthenticated() {
         TestingAuthenticationToken token = new TestingAuthenticationToken("alice", "pw");
         token.setAuthenticated(true);

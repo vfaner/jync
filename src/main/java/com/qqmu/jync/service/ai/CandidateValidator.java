@@ -117,6 +117,12 @@ public class CandidateValidator {
             return ValidationResult.failure("error.validate.noHeader", null, List.of());
         }
         String objectKind = matcher.group(2).toUpperCase(java.util.Locale.ROOT);
+        if ("VIEW".equals(objectKind) && hasSecondStatement(candidateSql)) {
+            // A view is one plain statement. Everything after the first top-level semicolon
+            // would run as a second statement on the real target — a "syntax check" must not
+            // become a way to execute DML/DDL outside the throwaway object.
+            return ValidationResult.failure("error.validate.multiStatement", null, List.of());
+        }
         String renamed = matcher.replaceFirst(Matcher.quoteReplacement(matcher.group(1) + tempName));
         if ("VIEW".equals(objectKind)) {
             // A view is one plain statement; a trailing semicolon is a script terminator that
@@ -133,6 +139,18 @@ public class CandidateValidator {
                 objectKind, target.getName(), tempName);
 
         try (Connection conn = dataSourceManager.getConnection(target)) {
+            boolean autoCommit = conn.getAutoCommit();
+            if (autoCommit) {
+                // Routine bodies may legitimately carry semicolons, so the check cannot parse
+                // every dialect's statement count. Roll the attempt back instead: PostgreSQL
+                // and SQL Server run a multi-statement string as a batch, and those targets
+                // are transactional — a stray DELETE must not survive the "syntax check".
+                try {
+                    conn.setAutoCommit(false);
+                } catch (SQLException ignored) {
+                    // Driver refuses; the connection is only used for this one statement.
+                }
+            }
             try {
                 try (Statement st = conn.createStatement()) {
                     st.execute(renamed);
@@ -153,6 +171,13 @@ public class CandidateValidator {
                             tempName, caveats);
                 }
             }
+            if (!autoCommit) {
+                try {
+                    conn.rollback();
+                } catch (SQLException ignored) {
+                    // The close below rolls back anyway; this is belt and braces.
+                }
+            }
             return ValidationResult.success(tempName, caveats);
 
         } catch (SQLException e) {
@@ -168,6 +193,70 @@ public class CandidateValidator {
         } finally {
             dropQuietly(target, objectKind, tempName);
         }
+    }
+
+    /**
+     * Whether another statement follows the first top-level semicolon. Quotes, quoted
+     * identifiers, brackets and comments are skipped, so a semicolon inside a literal or a
+     * comment never counts; trailing semicolons are fine.
+     */
+    static boolean hasSecondStatement(String sql) {
+        int i = 0;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (c == '\'' || c == '"' || c == '`') {
+                i = skipQuoted(sql, i, c);
+            } else if (c == '[') {
+                int end = sql.indexOf(']', i + 1);
+                i = end < 0 ? sql.length() : end + 1;
+            } else if (sql.startsWith("--", i) || c == '#') {
+                int end = sql.indexOf('\n', i);
+                i = end < 0 ? sql.length() : end + 1;
+            } else if (sql.startsWith("/*", i)) {
+                int end = sql.indexOf("*/", i + 2);
+                i = end < 0 ? sql.length() : end + 2;
+            } else if (c == ';') {
+                int next = skipBlanksAndComments(sql, i + 1);
+                return next < sql.length();
+            } else {
+                i++;
+            }
+        }
+        return false;
+    }
+
+    private static int skipQuoted(String sql, int start, char quote) {
+        int i = start + 1;
+        while (i < sql.length()) {
+            if (sql.charAt(i) == quote) {
+                if (i + 1 < sql.length() && sql.charAt(i + 1) == quote) {
+                    i += 2;
+                    continue;
+                }
+                return i + 1;
+            }
+            i++;
+        }
+        return sql.length();
+    }
+
+    private static int skipBlanksAndComments(String sql, int from) {
+        int i = from;
+        while (i < sql.length()) {
+            char c = sql.charAt(i);
+            if (Character.isWhitespace(c) || c == ';') {
+                i++;
+            } else if (sql.startsWith("--", i) || c == '#') {
+                int end = sql.indexOf('\n', i);
+                i = end < 0 ? sql.length() : end + 1;
+            } else if (sql.startsWith("/*", i)) {
+                int end = sql.indexOf("*/", i + 2);
+                i = end < 0 ? sql.length() : end + 2;
+            } else {
+                break;
+            }
+        }
+        return i;
     }
 
     /**

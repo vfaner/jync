@@ -314,6 +314,12 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     // reconnect loop for the same state: the cycle's catch used to swallow
                     // them, so a heap exhausted while decoding one huge transaction retried
                     // forever and never reached any strike-out.
+                    if (e instanceof LockLostException) {
+                        // 租约被其他节点接管：对方拥有位点，本次提交的数据会在对面重放。
+                        // 这是正常换主，不是目标写失败，不能计入 strike-out。
+                        stats.setConnected(false);
+                        break;
+                    }
                     lastFailure.compareAndSet(null, e);
                     rowsDrained = 0;
                     if (applyFailedThisCycle) {

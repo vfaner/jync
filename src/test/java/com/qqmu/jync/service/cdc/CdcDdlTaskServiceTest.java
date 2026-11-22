@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collections;
@@ -119,6 +120,32 @@ class CdcDdlTaskServiceTest {
         when(statement.execute(anyString())).thenThrow(new SQLException(
                 "Can't DROP 'c'; check that column/key exists", "HY000", 1091));
         return connection;
+    }
+
+    @Test
+    void droppingAnAbsentTableIsIdempotentAndSucceeds() throws Exception {
+        // A source-side DROP whose table never reached the target used to fail with
+        // "Unknown table" and stay red forever. The executed form is DROP ... IF EXISTS.
+        ChangeLog log = ChangeLog.of(3L, ObjectType.PROJECT, "source_db", ChangeType.ERROR,
+                SyncStateWriter.SKIPPED_DDL_PREFIX + "DROP TABLE tz_probe_tmp");
+        log.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        log.setDdlExecuted(false);
+        log.setTargetDdlSql("DROP TABLE tz_probe_tmp");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig target = target();
+        target.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(target));
+        try (Connection connection = DriverManager.getConnection(
+                "jdbc:h2:mem:ddl_drop_absent;DB_CLOSE_DELAY=-1", "sa", "")) {
+            when(dataSourceManager.getConnection(any())).thenReturn(connection);
+
+            service.executeDdl(9L, "DROP TABLE tz_probe_tmp", AccessGuard.system());
+        }
+
+        assertThat(log.getDdlExecuted()).isTrue();
+        assertThat(log.getErrorDetail()).isNull();
+        assertThat(log.getTargetDdlSql()).isEqualTo("DROP TABLE IF EXISTS tz_probe_tmp");
     }
 
     @Test

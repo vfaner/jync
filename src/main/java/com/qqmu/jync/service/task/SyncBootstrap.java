@@ -98,6 +98,19 @@ public class SyncBootstrap {
     }
 
     /**
+     * Re-runs the phantom-status heal. The startup pass cannot clear a lease that is still
+     * inside its TTL under a crashed process's random owner id, so a lease left by kill -9
+     * (or an upgrade's SIGKILL) would keep a stopped project's status RUNNING forever.
+     * A minute after startup, and every minute after, an expired lease is cleared; a live
+     * cycle — this node's or another's — renews its lease and is skipped.
+     */
+    @org.springframework.scheduling.annotation.Scheduled(
+            initialDelayString = "${sync.lock-ttl-ms:300000}", fixedDelay = 60_000L)
+    public void healStaleStatuses() {
+        healPhantomRunning();
+    }
+
+    /**
      * A kill -9 mid-cycle leaves {@code sync_task.status = RUNNING} behind. Enabled projects
      * self-heal on their next fire, but a stopped project synced by hand never fires again,
      * so its page and the dashboard would claim "syncing" forever. The lease is the truth
@@ -116,8 +129,8 @@ public class SyncBootstrap {
         int healed = 0;
         for (SyncTask task : running) {
             try {
-                if (lockService.isLeaseHeldByAnotherLiveOwner(task.getProjectId())) {
-                    continue;   // another node is genuinely mid-cycle
+                if (lockService.isLeaseHeldByLiveOwner(task.getProjectId())) {
+                    continue;   // a cycle is genuinely in flight (here or on another node)
                 }
                 taskStore.markStoppedUnlessError(task.getProjectId());
                 healed++;

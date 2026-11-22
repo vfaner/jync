@@ -296,7 +296,10 @@ public class SyncStateWriter {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordSkippedDdl(Long projectId, String objectName, String sql,
                                   String ddlFile, Long ddlPos) {
-        String statement = sql == null ? "" : sql;
+        // A DROP is replayed by hand and often meets a target where the table never
+        // existed (or was already removed): store it idempotently so the suggested
+        // command can be run as-is. Dialects without IF EXISTS strip it at execution.
+        String statement = com.qqmu.jync.util.DdlIfExists.add(sql == null ? "" : sql);
         String details = SKIPPED_DDL_PREFIX + statement;
         // The statement is matched by hash: `details` is a LOB, and PostgreSQL stores an
         // unbounded @Lob String as `oid`, where `=` compares large-object identities (a

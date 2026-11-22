@@ -54,6 +54,19 @@ class MetadataStoreFailureAnalyzerTest {
      * not exist, while the real cause (connection refused, bad credentials) goes unmentioned.
      */
     @Test
+    void anOracleThinUrlWithUserInfoNeverLeaksThePassword() {
+        // Oracle carries credentials without "//": jdbc:oracle:thin:scott/tiger@host.
+        Environment env = new MockEnvironment().withProperty("spring.datasource.url",
+                "jdbc:oracle:thin:scott/tiger@db.internal:1521:ORCL");
+
+        FailureAnalysis analysis = new MetadataStoreFailureAnalyzer(env).analyze(wrappedFailure());
+
+        assertThat(analysis.getDescription()).doesNotContain("tiger")
+                .contains("<redacted>");
+        assertThat(analysis.getAction()).doesNotContain("tiger");
+    }
+
+    @Test
     void anExternalMetadataStoreGetsConnectionAdviceInsteadOfH2LockFileAdvice() {
         Environment env = new MockEnvironment().withProperty("spring.datasource.url",
                 "jdbc:postgresql://db.internal:5432/jync?password=secret");

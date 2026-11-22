@@ -74,7 +74,7 @@ class DefaultAlertSignalCollectorTest {
         lenient().when(projectService.findTasks(any())).thenReturn(Map.of());
         lenient().when(projectRepository.findAllById(any())).thenReturn(new ArrayList<>());
         lenient().when(databaseConfigService.findAll()).thenReturn(new ArrayList<>());
-        lenient().when(healthService.check(anyList(), anyBoolean())).thenReturn(new ArrayList<>());
+        lenient().when(healthService.check(anyList(), anyBoolean(), any(Duration.class))).thenReturn(new ArrayList<>());
     }
 
     private static Project project(long id, String name) {
@@ -490,7 +490,7 @@ class DefaultAlertSignalCollectorTest {
         config.setId(7L);
         config.setName("prod");
         when(databaseConfigService.findAll()).thenReturn(List.of(config));
-        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any(Duration.class))).thenReturn(List.of(
                 new DatabaseHealthService.Health(7L, false, 12, "refused")));
 
         assertThat(collect()).noneMatch(
@@ -505,7 +505,7 @@ class DefaultAlertSignalCollectorTest {
         assertThat(event.subject()).isEqualTo("prod");
         assertThat(event.projectId()).isZero();
 
-        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any(Duration.class))).thenReturn(List.of(
                 new DatabaseHealthService.Health(7L, true, 3, null)));
         clock.advance(Duration.ofMinutes(5));
         assertThat(collect()).noneMatch(
@@ -526,7 +526,7 @@ class DefaultAlertSignalCollectorTest {
         stage.setId(8L);
         stage.setName("stage");
         when(databaseConfigService.findAll()).thenReturn(List.of(prod, stage));
-        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any(Duration.class))).thenReturn(List.of(
                 new DatabaseHealthService.Health(7L, false, 12, "refused"),
                 new DatabaseHealthService.Health(8L, false, 9, "timeout")));
 
@@ -553,7 +553,7 @@ class DefaultAlertSignalCollectorTest {
         config.setId(7L);
         config.setName("prod");
         when(databaseConfigService.findAll()).thenReturn(List.of(config));
-        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any(Duration.class))).thenReturn(List.of(
                 new DatabaseHealthService.Health(7L, false, 12, "error.db.health.timeout")));
         when(messages.getMessage(eq("error.db.health.timeout"), any(),
                 eq("error.db.health.timeout"), any(Locale.class))).thenReturn("检测超时");
@@ -578,7 +578,7 @@ class DefaultAlertSignalCollectorTest {
         config.setId(7L);
         config.setName("prod");
         when(databaseConfigService.findAll()).thenReturn(List.of(config));
-        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any(Duration.class))).thenReturn(List.of(
                 new DatabaseHealthService.Health(7L, false, 12, "error.db.health.timeout")));
         when(messages.getMessage(eq("error.db.health.timeout"), any(),
                 eq("error.db.health.timeout"), eq(Locale.ENGLISH)))
@@ -601,7 +601,7 @@ class DefaultAlertSignalCollectorTest {
         config.setId(7L);
         config.setName("prod");
         when(databaseConfigService.findAll()).thenReturn(List.of(config));
-        when(healthService.check(anyList(), eq(true))).thenReturn(List.of(
+        when(healthService.check(anyList(), eq(true), any(Duration.class))).thenReturn(List.of(
                 new DatabaseHealthService.Health(7L, false, 12, "Connection refused")));
         when(messages.getMessage(eq("Connection refused"), any(),
                 eq("Connection refused"), any(Locale.class))).thenReturn(null);
@@ -641,7 +641,7 @@ class DefaultAlertSignalCollectorTest {
 
         // Two evaluations inside the five-minute probe interval dial once.
         org.mockito.Mockito.verify(healthService, org.mockito.Mockito.times(1))
-                .check(anyList(), eq(true));
+                .check(anyList(), eq(true), any(Duration.class));
     }
 
     private static final class MutableClock extends Clock {

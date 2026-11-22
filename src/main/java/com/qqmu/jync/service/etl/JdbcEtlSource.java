@@ -414,6 +414,14 @@ final class JdbcEtlSource implements EtlSource {
                     return TIME_TEXT.format(time.toLocalTime()).equals(text);
                 case Types.TIMESTAMP:
                     return wallClock(text) != null;
+                case Types.BINARY:
+                case Types.VARBINARY:
+                case Types.LONGVARBINARY:
+                case Types.BLOB:
+                    // getString decodes the raw bytes with the connection charset and
+                    // setString re-encodes them: the continuation would compare against
+                    // different bytes and silently skip or duplicate rows.
+                    return false;
                 default:
                     return true;
             }

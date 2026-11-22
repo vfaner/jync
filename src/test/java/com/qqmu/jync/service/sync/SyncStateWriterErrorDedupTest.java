@@ -102,6 +102,22 @@ class SyncStateWriterErrorDedupTest {
         verify(changeLogRepository, times(2)).save(any());
     }
 
+    @Test
+    void aSkippedDropIsStoredInItsIdempotentForm() {
+        // The suggested command is replayed by hand; "DROP TABLE IF EXISTS" is the state
+        // the task asks for even when the target already lost the table.
+        writer.recordSkippedDdl(PROJECT_ID, "app", "DROP TABLE `tz_probe_tmp`",
+                "binlog.000001", 300L);
+
+        ArgumentCaptor<ChangeLog> captor = ArgumentCaptor.forClass(ChangeLog.class);
+        verify(changeLogRepository).save(captor.capture());
+        assertThat(captor.getValue().getTargetDdlSql())
+                .isEqualTo("DROP TABLE IF EXISTS `tz_probe_tmp`");
+        assertThat(captor.getValue().getDetails())
+                .isEqualTo(SyncStateWriter.SKIPPED_DDL_PREFIX
+                        + "DROP TABLE IF EXISTS `tz_probe_tmp`");
+    }
+
     private static final String DDL_DETAILS =
             SyncStateWriter.SKIPPED_DDL_PREFIX + "ALTER TABLE t ADD COLUMN c INT";
 

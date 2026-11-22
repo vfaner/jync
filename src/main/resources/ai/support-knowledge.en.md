@@ -33,6 +33,10 @@ and last sync time per task. Start here for overall health; per-task speed and f
 the task's Performance and Change log tabs.
 
 - The "Live status · Updated HH:mm:ss" pill at the top writes the latest refresh time on every 10-second poll; the task card shows failing tasks as a red count beside the running count.
+- Hover or keyboard-focus the four resource gauges (load / CPU / memory / disk) for used,
+  available and percentage details; the CPU card also lists the processor model,
+  physical/logical cores and OS, and "Top 5 CPU processes" expands a read-only list (refresh
+  pauses while it is open). The gauges refresh every 5 seconds.
 
 ## Creating tasks at scale
 
@@ -278,6 +282,9 @@ executes once when a worker becomes free.
   position; more than 3 consecutive repairs stop the consumer.
 - A source DDL that leaves the target missing a column is trimmed in-stream and recorded as a todo;
   the task keeps running.
+- A skipped DDL is recorded as a todo (Change log → execute DDL on target). DROP TABLE / DROP VIEW
+  is stored with `IF EXISTS`; Oracle/DM/YashanDB strip the clause and treat "object already gone"
+  as done, so an already-dropped target table no longer leaves the todo red forever.
 
 ## CDC stalls and rebuilding the baseline
 
@@ -577,12 +584,13 @@ by date (everything on or before the selected day; today's rows always survive, 
 clear-all), and the purge itself is recorded as a new audit event (actor, cutoff, count) — the
 trim can never erase its own trace. It records login success and failure with source, project and
 connection create/update/delete, force unlock, capture-strategy switches, CDC baseline rebuilds,
-date purges of either log, dedicated migration and ETL writes, config-package import/export,
+date purges of the change, audit and system logs, dedicated migration and ETL writes, config-package import/export,
 diagnostics exports and AI assistant questions, each with time, user, action and detail. Filter by
 action or user to reconstruct who changed what. Logs → Change log offers the same date-based
 deletion scoped to the current filter (project / errors only); open DDL tasks are pending work and
 are never deleted. Logs → System log lets administrators delete rolled archive files by date as
-well; the live jync.log and .tmp intermediates are untouched. Retention defaults: change log and
+well; the live jync.log and .tmp intermediates are untouched, and that purge is recorded
+in the audit trail too. Retention defaults: change log and
 audit log 180 days each (sync.change-log-retention-days / sync.audit-retention-days, hourly
 auto-prune, 0 disables); system log rolls with a 30-day history
 (logging.logback.rollingpolicy.max-history, plus 10MB per file and a 500MB total cap).
@@ -705,6 +713,9 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   exact row count of one table on both sides.
 - It searches this knowledge base for how-to answers and drafts a new task from a description, which
   the user must review before it pre-fills the form.
+- It reads the effective retention windows for change-log, audit, system-log and metrics data
+  (log_retention), so "how long are logs kept" and "why did old entries disappear" are answered
+  from the running configuration; deleting logs itself stays a manual page action.
 
 ## Assistant actions and confirmation cards
 
@@ -730,6 +741,17 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   cap the assistant says so and points to the page or a new conversation.
 - Every number must come from a tool result and is never made up; when a tool fails, explain why
   instead of retrying the same call.
+
+## ClickHouse as a source
+
+- Source only, no log CDC: real-time sync uses polling or full comparison; with sync deletes on and
+  the table within the row ceiling, extra target rows are removed by primary-key comparison.
+- The driver is not bundled (supply `clickhouse-jdbc`). Keyless tables load through LIMIT/OFFSET
+  paging, so a retry can duplicate rows — declare a primary key or use a unique cursor column.
+- Prefer a DateTime64 or numeric cursor column; temporal watermarks compare as wall-clock literals
+  and no longer depend on the server/JVM zone (fixed in 2.4.4).
+- Auto-created targets map String → TEXT, Decimal(p,s) → NUMERIC(p,s), DateTime64 → TIMESTAMP and
+  Nullable → a nullable column.
 
 ## Running multiple instances
 

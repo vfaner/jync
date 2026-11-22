@@ -512,7 +512,11 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
         healthMessages.keySet().retainAll(currentIds);
         healthFailureStreak.keySet().retainAll(currentIds);
 
-        List<DatabaseHealthService.Health> healths = healthService.check(configs, true);
+        // 与性能采样同一口径：预算按连接数缩放，避免多个/慢连接时尾部的健康库共享
+        // 页面 8 秒预算被误判成超时，进而触发假的 DB_UNHEALTHY 告警。
+        Duration probingBudget = Duration.ofSeconds(Math.max(8, configs.size() * 3L));
+        List<DatabaseHealthService.Health> healths =
+                healthService.check(configs, true, probingBudget);
         if (healths == null) {
             return;
         }

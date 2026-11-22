@@ -1355,7 +1355,14 @@ public class DataSyncService {
                 // makes every row of such a column look missing or drifted across families.
                 // The cost is that a VARCHAR value genuinely ending in spaces loses them
                 // here too, which can only hide a target-side edit of that whitespace.
-                sb.append(trimTrailingSpaces(value.toString()));
+                String text = trimTrailingSpaces(value.toString());
+                java.time.LocalDateTime wall = wallClockOf(text);
+                if (wall != null) {
+                    sb.append(instantKey(wall.atZone(java.time.ZoneId.systemDefault())
+                            .toInstant(), wall.getNano()));
+                } else {
+                    sb.append(text);
+                }
             } else {
                 sb.append(value);
             }
@@ -4436,9 +4443,49 @@ public class DataSyncService {
             // side and VARCHAR on the other. SQL compares CHAR values with trailing blanks
             // insignificant, so the padding must not make one key render as two; the
             // comparison otherwise reads every padded target row as deleted at source.
-            return trimTrailingSpaces(value.toString());
+            String text = trimTrailingSpaces(value.toString());
+            // MySQL renders TIMESTAMP/DATETIME as the server's wall-clock text (see
+            // JdbcRowMapper.readTemporal), while every other family hands back a temporal
+            // object. Without this branch the same key rendered as text on one side and as
+            // epoch millis on the other, and a delete comparison emptied the target.
+            java.time.LocalDateTime wall = wallClockOf(text);
+            return wall == null ? text
+                    : Long.toString(wall.atZone(java.time.ZoneId.systemDefault())
+                            .toInstant().toEpochMilli());
         }
         return String.valueOf(value);
+    }
+
+    /** A wall-clock key rendered by a driver ("2026-11-21 21:06:00[.f]"), or null. */
+    private static final java.util.regex.Pattern WALL_CLOCK_KEY =
+            java.util.regex.Pattern.compile(
+                    "(\\d{4})-(\\d{2})-(\\d{2})(?:[ T](\\d{2}):(\\d{2}):(\\d{2})"
+                            + "(?:\\.(\\d{1,9}))?)?");
+
+    static java.time.LocalDateTime wallClockOf(String text) {
+        if (text == null || text.length() < 10 || text.length() > 30) {
+            return null;
+        }
+        java.util.regex.Matcher match = WALL_CLOCK_KEY.matcher(text);
+        if (!match.matches()) {
+            return null;
+        }
+        try {
+            int nanos = 0;
+            if (match.group(7) != null) {
+                String fraction = (match.group(7) + "000000000").substring(0, 9);
+                nanos = Integer.parseInt(fraction);
+            }
+            return java.time.LocalDateTime.of(
+                    Integer.parseInt(match.group(1)), Integer.parseInt(match.group(2)),
+                    Integer.parseInt(match.group(3)),
+                    match.group(4) == null ? 0 : Integer.parseInt(match.group(4)),
+                    match.group(5) == null ? 0 : Integer.parseInt(match.group(5)),
+                    match.group(6) == null ? 0 : Integer.parseInt(match.group(6)),
+                    nanos);
+        } catch (NumberFormatException | java.time.DateTimeException e) {
+            return null;
+        }
     }
 
     /** The text without its trailing spaces; see the CHAR-padding note on {@link #keyPartOf}. */

@@ -511,6 +511,33 @@ public class CdcDdlTaskService {
      * the target, so a plain drop has nothing left to remove — the target is already in the
      * state the statement asks for.
      */
+    /** Oracle family: no {@code DROP ... IF EXISTS}, so a missing object is caught instead. */
+    private static boolean oracleFamily(DatabaseConfig target) {
+        DatabaseType type = target == null ? null : target.effectiveType();
+        return type != null
+                && type.getFamily() == DatabaseType.DialectFamily.ORACLE;
+    }
+
+    /**
+     * Whether a DROP failed only because the object was already gone: MySQL 1051/1091,
+     * Oracle/DM 942, SQL Server 3701, and the standard-state spellings of the same fact.
+     */
+    static boolean isMissingDropTarget(SQLException failure) {
+        for (SQLException current = failure; current != null;
+                current = current.getNextException() == current
+                        ? null : current.getNextException()) {
+            int code = current.getErrorCode();
+            if (code == 1051 || code == 1091 || code == 942 || code == 3701) {
+                return true;
+            }
+            String state = current.getSQLState();
+            if ("42P01".equals(state) || "42S02".equals(state)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static boolean isMissingObject(SQLException failure) {
         for (SQLException current = failure; current != null;
                 current = current.getNextException() == current
@@ -586,6 +613,8 @@ public class CdcDdlTaskService {
         boolean backslashEscapes = backslashEscapes(project);
         boolean gap = hasColumnGap(statement, backslashEscapes);
         List<String> dropped = droppedColumns(statement, backslashEscapes);
+        // A DROP TABLE/VIEW asks for an end state ("gone"), not for a failing precondition.
+        boolean dropStatement = com.qqmu.jync.util.DdlIfExists.isDropTableOrView(statement);
         // The binlog names the source table; the project may map it to a different target
         // name. Without the mapping the DDL lands on a table the sync never writes. Every
         // table reference is mapped: a DROP/RENAME may name more than one.
@@ -601,12 +630,21 @@ public class CdcDdlTaskService {
                 statement = retargetTables(statement, targetConfig::targetTableName,
                         identifierQuote);
             }
+            if (dropStatement) {
+                // Oracle/DM/YashanDB have no DROP ... IF EXISTS: strip it and rely on the
+                // missing-object catch below. Everything else keeps (or gains) it.
+                statement = oracleFamily(target)
+                        ? com.qqmu.jync.util.DdlIfExists.remove(statement)
+                        : com.qqmu.jync.util.DdlIfExists.add(statement);
+            }
             // Idempotent: "Duplicate column name" (MySQL 1060) means the target is already
             // aligned, which is the desired end state after a retry or a second admin click.
             new DdlExecutor(connection).executeIdempotentCreate(statement);
         } catch (SQLException | RuntimeException e) {
-            if (!dropped.isEmpty() && e instanceof SQLException
-                    && isMissingObject((SQLException) e)) {
+            if (((!dropped.isEmpty() && e instanceof SQLException
+                    && isMissingObject((SQLException) e))
+                    || (dropStatement && e instanceof SQLException
+                    && isMissingDropTarget((SQLException) e)))) {
                 // The column is not on the target — it never received the ADD this project
                 // skipped — so the DROP has nothing to remove. That is exactly the state
                 // the statement asks for.

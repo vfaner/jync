@@ -139,6 +139,36 @@ class AiChatClientStreamTest {
     }
 
     @Test
+    void anInStreamErrorFailsTheCallInsteadOfReturningPartialText() {
+        // Anthropic-compatible gateways answer HTTP 200 and then emit an error event; the
+        // partial CREATE must not be reported as a successful draft.
+        sseBody = "event: content_block_delta\n"
+                + "data: {\"type\":\"content_block_delta\",\"delta\":"
+                + "{\"type\":\"text_delta\",\"text\":\"CREATE \"}}\n\n"
+                + "event: error\n"
+                + "data: {\"type\":\"error\",\"error\":"
+                + "{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n";
+
+        AiChatClient.ChatResult result = client.stream(provider(AiProtocol.ANTHROPIC), "k",
+                null, "USER", 64, t -> { });
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getMessage()).contains("Overloaded");
+    }
+
+    @Test
+    void anOpenAiStyleErrorNodeAlsoFailsTheCall() {
+        sseBody = "data: {\"choices\":[{\"delta\":{\"content\":\"SELECT\"}}]}\n\n"
+                + "data: {\"error\":{\"message\":\"rate limited\"}}\n\n";
+
+        AiChatClient.ChatResult result = client.stream(provider(AiProtocol.OPENAI), "k",
+                null, "USER", 64, t -> { });
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getMessage()).contains("rate limited");
+    }
+
+    @Test
     void aCompatibleEndpointThatSendsWholeMessageChunksIsStillRead() throws Exception {
         // Not every OpenAI-compatible gateway emits delta objects; some send message chunks.
         sseBody = "data: {\"choices\":[{\"message\":{\"content\":\"ALL\"}}]}\n\n"

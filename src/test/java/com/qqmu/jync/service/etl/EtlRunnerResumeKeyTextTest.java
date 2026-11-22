@@ -108,6 +108,24 @@ class EtlRunnerResumeKeyTextTest {
         assertThat(checkpoints.load(7L)).isNull();
     }
 
+    @Test
+    void aBinaryResumeKeyIsRefusedInsteadOfStoredAsLossyText() {
+        // getString decodes raw bytes with the connection charset; setString re-encodes
+        // them. The continuation would compare different bytes and skip or duplicate rows.
+        List<EtlSourceColumn> columns = List.of(
+                new EtlSourceColumn("id", Types.INTEGER, "INT", null, null, true),
+                new EtlSourceColumn("updatedAt", Types.VARBINARY, "VARBINARY", null, null, true));
+
+        EtlRunResult result = run(
+                new FakeJdbcSource(columns, new Object[]{1, new byte[]{1, 2}}, "ab"),
+                h2Config(1L), task("updatedAt"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.errorMessage())
+                .isEqualTo("error.etl.resumeKey.unbindable:updatedAt");
+        assertThat(checkpoints.load(7L)).isNull();
+    }
+
     // --- harness ------------------------------------------------------------------------
 
     private EtlRunResult run(EtlSource source, DatabaseConfig sourceConfig, EtlTask task) {

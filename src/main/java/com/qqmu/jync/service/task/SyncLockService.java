@@ -226,6 +226,19 @@ public class SyncLockService {
      * acquire-then-release: acquiring would steal (or fail against) a genuine holder's
      * lease mid-stream; this only reads the row.
      */
+    /**
+     * Whether a live lease exists, including this instance's own. The periodic phantom-status
+     * heal needs this: excluding the own owner would make it stop a cycle that is running
+     * right here.
+     */
+    public boolean isLeaseHeldByLiveOwner(Long projectId) {
+        return store.findTask(projectId)
+                .map(task -> task.getLockOwner() != null
+                        && (task.getLockExpiresAt() == null
+                                || !task.getLockExpiresAt().isBefore(java.time.Instant.now())))
+                .orElse(false);
+    }
+
     public boolean isLeaseHeldByAnotherLiveOwner(Long projectId) {
         return store.findTask(projectId)
                 .map(task -> task.getLockOwner() != null

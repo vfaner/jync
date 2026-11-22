@@ -12,6 +12,10 @@ public final class CurrentActor {
     /** The signed-in username, or "system" for startup/background work with no request. */
     public static String username() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        return auth == null || !auth.isAuthenticated() ? "system" : auth.getName();
+        // AnonymousAuthenticationToken reports authenticated; its name is "anonymousUser".
+        return auth == null || !auth.isAuthenticated()
+                || auth instanceof org.springframework.security.authentication
+                        .AnonymousAuthenticationToken
+                ? "system" : auth.getName();
     }
 }

@@ -431,8 +431,12 @@ public class MetadataStoreFailureAnalyzer implements FailureAnalyzer {
         }
     }
 
-    /** A JDBC URL can carry credentials; the analysis is written to the log. */
+    /**
+     * A JDBC URL can carry credentials; the analysis is written to the log. Use the shared
+     * redactor: it also masks {@code scheme://user:password@host} (Oracle thin, legacy MySQL)
+     * and the other secret-shaped parameters this local rule never knew about.
+     */
     private static String redact(String url) {
-        return url.replaceAll("(?i)(password|pwd)=[^;&]*", "$1=***");
+        return com.qqmu.jync.service.diagnostics.DiagnosticRedactor.redactText(url);
     }
 }

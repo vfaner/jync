@@ -182,6 +182,20 @@ class EsToEasysearchEngineTest {
     }
 
     @Test
+    void overwriteOnTheSameEndpointAsTheSourceIsRefused() throws Exception {
+        // Two connection rows may point at the same cluster; with SAME naming + OVERWRITE the
+        // source index would be deleted before it was read, and the run would say SUCCESS.
+        target.setBaseUrl("http://source:9200/");
+        stubCat("orders");
+
+        MigrationRunResult result = run(options("{}"));
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.message()).contains("refusing to overwrite the source index");
+        verify(targetClient, never()).delete(anyString());
+    }
+
+    @Test
     void overwriteDeletesRebuildsAndCopiesEveryPagePreservingIdAndRouting() throws Exception {
         stubCat("orders");
         stubSourceIndex("orders");

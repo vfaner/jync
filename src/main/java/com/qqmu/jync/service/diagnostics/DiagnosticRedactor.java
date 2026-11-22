@@ -35,6 +35,14 @@ public class DiagnosticRedactor {
     private static final Pattern URL_USERINFO = Pattern.compile(
             "(://[^\\s:/@]+:)[^\\s/@]+@");
 
+    /**
+     * Oracle's thin/OCI URL carries the credentials without {@code //}: 
+     * {@code jdbc:oracle:thin:scott/tiger@host:1521:ORCL}. The password sits after the slash
+     * and before the {@code @}.
+     */
+    private static final Pattern ORACLE_USERINFO = Pattern.compile(
+            "(?i)(jdbc:oracle:(?:thin|oci):)[^@\\s/]+/[^@\\s]+@");
+
     private static final Pattern SENSITIVE_QUERY = Pattern.compile(
             "(?i)([?&](?:password|passwd|pwd|secret|token|api[_-]?key|access_token"
                     + "|authorization)=)[^&\\s]+");
@@ -68,11 +76,13 @@ public class DiagnosticRedactor {
                         ENCRYPTED.matcher(
                                 SENSITIVE_QUERY.matcher(
                                         URL_USERINFO.matcher(
-                                                BEARER.matcher(
+                                                ORACLE_USERINFO.matcher(
+                                                        BEARER.matcher(
                                                         PRIVATE_KEY.matcher(input)
                                                                 .replaceAll(PRIVATE_KEY_MARKER))
                                                         .replaceAll("Bearer " + MARKER))
                                                 .replaceAll("$1" + MARKER + "@"))
+                                        .replaceAll("$1" + MARKER + "@"))
                                         .replaceAll("$1" + MARKER))
                                 .replaceAll("enc:" + MARKER))
                 .replaceAll(MARKER);

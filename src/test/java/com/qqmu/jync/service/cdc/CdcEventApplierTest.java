@@ -172,6 +172,30 @@ class CdcEventApplierTest {
     }
 
     @Test
+    void anUnchangedRowWhoseUpdateReportsZeroIsANoOpOnRedelivery() throws SQLException {
+        // MySQL's executeUpdate reports CHANGED rows: an overlapping baseline replay that
+        // sets the same values answers 0, the insert hits the duplicate key, and the retry
+        // update answers 0 again. The row is present, so this is a no-op, not a failure.
+        Connection conn = mock(Connection.class);
+        PreparedStatement update = mock(PreparedStatement.class);
+        PreparedStatement insert = mock(PreparedStatement.class);
+        PreparedStatement exists = mock(PreparedStatement.class);
+        ResultSet present = mock(ResultSet.class);
+        when(conn.prepareStatement(startsWith("UPDATE"))).thenReturn(update);
+        when(conn.prepareStatement(startsWith("INSERT"))).thenReturn(insert);
+        when(conn.prepareStatement(startsWith("SELECT"))).thenReturn(exists);
+        when(update.executeUpdate()).thenReturn(0);
+        when(insert.executeUpdate()).thenThrow(new SQLException(
+                "Duplicate entry '1' for key 'orders.PRIMARY'", "23000", 1062));
+        when(exists.executeQuery()).thenReturn(present);
+        when(present.next()).thenReturn(true);
+
+        applier.applyUpserts(conn, binding, List.of(row(1L, "same", "1.00")));
+
+        verify(exists).executeQuery();
+    }
+
+    @Test
     void aNotNullViolationIsNotMistakenForAUniqueConflict() throws SQLException {
         // 目标比源端更严格:INSERT 撞 NOT NULL(23502)曾被当成"行已存在"重试 UPDATE,
         // UPDATE 命中 0 行后这行就无声消失了。必须把约束错误抛给 consumer,让位点不前进。

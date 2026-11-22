@@ -433,6 +433,23 @@ class DataSyncServiceDeletionsTest {
     }
 
     @Test
+    void aMysqlWallClockTextKeyMatchesTheSameValueReadAsTimestamp() {
+        // MySQL renders TIMESTAMP as the server's wall-clock text; every other family hands
+        // back a temporal object. A delete comparison that rendered those as text vs epoch
+        // millis removed the whole target table.
+        Timestamp ts = Timestamp.valueOf("2026-11-21 21:06:00");
+        assertThat(DataSyncService.keyPartOf("2026-11-21 21:06:00"))
+                .isEqualTo(DataSyncService.keyPartOf(ts));
+        assertThat(DataSyncService.normalizedKey(
+                List.of("2026-11-21 21:06:00.123456")))
+                .isEqualTo(DataSyncService.normalizedKey(
+                        List.of(Timestamp.valueOf("2026-11-21 21:06:00.123456"))));
+        // Date-only text agrees with the DATE spellings too.
+        assertThat(DataSyncService.keyPartOf("2026-11-21"))
+                .isEqualTo(DataSyncService.keyPartOf(java.sql.Date.valueOf("2026-11-21")));
+    }
+
+    @Test
     void keyPartsAreNormalizedByType() {
         assertThat(DataSyncService.keyPartOf(new byte[] {0x01, (byte) 0xAB})).isEqualTo("01ab");
 

@@ -26,9 +26,10 @@ import tools.jackson.databind.JsonNode;
  * with the server's own wording when it fails.
  *
  * <p>This is the one support tool that opens the source database, so it costs a second or two
- * and is capped per conversation. Open to every writer — an operator answers "why is this task
- * not syncing" for all tasks it can see, not only the ones it owns; a viewer (who cannot reach
- * the chat at all) is refused here as defence in depth.
+ * and is capped per conversation. Available only for projects the caller may edit — the same
+ * right the page's self-check button requires; a cross-owner probe would leak another user's
+ * source capabilities (privilege names, server settings). A viewer, who cannot reach the chat
+ * at all, is refused as defence in depth.
  */
 @Component
 public class CdcProbeTool implements SupportTool {
@@ -55,7 +56,7 @@ public class CdcProbeTool implements SupportTool {
                 + "replication or mining privileges, server-id collision). Opens the source "
                 + "connection and takes a few seconds; at most 2 runs per conversation. "
                 + "projectId comes from list_projects. Available to administrators and "
-                + "operators for any project.";
+                + "operators only for projects they may edit.";
     }
 
     public Map<String, Object> parameters() {

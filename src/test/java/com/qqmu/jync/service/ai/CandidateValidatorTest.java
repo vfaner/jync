@@ -131,6 +131,23 @@ class CandidateValidatorTest {
     }
 
     @Test
+    void aViewWithASecondStatementIsRefusedBeforeItRuns() throws SQLException {
+        exec("CREATE TABLE audit_table (id INT)");
+        exec("INSERT INTO audit_table VALUES (1)");
+
+        CandidateValidator.ValidationResult result = validator.validate(target,
+                "CREATE VIEW V_SAFE AS SELECT 1 AS X; DELETE FROM audit_table", "V_SAFE");
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getMessage()).isEqualTo("error.validate.multiStatement");
+        try (Statement st = keepAlive.createStatement();
+             ResultSet rs = st.executeQuery("SELECT COUNT(*) FROM audit_table")) {
+            rs.next();
+            assertThat(rs.getInt(1)).as("the second statement never ran").isEqualTo(1);
+        }
+    }
+
+    @Test
     @DisplayName("the temporary object is dropped, leaving nothing behind")
     void theTemporaryObjectIsDropped() throws SQLException {
         exec("CREATE TABLE ORDERS (ID INT)");

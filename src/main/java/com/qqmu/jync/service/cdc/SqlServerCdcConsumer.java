@@ -274,6 +274,12 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     // re-apply those (real target writes, plus a "refusing to rewind" WARN per
                     // transaction). Anchor on the newest persisted LSN: it is the first
                     // transaction that was NOT committed, so nothing below it is lost.
+                    if (e instanceof LockLostException) {
+                        // 租约被接管：另一节点拥有位点并会重放这笔事务；安静退出，
+                        // 不把它记成目标写失败，避免在对端写 ERROR 帽。
+                        stats.setConnected(false);
+                        break;
+                    }
                     fromLsn = newestPersistedLsn(projectId, fromLsn);
                     if (applyFailedThisCycle) {
                         applyFailures.incrementAndGet();

@@ -92,6 +92,21 @@ public class EtlPrecheckService {
                 !EtlTaskValidation.isNativeMongo(sourceConfig), clock, targetConfig);
         List<EtlPrecheckResult.Check> checks = new ArrayList<>();
         List<EtlPrecheckResult.ColumnInfo> columns = new ArrayList<>();
+        // The run judges the SQL AFTER variable resolution (a variable can complete a shape
+        // the raw form did not show, e.g. "1 LIMIT 10"). Re-run the same validation here so
+        // the precheck cannot report green for a task the run will refuse.
+        // Mongo's source-side rules (collection, filter shape) are reported by the probe as
+        // localized checks; the runner's Mongo branch would throw before it, hiding them.
+        if (!EtlTaskValidation.isNativeMongo(sourceConfig)) {
+            try {
+                EtlRunner.validate(task, sourceConfig, targetConfig);
+            } catch (EtlProgramException e) {
+                String message = e.getMessage();
+                String key = message != null && message.startsWith("error.")
+                        ? message : "etl.precheck.program";
+                checks.add(error(key, key.equals(message) ? null : message));
+            }
+        }
         int timeout = timeout(task.getTimeoutSeconds());
 
         Map<String, String> resultColumns = null;

@@ -471,8 +471,9 @@ public class EtlRunner {
 
     // --- preparation --------------------------------------------------------------------
 
-    private static void validate(EtlTask task, DatabaseConfig sourceConfig,
-                                 DatabaseConfig targetConfig) {
+    /** Shared with the precheck: both must judge the same resolved SQL the run will use. */
+    static void validate(EtlTask task, DatabaseConfig sourceConfig,
+                         DatabaseConfig targetConfig) {
         if (task == null) {
             throw new EtlProgramException("task is missing");
         }

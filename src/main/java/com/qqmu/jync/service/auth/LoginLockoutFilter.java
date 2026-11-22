@@ -52,8 +52,10 @@ public class LoginLockoutFilter extends OncePerRequestFilter {
             }
             String username = request.getParameter("username");
             String ip = ClientIpResolver.resolve(request);
-            if (username != null && attemptService.isBlocked(
-                    LoginAttemptService.key(username, ip))) {
+            // key() maps a missing username to "|ip", which is exactly the key the failure
+            // handler records. Checking only when the field was present let a POST without
+            // it increment the counter forever without ever consulting it.
+            if (attemptService.isBlocked(LoginAttemptService.key(username, ip))) {
                 response.sendRedirect(request.getContextPath()
                         + (oa ? "/login?oaLocked" : "/login?locked"));
                 return;

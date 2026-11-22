@@ -193,6 +193,12 @@ public class DatabaseHealthService {
      */
     private Health await(Future<Health> future, DatabaseConfig config, long deadline) {
         try {
+            // Check completion BEFORE the deadline: a probe that finished just as the shared
+            // budget expired was reported as a timeout, and that false "down" verdict was
+            // cached and later turned into a DB_UNHEALTHY alert.
+            if (future.isDone()) {
+                return future.get();
+            }
             long remaining = deadline - System.nanoTime();
             if (remaining <= 0) {
                 future.cancel(false);
