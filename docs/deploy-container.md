@@ -112,18 +112,18 @@ docker compose -f deploy/docker-compose.mysql.yml up -d --build
 
 ## 5. Kubernetes 部署
 
-清单在 `deploy/k8s/`，用 Kustomize 组织：
+清单在 `deploy/k8s/`，用 Kustomize 组织。默认直接引用官方多架构镜像 `vfaner/jync:2.4.4`（amd64 / arm64 节点均可调度），不需要自己构建：
 
 ```bash
-# 1) 构建并推送镜像到你的仓库
-docker build -t registry.example.com/qqmu/jync:2.4.4 .
-docker push registry.example.com/qqmu/jync:2.4.4
-
-# 2) 改 deploy/k8s/kustomization.yaml 里的 images 变换指向你的仓库
-
-# 3) 部署
 kubectl apply -k deploy/k8s/
 kubectl -n jync rollout status deploy/jync
+```
+
+需要换私有仓库或 GHCR 镜像时，只改 `deploy/k8s/kustomization.yaml` 的 `images` 变换；要从源码构建，再用下面的命令替换 `newName`：
+
+```bash
+docker build -t registry.example.com/qqmu/jync:2.4.4 .
+docker push registry.example.com/qqmu/jync:2.4.4
 ```
 
 要点：

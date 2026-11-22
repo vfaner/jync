@@ -10,8 +10,8 @@ resources:
   - service.yaml
   - ingress.yaml
 
-# 换镜像仓库/版本只改这里:
-# images:
-#   - name: jync
-#     newName: registry.example.com/qqmu/jync
-#     newTag: "2.4.4"
+# 官方镜像；换私有仓库或版本只改这里:
+images:
+  - name: vfaner/jync
+    newName: vfaner/jync
+    newTag: "2.4.4"
