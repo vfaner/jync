@@ -98,7 +98,7 @@ class SupportWidgetViewTest {
                 .contains("data-label-step-done=\"Done:\"")
                 .contains("data-label-step-failed=\"Failed:\"")
                 .contains("data-label-greeting=\"Hi, I")
-                .contains("placeholder=\"Ask a question or paste an error log\"")
+                .contains("placeholder=\"Ask a question or paste a full error log (long logs keep head and tail)\"")
                 // 日志整段粘贴常有两万字符；上限放宽，服务端再保留首尾各一段。
                 .contains("maxlength=\"20000\"")
                 .doesNotContain("??");

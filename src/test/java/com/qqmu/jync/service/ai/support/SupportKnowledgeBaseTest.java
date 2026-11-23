@@ -135,6 +135,33 @@ class SupportKnowledgeBaseTest {
         assertThat(all).contains("Suggested order").contains("confirmation card");
     }
 
+    @Test
+    void aPastedBatchWriteErrorFindsTheErrorLogSection() {
+        var hits = kb.search("zh",
+                "Batch write failed Column not found in upsert attrno state initialization 海量", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("报错日志速查");
+            assertThat(hit.body())
+                    .contains("attrno state initialization")
+                    .contains("lower_case_column_names");
+        });
+    }
+
+    @Test
+    void aDamengLobQuestionFindsTheLobSection() {
+        var hits = kb.search("zh",
+                "达梦 OUT_CLOB OUT_BLOB LOGMNR_PARSE_LOB LOB_MAX_INROW_LEN 跳过缺失 LOB", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("达梦 LogMiner 跳过事件与 LOB");
+            assertThat(hit.body())
+                    .contains("LOGMNR_PARSE_LOB")
+                    .contains("8KB")
+                    .contains("missing-lob-policy");
+        });
+    }
+
     /** The per-section cap times topK must still fit the registry's result cap. */
     @Test
     void excerptsStayWithinTheTotalBudget() {

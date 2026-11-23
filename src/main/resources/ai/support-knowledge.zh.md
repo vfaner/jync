@@ -612,3 +612,31 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 - 应用内 TLS 配置是节点本地的，多副本建议由 Ingress 终止 TLS，或改用配置文件模式。
 - 两个实例连接同一源库时，相同项目 ID 会算出相同的 MySQL server_id；演示实例请先停 CDC，
   或修改 sync.cdc.server-id-offset。
+
+## 报错日志速查
+
+用户可以把完整报错直接粘贴到右下角「AI 辅助」提问，不需要先整理。长日志会保留开头与结尾，中间出现省略标记时说明日志被截断；关键异常位于中间时，请把那一小段再单独粘贴一次。排查时先找第一条 ERROR 与 `Caused by`，不要把 Jync 回显的 SQL 当成根因。
+
+- `Batch write failed ... Column "X" not found in upsert attrno state initialization`：海量 / openGauss 目标的带引号列名大小写与目标目录不一致。2.4.5 起按目标实际列名生成 SQL；升级重启后仍报错时，检查目标列是否被 `lower_case_column_names` 存成了另一种大小写。
+- `INSERT ... ON CONFLICT ... DO UPDATE ... WHERE ... was aborted: UPDATE with where condition is not yet supported`：海量不接受“值未变化”守卫。2.4.5 起原生写入去掉该守卫，带安全余量的增量窗口改用 UPDATE + INSERT 模拟。
+- `unsupported literal: TIME'...'`：达梦 LogMiner 的 ANSI TIME 字面量；2.4.5 已支持 `TIME` / `TIMESTAMP WITH TIME ZONE` 等形态，升级并重启 CDC 即可。
+- `Skipping INSERT/UPDATE/DELETE row on schema.table: <原因>`：CDC 主动跳过该行，目标可能缺少这条变更；按冒号后的原因处理，不要把它当成网络抖动反复重试。
+- `OUT_CLOB` / `OUT_BLOB` 或状态页「跳过缺失 LOB 变更」：达梦 redo 没有行外 LOB 正文。设置 `LOGMNR_PARSE_LOB=1` 和 `LOB_MAX_INROW_LEN=8000` 后 8KB 以内可挖掘；更大或行外 LOB 需要轮询 / 定期全量。
+- 「无主键表,仅基线播种」：要么源表确实没有主键，要么元数据表名大小写与实际不一致导致没读到主键。先核对源表主键定义，再看报错里的 schema 与表名大小写；真正无主键的表 CDC 只能做一次基线播种，后续变更不会跟踪。
+- 源 `DATETIME`、目标变成 `DATETIME(6)`：MySQL → MySQL 的同族类型映射。2.4.5 起保留源精度；已存在的目标列不会自动缩精度，重建目标表或结构变更时才会按新规则生成。
+
+## 达梦 LogMiner 跳过事件与 LOB
+
+状态页的「跳过不支持事件」是 CDC 跳过的**总数**，其中包含「跳过缺失 LOB 变更」，两者不要相加；例如显示 5875 与 2035，表示其中 2035 条是 LOB，剩余约 3840 条是其他原因。
+
+- 先看 WARN 日志 `Skipping <OP> row on <schema>.<table>: <原因>`。`unsupported literal` 是某种字面量没有解析；`column ... not in binding` 是 redo 列与当前元数据不一致；`where missing PK column` 是 redo 的 WHERE 没有主键。
+- LOB 表会显示每张表的跳过数。`LOGMNR_PARSE_LOB=0`（默认）时 CLOB/BLOB 以 `OUT_CLOB` / `OUT_BLOB` 出现；执行 `CALL SP_SET_PARA_VALUE(1,'LOGMNR_PARSE_LOB',1)` 与 `CALL SP_SET_PARA_VALUE(1,'LOB_MAX_INROW_LEN',8000)`（必要时重启）后，8KB 以内的 LOB 可以进入 CDC。
+- 超过 8KB 或真正行外存储的 LOB 内容不在归档 redo 里，标准 LogMiner 无法还原；把这几张表拆成轮询任务 / 定时 ETL，或把大 LOB 拆表、只保留引用。
+- `sync.cdc.logminer.missing-lob-policy=skip` 会保留目标旧值并计数；`fail` 会在第一条缺失 LOB 处停住，适合不能接受静默偏差的场景。
+
+## 目标端列名大小写与类型精度
+
+- 海量等 PG 系目标开启 `lower_case_column_names` 后，带引号建出的列可能存成小写；Jync 2.4.5 起写海量前会读取目标目录的实际列名，按实际大小写生成 INSERT / UPDATE / DELETE，不需要改库参数。
+- 达梦源表名是小写时，LogMiner 元数据若被强制转大写会读成“无列、无主键”；2.4.5 已改为按事件中的实际大小写读取，失败再回退大写。
+- MySQL → MySQL 的 `DATETIME` / `TIME` 保留源列精度，`TEXT` / `BLOB` / `JSON` / `BINARY` 保留原类型；跨库源仍按更宽精度建目标，避免丢微秒。
+- 这些类型变化只影响新建的目标表；已有目标表不会自动 ALTER，需要重建目标表或等对应列发生结构变更。

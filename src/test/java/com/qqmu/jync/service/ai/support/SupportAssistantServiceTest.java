@@ -699,6 +699,16 @@ class SupportAssistantServiceTest {
                 .contains("batchId");
     }
 
+    @Test
+    void theSystemPromptMapsKnownLogSignaturesToCauses() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("attrno state initialization")
+                .contains("unsupported literal: TIME")
+                .contains("LOGMNR_PARSE_LOB=1")
+                .contains("Skipping <OP> row on")
+                .contains("无主键表,仅基线播种");
+    }
+
     /**
      * 现场反馈「不会说废话」：开场白、复述问题、过程旁白、结尾客套都要在提示词里禁掉，
      * 否则模型即使结论正确也会先铺陈三句。简单问题必须允许一两句答完。

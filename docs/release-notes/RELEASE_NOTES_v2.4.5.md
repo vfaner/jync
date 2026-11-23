@@ -29,10 +29,11 @@ v2.4.5 聚焦**数据库元数据完整性与同步可控性**：SQL Server 源�
 - 修复达梦 → MySQL 的 CDC 把有主键的小写表误判为“无主键表”：LogMiner 元数据先按事件中的实际大小写读取，失败再回退大写查找。
 - 修复达梦 LogMiner 的 ANSI `TIME'...'` 字面量不被识别、导致整行被跳过的问题；同时支持 `TIME/TIMESTAMP WITH TIME ZONE`。
 - 达梦 CDC 能力探测新增 `LOGMNR_PARSE_LOB` / `LOB_MAX_INROW_LEN` 提示：设为 `1` / `8000` 后 8KB 以内的 CLOB/BLOB 可由 CDC 挖掘；更大或行外 LOB 仍会按 `missing-lob-policy` 处理。
+- AI 运维助手提示词与知识库补充错误日志速查：Batch write 列名大小写、达梦 TIME 字面量 / LOB / LogMiner 跳过、无主键表、MySQL 精度等；用户可直接粘贴完整日志提问。
 
 ## 测试
 
-6680 个测试：6679 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
+6683 个测试：6682 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
 
 ## 升级
 

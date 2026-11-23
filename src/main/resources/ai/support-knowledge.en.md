@@ -762,3 +762,31 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 - In-app TLS settings are node-local; prefer Ingress TLS for replicas, or configuration-file mode.
 - Two instances on one source compute the same MySQL server_id for the same project id; stop CDC
   on demo instances first, or change sync.cdc.server-id-offset.
+
+## Reading an error log
+
+Users can paste a complete error into the AI assistant; there is no need to trim it first. Long messages keep both the head and the tail; an omission marker means the middle was cut, so ask for that section separately. Start with the first ERROR line and its `Caused by`, and do not treat the SQL echoed by Jync as the root cause.
+
+- `Batch write failed ... Column "X" not found in upsert attrno state initialization`: a quoted identifier's case differs from the Vastbase/openGauss catalog spelling. 2.4.5 generates SQL from the target catalog's spelling; after upgrading, check whether `lower_case_column_names` stored the columns in another case.
+- `UPDATE with where condition is not yet supported within INSERT ON CONFLICT`: Vastbase rejects the unchanged-row guard. 2.4.5 writes the native statement without it and emulates guarded incremental windows with UPDATE + INSERT.
+- `unsupported literal: TIME'...'`: a Dameng LogMiner ANSI TIME literal. 2.4.5 supports it; upgrade and restart CDC.
+- `Skipping INSERT/UPDATE/DELETE row on schema.table: <reason>`: CDC deliberately skipped the row, so the target may miss that change. Act on the reason; do not retry blindly.
+- `OUT_CLOB` / `OUT_BLOB` or "missing LOB" on the panel: Dameng redo has no out-of-row LOB content. Set `LOGMNR_PARSE_LOB=1` and `LOB_MAX_INROW_LEN=8000` for values up to 8 KB; larger values need polling or a periodic full load.
+- "No-PK tables, baseline seeding only": the source really has no primary key, or metadata read the table under a different case and missed it. Check the key definition and the schema/table spelling; a genuinely keyless table is only seeded once.
+- Source `DATETIME` becoming `DATETIME(6)`: MySQL-to-MySQL type mapping. 2.4.5 preserves the source precision; existing target columns are not altered automatically.
+
+## Dameng LogMiner skipped events and LOBs
+
+"Unsupported events skipped" is the total, and it includes "missing LOB changes"; do not add the two counters. For example, 5875 and 2035 means 2035 are LOB rows and about 3840 have other reasons.
+
+- Read `Skipping <OP> row on <schema>.<table>: <reason>`. `unsupported literal` is an unparsed literal; `column ... not in binding` is redo/catalog mismatch; `where missing PK column` means the WHERE clause carried no primary key.
+- The LOB table list shows per-table counts. With `LOGMNR_PARSE_LOB=0` (default), CLOB/BLOB appear as `OUT_CLOB`/`OUT_BLOB`. `CALL SP_SET_PARA_VALUE(1,'LOGMNR_PARSE_LOB',1)` plus `LOB_MAX_INROW_LEN=8000` (restart if needed) makes values up to 8 KB minable.
+- LOB content above 8 KB or stored out of row is not in the archived redo; standard LogMiner cannot recover it. Split those tables into polling/ETL tasks, or move large LOBs to separate tables and keep a reference.
+- `sync.cdc.logminer.missing-lob-policy=skip` keeps the old target value and counts the skip; `fail` stops at the first missing LOB.
+
+## Target identifier case and type precision
+
+- On Vastbase and other PG-family targets with `lower_case_column_names`, quoted columns may be stored lower-case. 2.4.5 reads the target catalog's actual spelling before writing.
+- A lower-case Dameng table previously could be read with a forced upper-case name, appearing to have no columns or primary key. 2.4.5 reads the event's spelling first and falls back to upper case.
+- MySQL-to-MySQL keeps `DATETIME`/`TIME` precision and the original `TEXT`/`BLOB`/`JSON`/`BINARY` types; cross-family sources still widen to avoid truncation.
+- These rules apply to newly created targets only; existing columns are not altered automatically.
