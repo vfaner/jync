@@ -210,7 +210,7 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
                 }
             }
             preloadedComments.set(cache);
-        } catch (SQLException e) {
+        } catch (SQLException | RuntimeException e) {
             // Leave the thread-local empty so the per-table fallback still reads comments.
             log.debug("SQL Server schema comment preload failed for {}: {}",
                     schemaName, e.getMessage());

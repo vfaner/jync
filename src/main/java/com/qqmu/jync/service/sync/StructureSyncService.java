@@ -351,7 +351,7 @@ public class StructureSyncService {
                         ctx.getTargetSchema(), targetTable, ctx.effectiveSourceType())) {
                     executor.executeIdempotentCreate(extra);
                 }
-            } catch (SQLException e) {
+            } catch (SQLException | RuntimeException e) {
                 log.warn("Could not apply comments to newly created target table {}: {}",
                         targetTable, e.getMessage());
             }
