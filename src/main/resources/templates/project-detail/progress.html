@@ -28,7 +28,7 @@
             <button type="button" class="btn btn-ghost btn-sm"
                     data-role="cursor-priority-open"
                     data-open-modal="cursor-priority-modal"
-                    th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !cdcActive and !project.enabled}"
+                    th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and cursorPriorityApplicable and !project.enabled and !lockHeld}"
                     th:attr="title=#{cursor.priority.openHint}">
                 <svg class="ico"><use href="#list-ul"/></svg>
                 <span th:text="#{cursor.priority.open}">Bulk set cursor</span>
@@ -304,7 +304,7 @@
 <!--/* 项目级游标优先级：标签顺序就是匹配顺序。保存只写项目配置，不扫源库；
        已跑过的表若换列，由同步引擎在下一轮惰性重载。未首次跑也可直接保存。 */-->
 <div class="modal" id="cursor-priority-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !cdcActive and !project.enabled}"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and cursorPriorityApplicable and !project.enabled and !lockHeld}"
      th:attr="data-action=@{/api/projects/{id}/cursor-priority(id=${project.id})},
               aria-label=#{cursor.priority.title}">
     <div class="modal-mask" data-close-modal="cursor-priority-modal"></div>

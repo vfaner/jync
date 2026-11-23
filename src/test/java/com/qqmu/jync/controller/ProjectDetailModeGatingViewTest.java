@@ -159,6 +159,18 @@ class ProjectDetailModeGatingViewTest {
     }
 
     @Test
+    @WithMockUser(roles = "ADMIN")
+    void aFullCompareProjectDoesNotOfferTheBulkCursorEditor() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.FULL_COMPARE, false);
+
+        String page = renderDetail();
+
+        // Full compare never reads a cursor column, so the setting would be inert.
+        assertThat(page).doesNotContain("data-role=\"cursor-priority-open\"")
+                .doesNotContain("id=\"cursor-priority-modal\"");
+    }
+
+    @Test
     @WithMockUser(roles = "VIEWER")
     void aViewerDoesNotGetTheBulkCursorEditor() throws Exception {
         stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);

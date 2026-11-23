@@ -3,6 +3,7 @@ package com.qqmu.jync.service.sync;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.sql.Types;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -51,6 +52,14 @@ class SyncEngineCursorChangeTest {
         assertThat(SyncEngine.cursorColumnChanged(progress,
                 CursorStrategy.identity("ID", Types.BIGINT, "test"),
                 new SyncConfig())).isFalse();
+    }
+
+    @Test
+    void aLegacyRowReloadsOnceAPriorityIsConfigured() {
+        SyncConfig config = new SyncConfig();
+        config.setCursorColumnPriority(List.of("ID"));
+        assertThat(SyncEngine.cursorColumnChanged(progress(null),
+                CursorStrategy.identity("ID", Types.BIGINT, "priority"), config)).isTrue();
     }
 
     @Test

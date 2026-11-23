@@ -530,6 +530,11 @@ public class ProjectController {
         // by design (T13), so holder-ship comes from statsFor and the snapshot alone.
         boolean cdcActive = current.isLogCdc();
         model.addAttribute("cdcActive", cdcActive);
+        // Cursor priority is meaningful only for an incremental polling cycle. Full compare
+        // re-reads every row and never consults a cursor column, so hiding the editor avoids
+        // a setting that would silently do nothing.
+        model.addAttribute("cursorPriorityApplicable",
+                !cdcActive && current != CaptureStrategy.FULL_COMPARE);
 
         // The polling path reads by cursor column only: without an index leading with that
         // column every incremental read scans the whole source table, which is the read that

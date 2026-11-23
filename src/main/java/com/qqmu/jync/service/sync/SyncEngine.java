@@ -1187,13 +1187,18 @@ public class SyncEngine {
      */
     static boolean cursorColumnChanged(SyncProgress progress, CursorStrategy strategy,
                                        SyncConfig config) {
+        boolean priorityConfigured = config.getCursorColumnPriority() != null
+                && !config.getCursorColumnPriority().isEmpty();
         return !config.getCaptureStrategyOrDefault().isLogCdc()
                 && strategy.isIncremental()
                 && progress.getLastSyncValue() != null
-                // A null cursorColumn is a legacy row from before the column was recorded;
-                // treat it as compatible rather than force-reloading every upgraded project.
-                && progress.getCursorColumn() != null
-                && !progress.getCursorColumn().equalsIgnoreCase(strategy.getColumn());
+                // A null cursorColumn is a legacy row from before the column was recorded.
+                // Without a project priority there is nothing to distinguish it from the old
+                // behavior, so leave it alone; once the user chooses a priority, re-baseline
+                // rather than risk comparing two different value domains.
+                && (progress.getCursorColumn() == null
+                        ? priorityConfigured
+                        : !progress.getCursorColumn().equalsIgnoreCase(strategy.getColumn()));
     }
 
     private void syncOneTable(TableMeta table, Connection sourceConn, Connection targetConn,
