@@ -36,7 +36,7 @@ class LogRetentionToolTest {
         assertThat(out.path("auditLogDays").asInt()).isEqualTo(90);
         assertThat(out.path("applicationLogDays").asInt()).isEqualTo(30);
         assertThat(out.path("metricsDays").asInt()).isEqualTo(7);
-        assertThat(out.path("datePurgeAllowedOn").asText()).contains("system log");
+        assertThat(out.path("datePurgeAllowedOn").asString()).contains("system log");
         assertThat(tool.allowedKeys()).isEmpty();
     }
 }

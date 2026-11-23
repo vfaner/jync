@@ -206,6 +206,7 @@ class InitialLoadInsertFirstProbeTest {
     }
 
     @Test
+    @SuppressWarnings("deprecation")  // deliberately exercises the legacy alias
     void theOldOracleOnlySwitchStillBinds() throws SQLException {
         SyncProperties properties = new SyncProperties();
         properties.setOracleInitialLoadInsertFirst(false);

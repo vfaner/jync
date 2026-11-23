@@ -725,12 +725,10 @@ class SecurityConfigTest {
         return paths;
     }
 
-    /** Path patterns, from whichever of the two matching strategies is in use. */
+    /** Path patterns. Spring MVC's handler mappings use the path-pattern condition. */
     private static Set<String> patternsOf(RequestMappingInfo info) {
-        if (info.getPathPatternsCondition() != null) {
-            return info.getPathPatternsCondition().getPatternValues();
-        }
-        return info.getPatternsCondition().getPatterns();
+        return info.getPathPatternsCondition() == null
+                ? Set.of() : info.getPathPatternsCondition().getPatternValues();
     }
 
     /**

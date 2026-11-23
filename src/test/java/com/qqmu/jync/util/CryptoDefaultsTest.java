@@ -22,6 +22,7 @@ import com.qqmu.jync.config.SyncProperties;
  * every existing deployment's credentials become undecryptable after the upgrade. These tests
  * turn that silent catastrophe into a red build.
  */
+@SuppressWarnings("deprecation")  // legacy Delux ciphertext compatibility
 class CryptoDefaultsTest {
 
     @Test

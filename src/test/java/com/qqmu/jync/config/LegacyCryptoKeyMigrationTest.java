@@ -44,6 +44,7 @@ import com.qqmu.jync.util.CryptoUtil;
  * only after the database has committed it, and recover from a crash at either side of that
  * boundary. Anything it cannot decrypt aborts the whole attempt rather than half-migrating rows.
  */
+@SuppressWarnings("deprecation")  // legacy Delux ciphertext compatibility
 class LegacyCryptoKeyMigrationTest {
 
     @TempDir

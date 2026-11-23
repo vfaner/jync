@@ -67,7 +67,7 @@ class YStreamServiceAdminTest {
         when(rs.getString("STATUS")).thenReturn("STARTED", "RUNNING");
         when(rs.getLong("START_SCN")).thenReturn(882304965853585408L, 1L);
         when(rs.getString("RESTART_POSITION"))
-                .thenReturn("882304965853585408-0-6806-0-0", null);
+                .thenReturn("882304965853585408-0-6806-0-0", (String) null);
         when(rs.getString("ERROR")).thenReturn(null, "boom");
 
         List<YStreamServiceAdmin.Service> mine = YStreamServiceAdmin.servicesFor(conn, 42L);

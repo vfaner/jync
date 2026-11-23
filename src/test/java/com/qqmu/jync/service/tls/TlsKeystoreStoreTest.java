@@ -21,6 +21,7 @@ import org.springframework.security.crypto.encrypt.TextEncryptor;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.util.CryptoUtil;
 
+@SuppressWarnings("deprecation")  // legacy Delux ciphertext compatibility
 class TlsKeystoreStoreTest {
 
     private static final String PASSPHRASE = "changeit";

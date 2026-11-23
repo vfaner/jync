@@ -10,6 +10,7 @@ import org.springframework.security.crypto.encrypt.TextEncryptor;
 
 import com.qqmu.jync.config.SyncProperties;
 
+@SuppressWarnings("deprecation")  // legacy Delux ciphertext compatibility
 class CryptoUtilTest {
 
     private CryptoUtil crypto;

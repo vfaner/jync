@@ -72,7 +72,7 @@ class DiagnosticApiControllerTest {
                 .thenThrow(new DiagnosticBundleService.DiagnosticBundleTooLargeException());
 
         mvc.perform(post("/api/diagnostics/bundle").with(csrf()))
-                .andExpect(status().isPayloadTooLarge())
+                .andExpect(status().isContentTooLarge())
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.message").value("error.diagnostics.tooLarge"));
     }

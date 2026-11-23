@@ -1534,7 +1534,7 @@ public class AiChatClient {
         }
         JsonNode error = node.path("error");
         if (!error.isMissingNode() && !error.isNull()) {
-            if (error.isTextual() && !error.asString("").isBlank()) {
+            if (error.isString() && !error.asString("").isBlank()) {
                 return error.asString("");
             }
             String message = error.path("message").asString("");

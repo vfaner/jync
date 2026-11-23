@@ -116,10 +116,9 @@ class JdbcEtlSourceTest {
         when(boundaryRows.next()).thenReturn(true, true);
         JdbcEtlSource source = source(DatabaseType.H2);
 
-        EtlProgramException failure = catchThrowableOfType(
+        EtlProgramException failure = catchThrowableOfType(EtlProgramException.class,
                 () -> source.query(task(EtlWriteMode.APPEND, "id"),
-                        new EtlCheckpointValue(Types.INTEGER, "3")),
-                EtlProgramException.class);
+                        new EtlCheckpointValue(Types.INTEGER, "3")));
 
         assertThat(failure).hasMessage("error.etl.resumeKey.duplicate:id");
     }

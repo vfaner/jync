@@ -27,7 +27,14 @@ public final class DeluxTextEncryptor implements TextEncryptor {
         this.delegate = delegate;
     }
 
-    /** Returns an encryptor equivalent to {@code Encryptors.delux(password, salt)}. */
+    /**
+     * Returns an encryptor equivalent to {@code Encryptors.delux(password, salt)}.
+     *
+     * <p>{@code AesBytesEncryptor} is deprecated in Spring Security 7, but the on-disk
+     * {@code enc:} format and every existing connection password depend on this exact
+     * construction. Replacing it needs a ciphertext migration, not a local refactor.
+     */
+    @SuppressWarnings("deprecation")
     public static TextEncryptor create(CharSequence password, CharSequence salt) {
         BytesEncryptor aes = new AesBytesEncryptor(password.toString(), salt,
                 KeyGenerators.secureRandom(16), AesBytesEncryptor.CipherAlgorithm.GCM);

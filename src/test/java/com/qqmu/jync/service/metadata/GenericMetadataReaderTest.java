@@ -63,7 +63,7 @@ class GenericMetadataReaderTest {
         ResultSet columns = mock(ResultSet.class);
         when(columns.next()).thenReturn(true, true, false);
         when(columns.getString("TABLE_NAME")).thenReturn("user_info", "user-info");
-        when(columns.getString("TABLE_SCHEM")).thenReturn(null, null);
+        when(columns.getString("TABLE_SCHEM")).thenReturn((String) null, (String) null);
         when(columns.getString("COLUMN_NAME")).thenReturn("id", "evil");
         when(columns.getString("TYPE_NAME")).thenReturn("BIGINT", "VARCHAR");
         when(columns.getInt("DATA_TYPE")).thenReturn(java.sql.Types.BIGINT, java.sql.Types.VARCHAR);
@@ -122,7 +122,7 @@ class GenericMetadataReaderTest {
         ResultSet pks = mock(ResultSet.class);
         when(pks.next()).thenReturn(true, true, false);
         when(pks.getString("TABLE_NAME")).thenReturn("user_info", "userXinfo");
-        when(pks.getString("TABLE_SCHEM")).thenReturn(null, null);
+        when(pks.getString("TABLE_SCHEM")).thenReturn((String) null, (String) null);
         when(pks.getShort("KEY_SEQ")).thenReturn((short) 1, (short) 1);
         when(pks.getString("COLUMN_NAME")).thenReturn("id", "evil");
         when(md.getPrimaryKeys(any(), any(), anyString())).thenReturn(pks);
@@ -134,7 +134,7 @@ class GenericMetadataReaderTest {
                 (short) DatabaseMetaData.tableIndexOther,
                 (short) DatabaseMetaData.tableIndexOther);
         when(indexes.getString("TABLE_NAME")).thenReturn("user_info", "userXinfo");
-        when(indexes.getString("TABLE_SCHEM")).thenReturn(null, null);
+        when(indexes.getString("TABLE_SCHEM")).thenReturn((String) null, (String) null);
         when(indexes.getString("INDEX_NAME")).thenReturn("idx_a", "idx_evil");
         when(indexes.getString("COLUMN_NAME")).thenReturn("id", "evil");
         when(md.getIndexInfo(any(), any(), anyString(), anyBoolean(), anyBoolean()))
@@ -144,7 +144,7 @@ class GenericMetadataReaderTest {
         ResultSet fks = mock(ResultSet.class);
         when(fks.next()).thenReturn(true, true, false);
         when(fks.getString("FKTABLE_NAME")).thenReturn("user_info", "userXinfo");
-        when(fks.getString("FKTABLE_SCHEM")).thenReturn(null, null);
+        when(fks.getString("FKTABLE_SCHEM")).thenReturn((String) null, (String) null);
         when(fks.getString("FK_NAME")).thenReturn("fk_a", "fk_evil");
         when(fks.getString("FKCOLUMN_NAME")).thenReturn("id", "evil");
         when(md.getImportedKeys(any(), any(), anyString())).thenReturn(fks);

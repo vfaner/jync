@@ -186,7 +186,7 @@ class KingbaseTableWriterTest {
         when(resultSet.getInt("COLUMN_SIZE")).thenReturn(24, 10);
         when(resultSet.getInt("DECIMAL_DIGITS")).thenReturn(0, 0);
         when(resultSet.getString("IS_NULLABLE")).thenReturn("NO", "YES");
-        when(resultSet.getString("COLUMN_DEF")).thenReturn(null, null);
+        when(resultSet.getString("COLUMN_DEF")).thenReturn((String) null, (String) null);
 
         List<ColumnMeta> columns = writer.targetColumns("orders");
 

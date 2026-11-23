@@ -29,6 +29,7 @@ import com.qqmu.jync.config.CryptoKeyResolver.Source;
  * its stored ciphertext was encrypted with them, so "upgrading" the key would orphan every
  * saved password.
  */
+@SuppressWarnings("deprecation")  // legacy Delux ciphertext compatibility
 class CryptoKeyResolverTest {
 
     @TempDir
