@@ -220,6 +220,27 @@ public interface SqlDialect {
     }
 
     /**
+     * Comment DDL for one column after an ADD/MODIFY. Kept separate from
+     * {@link #getPostColumnChangeDdl} because a comment can be removed as well as set, and
+     * MySQL carries the comment inline in the column definition instead.
+     */
+    default List<String> getColumnCommentDdl(String schema, String table, ColumnMeta column,
+                                             DatabaseType sourceType) {
+        return List.of();
+    }
+
+    /**
+     * Table and column comment DDL for a table this cycle created. Separate from
+     * {@link #getPostCreateTableDdl} because the latter also runs for existing tables (identity
+     * companions), while reissuing every comment on every existing table would turn a large
+     * structure sync into thousands of metadata-only statements.
+     */
+    default List<String> getCreatedTableCommentDdl(TableMeta table, String schema,
+                                                   String tableName, DatabaseType sourceType) {
+        return List.of();
+    }
+
+    /**
      * DDL that advances the column's value generator so the next omitted-value insert lands on
      * {@code nextValue} (typically MAX(column) + 1 after an initial load). Empty for dialects
      * without a generator. Statements are best-effort: a failure is logged, not fatal.

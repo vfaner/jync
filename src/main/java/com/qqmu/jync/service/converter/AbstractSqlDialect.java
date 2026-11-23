@@ -712,6 +712,43 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     }
 
     /**
+     * Standard {@code COMMENT ON TABLE/COLUMN} statements for targets that keep comments as
+     * separate DDL (Oracle-family, PostgreSQL-family, DB2, HANA). Only non-blank comments are
+     * emitted for a newly created table; clearing an existing comment is handled by the
+     * per-table/per-column change paths, which pass a blank value and emit {@code IS NULL}.
+     */
+    protected List<String> standardCommentDdl(TableMeta table, String schema, String tableName) {
+        List<String> ddl = new ArrayList<>();
+        if (table.getRemarks() != null && !table.getRemarks().isBlank()) {
+            ddl.add(commentOnTableSql(schema, tableName, table.getRemarks()));
+        }
+        for (ColumnMeta column : table.getColumns()) {
+            if (column.getRemarks() != null && !column.getRemarks().isBlank()) {
+                ddl.add(commentOnColumnSql(schema, tableName, column.getName(),
+                        column.getRemarks()));
+            }
+        }
+        return ddl;
+    }
+
+    protected String commentOnTableSql(String schema, String table, String comment) {
+        return "COMMENT ON TABLE " + qualify(schema, table) + " IS " + commentLiteral(comment);
+    }
+
+    protected String commentOnColumnSql(String schema, String table, String column,
+                                        String comment) {
+        return "COMMENT ON COLUMN " + qualify(schema, table) + "."
+                + quoteIdentifier(column) + " IS " + commentLiteral(comment);
+    }
+
+    /** SQL literal for a comment; null/blank means "remove the comment". */
+    protected static String commentLiteral(String comment) {
+        return comment == null || comment.isBlank()
+                ? "NULL"
+                : "'" + comment.replace("'", "''") + "'";
+    }
+
+    /**
      * A single type token that already implies identity/serial behaviour (e.g. PostgreSQL
      * {@code BIGSERIAL}); null when the dialect uses a separate clause instead.
      */

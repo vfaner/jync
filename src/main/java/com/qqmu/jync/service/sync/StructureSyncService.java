@@ -335,6 +335,19 @@ public class StructureSyncService {
                 executor.executeIdempotentCreate(extra);
             }
         }
+        if (created) {
+            // Comments are metadata-only and must not block a table that is otherwise ready
+            // to receive its first rows. A driver that lacks COMMENT ON support logs here.
+            try {
+                for (String extra : dialect.getCreatedTableCommentDdl(table,
+                        ctx.getTargetSchema(), targetTable, ctx.effectiveSourceType())) {
+                    executor.executeIdempotentCreate(extra);
+                }
+            } catch (SQLException e) {
+                log.warn("Could not apply comments to newly created target table {}: {}",
+                        targetTable, e.getMessage());
+            }
+        }
 
         int indexCount = 0;
         int deferred = 0;
@@ -449,6 +462,10 @@ public class StructureSyncService {
     private void runPostColumnDdl(DdlExecutor executor, SqlDialect dialect, String targetTable,
                                   ColumnMeta column, SyncContext ctx) throws SQLException {
         for (String extra : dialect.getPostColumnChangeDdl(
+                ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType())) {
+            executor.executeIdempotentCreate(extra);
+        }
+        for (String extra : dialect.getColumnCommentDdl(
                 ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType())) {
             executor.executeIdempotentCreate(extra);
         }

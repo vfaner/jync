@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
@@ -151,6 +152,23 @@ public class Db2Dialect extends AbstractSqlDialect {
         return "ALTER TABLE " + qualify(schema, table) + " ALTER COLUMN "
                 + quoteIdentifier(column.getName()) + " SET DATA TYPE "
                 + mapType(column, sourceType);
+    }
+
+    @Override
+    public List<String> getCreatedTableCommentDdl(TableMeta table, String schema,
+                                                  String tableName, DatabaseType sourceType) {
+        return standardCommentDdl(table, schema, tableName);
+    }
+
+    @Override
+    public List<String> getColumnCommentDdl(String schema, String table, ColumnMeta column,
+                                            DatabaseType sourceType) {
+        return List.of(commentOnColumnSql(schema, table, column.getName(), column.getRemarks()));
+    }
+
+    @Override
+    public String getAlterTableCommentSql(String schema, String table, String comment) {
+        return commentOnTableSql(schema, table, comment);
     }
 
     @Override

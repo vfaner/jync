@@ -36,8 +36,7 @@ class SqlServerMetadataReaderCommentsTest {
     @Test
     void tableAndColumnCommentsComeFromExtendedProperties() throws Exception {
         Connection conn = mock(Connection.class);
-        stubTableComment(conn, "订单主表");
-        stubColumnComments(conn,
+        stubComments(conn, "订单主表",
                 new String[] {"ID", "NAME"}, new String[] {"主键", "客户名称"});
         TableMeta table = table();
 
@@ -51,12 +50,12 @@ class SqlServerMetadataReaderCommentsTest {
     @Test
     void readTableAppliesTheDictionaryComments() throws Exception {
         Connection conn = metadataConnection();
-        stubTableComment(conn, "订单主表");
+        stubComments(conn, "订单主表", new String[0], new String[0]);
 
         TableMeta table = reader.readTable(conn, "dbo", "ORDERS");
 
         assertThat(table.getRemarks()).isEqualTo("订单主表");
-        verify(conn).prepareStatement(contains("minor_id = 0"));
+        verify(conn).prepareStatement(contains("UNION ALL"));
     }
 
     @Test
@@ -77,8 +76,7 @@ class SqlServerMetadataReaderCommentsTest {
     @Test
     void sqlServerCommentsReachMySqlTargetDdl() throws Exception {
         Connection conn = mock(Connection.class);
-        stubTableComment(conn, "订单主表");
-        stubColumnComments(conn,
+        stubComments(conn, "订单主表",
                 new String[] {"ID", "NAME"}, new String[] {"主键", "客户名称"});
         TableMeta table = typedTable();
 
@@ -98,11 +96,12 @@ class SqlServerMetadataReaderCommentsTest {
         ResultSet tableRs = emptyResultSet();
         PreparedStatement tablePs = mock(PreparedStatement.class);
         when(tablePs.executeQuery()).thenReturn(tableRs);
-        when(conn.prepareStatement(contains("minor_id = 0"))).thenReturn(tablePs);
+        when(conn.prepareStatement(contains("UNION ALL"))).thenReturn(tablePs);
 
         reader.readComments(conn, null, "ORDERS", new TableMeta());
 
         verify(tablePs).setString(1, "dbo");
+        verify(tablePs).setString(3, "dbo");
     }
 
     private static TableMeta table() {
@@ -160,30 +159,37 @@ class SqlServerMetadataReaderCommentsTest {
         return rs;
     }
 
-    private static void stubTableComment(Connection conn, String comment) throws SQLException {
+    private static void stubComments(Connection conn, String tableComment, String[] names,
+                                     String[] comments) throws SQLException {
+        int rows = (tableComment == null ? 0 : 1) + names.length;
         ResultSet rs = mock(ResultSet.class);
-        when(rs.next()).thenReturn(true).thenReturn(false);
-        when(rs.getString(1)).thenReturn(comment);
-        PreparedStatement ps = mock(PreparedStatement.class);
-        when(ps.executeQuery()).thenReturn(rs);
-        when(conn.prepareStatement(contains("minor_id = 0"))).thenReturn(ps);
-    }
-
-    private static void stubColumnComments(Connection conn, String[] names, String[] comments)
-            throws SQLException {
-        ResultSet rs = mock(ResultSet.class);
-        Boolean[] next = new Boolean[names.length + 1];
-        for (int i = 0; i < names.length; i++) {
+        Boolean[] next = new Boolean[rows + 1];
+        for (int i = 0; i < rows; i++) {
             next[i] = true;
         }
-        next[names.length] = false;
-        when(rs.next()).thenReturn(next[0], java.util.Arrays.copyOfRange(next, 1, next.length));
-        when(rs.getString(1)).thenReturn(names[0],
-                java.util.Arrays.copyOfRange(names, 1, names.length));
-        when(rs.getString(2)).thenReturn(comments[0],
-                java.util.Arrays.copyOfRange(comments, 1, comments.length));
+        next[rows] = false;
+        when(rs.next()).thenReturn(next[0],
+                java.util.Arrays.copyOfRange(next, 1, next.length));
+
+        String[] columnNames = new String[rows];
+        String[] commentValues = new String[rows];
+        int offset = 0;
+        if (tableComment != null) {
+            columnNames[0] = null;
+            commentValues[0] = tableComment;
+            offset = 1;
+        }
+        for (int i = 0; i < names.length; i++) {
+            columnNames[offset + i] = names[i];
+            commentValues[offset + i] = comments[i];
+        }
+        when(rs.getString(1)).thenReturn(columnNames[0],
+                java.util.Arrays.copyOfRange(columnNames, 1, columnNames.length));
+        when(rs.getString(2)).thenReturn(commentValues[0],
+                java.util.Arrays.copyOfRange(commentValues, 1, commentValues.length));
         PreparedStatement ps = mock(PreparedStatement.class);
         when(ps.executeQuery()).thenReturn(rs);
-        when(conn.prepareStatement(contains("sys.columns"))).thenReturn(ps);
+        when(conn.prepareStatement(contains("UNION ALL"))).thenReturn(ps);
     }
+
 }

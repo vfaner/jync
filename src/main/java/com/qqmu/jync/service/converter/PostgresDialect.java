@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
@@ -235,6 +236,23 @@ public class PostgresDialect extends AbstractSqlDialect {
                 + quoteIdentifier(column.getName()) + " TYPE " + mapType(column, sourceType)
                 + " USING " + quoteIdentifier(column.getName()) + "::"
                 + mapType(column, sourceType);
+    }
+
+    @Override
+    public List<String> getCreatedTableCommentDdl(TableMeta table, String schema,
+                                                  String tableName, DatabaseType sourceType) {
+        return standardCommentDdl(table, schema, tableName);
+    }
+
+    @Override
+    public List<String> getColumnCommentDdl(String schema, String table, ColumnMeta column,
+                                            DatabaseType sourceType) {
+        return List.of(commentOnColumnSql(schema, table, column.getName(), column.getRemarks()));
+    }
+
+    @Override
+    public String getAlterTableCommentSql(String schema, String table, String comment) {
+        return commentOnTableSql(schema, table, comment);
     }
 
     @Override

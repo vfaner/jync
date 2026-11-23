@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
@@ -215,6 +216,86 @@ public class SqlServerDialect extends AbstractSqlDialect {
             return "SYSDATETIME()";
         }
         return renderedDefault;
+    }
+
+    @Override
+    public List<String> getCreatedTableCommentDdl(TableMeta table, String schema,
+                                                  String tableName, DatabaseType sourceType) {
+        List<String> ddl = new ArrayList<>();
+        if (table.getRemarks() != null && !table.getRemarks().isBlank()) {
+            ddl.add(extendedPropertySql(schema, tableName, null, table.getRemarks()));
+        }
+        for (ColumnMeta column : table.getColumns()) {
+            if (column.getRemarks() != null && !column.getRemarks().isBlank()) {
+                ddl.add(extendedPropertySql(schema, tableName, column.getName(),
+                        column.getRemarks()));
+            }
+        }
+        return ddl;
+    }
+
+    @Override
+    public List<String> getColumnCommentDdl(String schema, String table, ColumnMeta column,
+                                            DatabaseType sourceType) {
+        // A blank source comment must remove an old extended property, not leave it behind.
+        return List.of(extendedPropertySql(schema, table, column.getName(), column.getRemarks()));
+    }
+
+    @Override
+    public String getAlterTableCommentSql(String schema, String table, String comment) {
+        return extendedPropertySql(schema, table, null, comment);
+    }
+
+    /**
+     * SQL Server comments are the {@code MS_Description} extended property. An ADD fails when
+     * the property already exists and an UPDATE fails when it does not, so the generated
+     * statement branches in T-SQL; a blank value drops the property to mirror a removed
+     * source comment.
+     */
+    private String extendedPropertySql(String schema, String table, String column,
+                                       String comment) {
+        String schemaName = schema == null || schema.isBlank() ? "dbo" : schema;
+        String schemaLiteral = sqlServerLiteral(schemaName);
+        String tableLiteral = sqlServerLiteral(table);
+        boolean columnLevel = column != null && !column.isBlank();
+        String columnLiteral = columnLevel ? sqlServerLiteral(column) : null;
+
+        StringBuilder exists = new StringBuilder(
+                "SELECT 1 FROM sys.extended_properties ep "
+                        + "JOIN sys.objects o ON o.object_id = ep.major_id "
+                        + "JOIN sys.schemas s ON s.schema_id = o.schema_id ");
+        if (columnLevel) {
+            exists.append("JOIN sys.columns c ON c.object_id = o.object_id "
+                    + "AND c.column_id = ep.minor_id ");
+        }
+        exists.append("WHERE ep.class = 1 AND ep.name = N'MS_Description' "
+                + "AND s.name = ").append(schemaLiteral)
+                .append(" AND o.name = ").append(tableLiteral);
+        if (columnLevel) {
+            exists.append(" AND c.name = ").append(columnLiteral);
+        } else {
+            exists.append(" AND ep.minor_id = 0");
+        }
+
+        String levelArgs = "@level0type=N'SCHEMA', @level0name=" + schemaLiteral + ", "
+                + "@level1type=N'TABLE', @level1name=" + tableLiteral
+                + (columnLevel
+                        ? ", @level2type=N'COLUMN', @level2name=" + columnLiteral
+                        : "");
+        String nameAndLevels = "@name=N'MS_Description', " + levelArgs;
+        if (comment == null || comment.isBlank()) {
+            return "IF EXISTS (" + exists + ") "
+                    + "EXEC sys.sp_dropextendedproperty " + nameAndLevels;
+        }
+        String addOrUpdate = "@name=N'MS_Description', @value=" + sqlServerLiteral(comment)
+                + ", " + levelArgs;
+        return "IF EXISTS (" + exists + ") "
+                + "EXEC sys.sp_updateextendedproperty " + addOrUpdate + " "
+                + "ELSE EXEC sys.sp_addextendedproperty " + addOrUpdate;
+    }
+
+    private static String sqlServerLiteral(String value) {
+        return "N'" + (value == null ? "" : value.replace("'", "''")) + "'";
     }
 
     @Override

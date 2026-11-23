@@ -392,25 +392,44 @@ public class OracleDialect extends AbstractSqlDialect {
     @Override
     public List<String> getPostCreateTableDdl(TableMeta table, String schema, String tableName,
                                               DatabaseType sourceType) {
-        if (supportsIdentity()) {
-            return List.of();
-        }
         List<String> stmts = new ArrayList<>();
-        for (ColumnMeta col : table.getColumns()) {
-            if (col.isAutoIncrement()) {
-                stmts.addAll(legacyIdentityDdl(schema, tableName, col));
+        if (!supportsIdentity()) {
+            for (ColumnMeta col : table.getColumns()) {
+                if (col.isAutoIncrement()) {
+                    stmts.addAll(legacyIdentityDdl(schema, tableName, col));
+                }
             }
         }
         return stmts;
     }
 
     @Override
+    public List<String> getCreatedTableCommentDdl(TableMeta table, String schema,
+                                                  String tableName, DatabaseType sourceType) {
+        return standardCommentDdl(table, schema, tableName);
+    }
+
+    @Override
     public List<String> getPostColumnChangeDdl(String schema, String table, ColumnMeta column,
                                                DatabaseType sourceType) {
-        if (supportsIdentity() || !column.isAutoIncrement()) {
-            return List.of();
+        List<String> stmts = new ArrayList<>();
+        if (!supportsIdentity() && column.isAutoIncrement()) {
+            stmts.addAll(legacyIdentityDdl(schema, table, column));
         }
-        return legacyIdentityDdl(schema, table, column);
+        return stmts;
+    }
+
+    @Override
+    public List<String> getColumnCommentDdl(String schema, String table, ColumnMeta column,
+                                            DatabaseType sourceType) {
+        // Always emit, including a blank value: a source comment removed from the column
+        // must clear the target's old COMMENT instead of leaving it behind.
+        return List.of(commentOnColumnSql(schema, table, column.getName(), column.getRemarks()));
+    }
+
+    @Override
+    public String getAlterTableCommentSql(String schema, String table, String comment) {
+        return commentOnTableSql(schema, table, comment);
     }
 
     /**
