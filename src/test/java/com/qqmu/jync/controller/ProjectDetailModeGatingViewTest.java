@@ -124,6 +124,53 @@ class ProjectDetailModeGatingViewTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
+    void anAdminGetsTheBulkCursorEditorForAStoppedPollingProject() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
+
+        String page = renderDetail();
+
+        assertThat(page).contains("data-role=\"cursor-priority-open\"")
+                .contains("id=\"cursor-priority-modal\"")
+                .contains("data-role=\"cursor-priority-input\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void aRunningProjectDoesNotOfferTheBulkCursorEditor() throws Exception {
+        Project project = stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
+        project.setEnabled(true);
+
+        String page = renderDetail();
+
+        // Configuration edits require a stop; hiding the control matches the per-table form.
+        assertThat(page).doesNotContain("data-role=\"cursor-priority-open\"")
+                .doesNotContain("id=\"cursor-priority-modal\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void aCdcProjectDoesNotOfferTheBulkCursorEditor() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, false);
+
+        String page = renderDetail();
+
+        assertThat(page).doesNotContain("data-role=\"cursor-priority-open\"")
+                .doesNotContain("id=\"cursor-priority-modal\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "VIEWER")
+    void aViewerDoesNotGetTheBulkCursorEditor() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
+
+        String page = renderDetail();
+
+        assertThat(page).doesNotContain("data-role=\"cursor-priority-open\"")
+                .doesNotContain("id=\"cursor-priority-modal\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
     void theCursorExplanationIsHiddenForACdcProject() throws Exception {
         // The hint says a cursor column reads only what changed — true for polling, false
         // for log CDC, where changes come from the log stream. Leaving it up next to the

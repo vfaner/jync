@@ -23,6 +23,16 @@
                 <svg class="ico"><use href="#check-lg"/></svg>
                 <span th:text="#{rowcount.open}">Check row counts</span>
             </button>
+            <!-- 批量设置只改项目级游标优先级，不读源库、不逐表写配置；表多时也只需一次操作。
+                 未首次跑的项目同样可用，因此不依赖 progressList 是否为空。 -->
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-role="cursor-priority-open"
+                    data-open-modal="cursor-priority-modal"
+                    th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !cdcActive and !project.enabled}"
+                    th:attr="title=#{cursor.priority.openHint}">
+                <svg class="ico"><use href="#list-ul"/></svg>
+                <span th:text="#{cursor.priority.open}">Bulk set cursor</span>
+            </button>
         </div>
     </div>
     <div class="card-body tight">
@@ -287,6 +297,48 @@
             <button type="button" class="btn btn-ghost btn-sm"
                     data-close-modal="row-count-modal"
                     th:text="#{common.close}">Close</button>
+        </div>
+    </div>
+</div>
+
+<!--/* 项目级游标优先级：标签顺序就是匹配顺序。保存只写项目配置，不扫源库；
+       已跑过的表若换列，由同步引擎在下一轮惰性重载。未首次跑也可直接保存。 */-->
+<div class="modal" id="cursor-priority-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !cdcActive and !project.enabled}"
+     th:attr="data-action=@{/api/projects/{id}/cursor-priority(id=${project.id})},
+              aria-label=#{cursor.priority.title}">
+    <div class="modal-mask" data-close-modal="cursor-priority-modal"></div>
+    <div class="modal-dialog">
+        <button type="button" class="modal-close" data-close-modal="cursor-priority-modal"
+                th:attr="aria-label=#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{cursor.priority.title}">Cursor column priority</h3>
+            <p class="small muted" th:text="#{cursor.priority.help}">Help</p>
+        </div>
+        <div class="tag-editor">
+            <div class="tag-input" data-role="cursor-priority-tags">
+                <input type="text" class="tag-input-field" data-role="cursor-priority-input"
+                       autocomplete="off" spellcheck="false"
+                       th:placeholder="#{cursor.priority.inputPlaceholder}"
+                       th:attr="aria-describedby='cursor-priority-hint'">
+            </div>
+            <p id="cursor-priority-hint" class="small muted tag-input-hint"
+               th:text="#{cursor.priority.hint}">Hint</p>
+        </div>
+        <p class="small muted" th:text="#{cursor.priority.reloadHint}">Reload hint</p>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-close-modal="cursor-priority-modal"
+                    th:text="#{common.cancel}">Cancel</button>
+            <button type="button" class="btn btn-primary btn-sm"
+                    data-role="cursor-priority-save"
+                    th:text="#{cursor.priority.save}">Save</button>
+        </div>
+        <div data-role="cursor-priority-initial" hidden>
+            <input type="hidden" th:each="name : ${config.cursorColumnPriority}"
+                   th:value="${name}">
         </div>
     </div>
 </div>

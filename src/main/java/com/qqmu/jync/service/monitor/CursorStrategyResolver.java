@@ -18,8 +18,10 @@ import lombok.extern.slf4j.Slf4j;
  *
  * <p>Resolution order, most to least reliable:
  * <ol>
- *   <li>An explicit column configured by the user — always honoured, since the user knows
+ *   <li>An explicit column configured for the table — always honoured, since the user knows
  *       the schema's semantics better than any heuristic.
+ *   <li>The project-level ordered cursor priority — the first configured name that exists on
+ *       the table with a usable type. Polling only; log-CDC projects ignore it.
  *   <li>A column whose name matches a last-modified convention and whose type is temporal.
  *       This is the only case that reliably catches updates.
  *   <li>Oracle's row-level {@code ORA_ROWSCN} on a table probed as {@code ROWDEPENDENCIES}:
@@ -74,6 +76,40 @@ public class CursorStrategyResolver {
             }
         }
 
+        // Project-level priority: lets a schema with several timestamp-looking columns
+        // (update_time, update_stamp, …) name the authoritative one once instead of setting
+        // a per-table override on every table. Matching is case-insensitive but exact — a
+        // prefix must not accidentally select update_stamp_old. Log-CDC projects do not use
+        // cursor columns at all, so this list is deliberately ignored there.
+        if (!config.getCaptureStrategyOrDefault().isLogCdc()) {
+            for (String configuredPriority : emptyIfNull(config.getCursorColumnPriority())) {
+                if (configuredPriority == null || configuredPriority.isBlank()) {
+                    continue;
+                }
+                Optional<ColumnMeta> col = table.column(configuredPriority.trim());
+                if (col.isEmpty()) {
+                    log.debug("Priority cursor column {}.{} does not exist; trying the next candidate",
+                            table.getName(), configuredPriority);
+                    continue;
+                }
+                ColumnMeta c = col.get();
+                if (CursorStrategy.isTemporalType(c.getJdbcType())
+                        || CursorStrategy.isSqlServerRowversion(c)) {
+                    return CursorStrategy.timestamp(c.getName(), c.getJdbcType(),
+                            CursorStrategy.isSqlServerRowversion(c)
+                                    ? "Configured by project cursor priority (SQL Server rowversion: "
+                                            + "bumps on every update)"
+                                    : "Configured by project cursor priority");
+                }
+                if (CursorStrategy.isIntegralType(c.getJdbcType())) {
+                    return CursorStrategy.identity(c.getName(), c.getJdbcType(),
+                            "Configured by project cursor priority (numeric: inserts only)");
+                }
+                log.debug("Priority cursor column {}.{} has an unusable type; trying the next candidate",
+                        table.getName(), configuredPriority);
+            }
+        }
+
         // A conventional last-modified column: catches inserts and updates.
         Optional<ColumnMeta> modified = findByHints(table, CursorStrategy.TIMESTAMP_HINTS, true);
         if (modified.isPresent()) {
@@ -118,6 +154,10 @@ public class CursorStrategyResolver {
         return CursorStrategy.none("No timestamp or numeric key column, and the table is too "
                 + "large (~" + (rows < 0 ? "unknown" : rows) + " rows) for full comparison. "
                 + "Specify a cursor column in the project settings to enable incremental sync.");
+    }
+
+    private static java.util.List<String> emptyIfNull(java.util.List<String> values) {
+        return values == null ? java.util.List.of() : values;
     }
 
     /**

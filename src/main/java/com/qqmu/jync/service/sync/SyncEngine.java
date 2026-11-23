@@ -1179,6 +1179,23 @@ public class SyncEngine {
         }
     }
 
+    /**
+     * Whether a stored watermark now belongs to a different effective cursor column. A
+     * project-level priority change is applied lazily this way: only tables whose resolution
+     * actually moved reload, and only when their turn in the cycle arrives. Log-CDC and
+     * non-incremental strategies never trigger it.
+     */
+    static boolean cursorColumnChanged(SyncProgress progress, CursorStrategy strategy,
+                                       SyncConfig config) {
+        return !config.getCaptureStrategyOrDefault().isLogCdc()
+                && strategy.isIncremental()
+                && progress.getLastSyncValue() != null
+                // A null cursorColumn is a legacy row from before the column was recorded;
+                // treat it as compatible rather than force-reloading every upgraded project.
+                && progress.getCursorColumn() != null
+                && !progress.getCursorColumn().equalsIgnoreCase(strategy.getColumn());
+    }
+
     private void syncOneTable(TableMeta table, Connection sourceConn, Connection targetConn,
                               SyncContext ctx, SyncResult result, Set<String> blockedTables,
                               Set<String> knownTargetTables,
@@ -1201,6 +1218,18 @@ public class SyncEngine {
             } catch (SQLException e) {
                 log.debug("Row estimate failed for {}: {}", table.getName(), e.getMessage());
             }
+        }
+
+        // A project-level cursor-priority change can move a table to a different column
+        // without touching its stored progress. The old watermark belongs to the old column
+        // and must never be compared against the new one, so re-baseline lazily here: only
+        // tables whose effective column actually changed pay for a full reload, and only
+        // when their turn comes. CDC never takes this path (its cursor list is ignored).
+        if (cursorColumnChanged(progress, strategy, ctx.getConfig())) {
+            log.info("Project '{}': cursor column of {} changed from {} to {}; reloading this table",
+                    ctx.projectName(), table.getName(), progress.getCursorColumn(),
+                    strategy.getColumn());
+            progress = stateWriter.forceReload(progress);
         }
 
         // 目标表可能被手动删除了，或者快照与实际状态不同步。

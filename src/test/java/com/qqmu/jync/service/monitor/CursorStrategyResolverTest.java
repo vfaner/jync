@@ -12,6 +12,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
+import com.qqmu.jync.model.CaptureStrategy;
 
 /**
  * The cursor strategy determines whether updates are detectable at all, so these tests pin the
@@ -139,6 +140,65 @@ class CursorStrategyResolverTest {
 
         assertThat(strategy.getColumn()).isEqualTo("audit_ts");
         assertThat(strategy.getRationale()).containsIgnoringCase("user");
+    }
+
+    @Test
+    void projectPriorityChoosesTheConfiguredColumnBeforeAutoHints() {
+        TableMeta t = table(List.of(
+                col("id", Types.INTEGER),
+                col("update_time", Types.TIMESTAMP),
+                col("update_stamp", Types.TIMESTAMP)), List.of("id"), 1000L);
+        config.setCursorColumnPriority(List.of("update_stamp", "update_time"));
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.TIMESTAMP);
+        assertThat(strategy.getColumn()).isEqualTo("update_stamp");
+        assertThat(strategy.getRationale()).containsIgnoringCase("project cursor priority");
+    }
+
+    @Test
+    void projectPriorityMatchesCaseInsensitivelyAndSkipsMissingColumns() {
+        TableMeta t = table(List.of(
+                col("id", Types.INTEGER),
+                col("UPDATE_TIME", Types.TIMESTAMP)), List.of("id"), 1000L);
+        config.setCursorColumnPriority(List.of("UPDATE_STAMP", "update_time"));
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.TIMESTAMP);
+        assertThat(strategy.getColumn()).isEqualTo("UPDATE_TIME");
+    }
+
+    @Test
+    void anExplicitTableColumnStillBeatsTheProjectPriority() {
+        TableMeta t = table(List.of(
+                col("id", Types.INTEGER),
+                col("update_time", Types.TIMESTAMP),
+                col("update_stamp", Types.TIMESTAMP)), List.of("id"), 1000L);
+        config.setCursorColumnPriority(List.of("update_stamp"));
+        config.getCursorColumns().put("orders", "update_time");
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getColumn()).isEqualTo("update_time");
+        assertThat(strategy.getRationale()).containsIgnoringCase("user");
+    }
+
+    @Test
+    void projectPriorityIsIgnoredForLogCdc() {
+        TableMeta t = table(List.of(
+                col("id", Types.INTEGER),
+                col("update_time", Types.TIMESTAMP),
+                col("update_stamp", Types.TIMESTAMP)), List.of("id"), 1000L);
+        config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        config.setCursorColumnPriority(List.of("update_stamp"));
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        // CDC does not use a cursor; its baseline keeps the pre-existing auto resolution.
+        assertThat(strategy.getColumn()).isEqualTo("update_time");
+        assertThat(strategy.getRationale()).containsIgnoringCase("auto-detected");
     }
 
     @Test

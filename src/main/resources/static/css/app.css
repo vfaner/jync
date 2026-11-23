@@ -1408,6 +1408,42 @@ table.tbl a.truncate { display: block; }
 }
 .modal-close:hover { background: var(--bg-tint); color: var(--ink); }
 .modal-close .ico { width: 14px; height: 14px; }
+/* 游标优先级标签输入：标签顺序即匹配顺序，拖动即可调整 */
+.tag-editor { margin-top: 16px; text-align: left; }
+.tag-input {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  min-height: 44px; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg); cursor: text;
+  transition: border-color .2s, box-shadow .2s;
+}
+.tag-input:focus-within {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent);
+}
+.tag-input-field {
+  flex: 1 1 160px; min-width: 120px;
+  border: 0; outline: 0; padding: 4px 2px;
+  background: transparent; color: var(--ink);
+  font-family: var(--mono); font-size: 13px;
+}
+.tag-input-field::placeholder { color: var(--ink-mute); font-family: inherit; }
+.tag-chip {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 4px 7px 4px 9px; border-radius: 7px;
+  border: 1px solid var(--line); background: var(--bg-tint);
+  color: var(--ink-soft); font-family: var(--mono); font-size: 12px;
+  cursor: grab; user-select: none;
+}
+.tag-chip:active { cursor: grabbing; }
+.tag-chip.dragging { opacity: .45; }
+.tag-chip button {
+  width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: var(--ink-mute); font: inherit;
+  font-size: 14px; line-height: 1; cursor: pointer;
+}
+.tag-chip button:hover { background: var(--fb-danger-12); color: var(--danger); }
+.tag-input-hint { margin: 7px 2px 0; }
 /* 按日期删除弹窗：日期框整块可点、自带一格日历面板。
    原生 <input type=date> 只有点右侧小图标才展开，面板由浏览器绘制，主题和密度都
    无法与页面统一 —— 所以面板自己画，点击输入框任意位置即可展开。 */

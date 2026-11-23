@@ -98,6 +98,15 @@ public class SyncConfig {
      */
     private Map<String, String> cursorColumns = new HashMap<>();
 
+    /**
+     * Ordered project-level cursor column preference, e.g.
+     * {@code ["update_stamp", "update_time"]}. The first column that exists on a table and
+     * has a usable type wins; otherwise resolution falls through to the existing heuristics.
+     * A per-table {@link #cursorColumns} entry still takes precedence. Only the polling path
+     * consults this list; log-CDC consumers never read it.
+     */
+    private List<String> cursorColumnPriority = new ArrayList<>();
+
     /** Table name mapping source -> target; unmapped tables keep their name. */
     private Map<String, String> tableNameMapping = new HashMap<>();
 
@@ -307,6 +316,11 @@ public class SyncConfig {
             sb.append('"').append(names.get(i)).append('"');
         }
         return sb.toString();
+    }
+
+    /** Null-safe: an explicit JSON null is treated as no project-level preference. */
+    public List<String> getCursorColumnPriority() {
+        return cursorColumnPriority == null ? List.of() : cursorColumnPriority;
     }
 
     public String cursorColumnFor(String table) {

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -514,6 +515,73 @@ public class ProjectService {
         }
         saveConfig(projectId, config, actor);
         stateWriter.clearCursor(projectId, tableName);
+    }
+
+    /**
+     * Saves the project-level ordered cursor-column preference used by the polling path.
+     *
+     * <p>Unlike {@link #saveCursorColumn} this deliberately does not inspect source tables or
+     * clear progress: the resolver decides per table at sync time whether the preferred
+     * column exists and is usable. A table whose effective cursor column changes is
+     * re-baselined lazily by the engine, so a 700-table project does not pay 700 metadata
+     * queries just to save one setting. Log-CDC projects do not use cursor columns at all and
+     * are refused rather than storing a setting that can never take effect.
+     */
+    @Transactional
+    public void saveCursorPriority(Long projectId, List<String> cursorColumnPriority,
+                                   AccessGuard actor) {
+        Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
+        if (isRunning(project)) {
+            throw new IllegalStateException(stoppedButRunningKey(project,
+                    "error.project.stop.before.config"));
+        }
+        SyncConfig config = loadConfig(project);
+        if (config.getCaptureStrategyOrDefault().isLogCdc()) {
+            throw new IllegalStateException("error.project.cursor.priority.cdc");
+        }
+        List<String> normalized = normalizeCursorPriority(cursorColumnPriority);
+        if (sameCursorPriority(config.getCursorColumnPriority(), normalized)) {
+            return;
+        }
+        config.setCursorColumnPriority(normalized);
+        saveConfig(projectId, config, actor);
+    }
+
+    private static boolean sameCursorPriority(List<String> left, List<String> right) {
+        if (left == null || right == null || left.size() != right.size()) {
+            return left == right;
+        }
+        for (int i = 0; i < left.size(); i++) {
+            if (!left.get(i).equalsIgnoreCase(right.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<String> normalizeCursorPriority(List<String> values) {
+        List<String> normalized = new ArrayList<>();
+        Set<String> seen = new LinkedHashSet<>();
+        if (values != null) {
+            for (String raw : values) {
+                String value = raw == null ? "" : raw.trim();
+                if (value.isEmpty()) {
+                    continue;
+                }
+                if (value.length() > 128) {
+                    throw new IllegalArgumentException(
+                            "error.project.cursor.priority.invalid");
+                }
+                if (seen.add(value.toUpperCase(java.util.Locale.ROOT))) {
+                    normalized.add(value);
+                }
+            }
+        }
+        if (normalized.size() > 20) {
+            throw new IllegalArgumentException("error.project.cursor.priority.too.many");
+        }
+        return normalized;
     }
 
     /**

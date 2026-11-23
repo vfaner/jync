@@ -1,6 +1,7 @@
 package com.qqmu.jync.controller.api;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
@@ -112,6 +113,30 @@ public class ProjectApiController {
         // A forced unlock can stop a live cycle; reload so the badge and buttons reflect it.
         body.put("toastKind", "warn");
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Saves the project-level ordered cursor-column preference used by polling.
+     *
+     * <p>No source tables are inspected here: resolution happens per table at sync time, so
+     * a large project can save the setting without 700 metadata round trips. A stopped
+     * project is required, and log-CDC projects are refused because they do not use cursor
+     * columns at all.
+     */
+    @PostMapping("/{id}/cursor-priority")
+    public ResponseEntity<Map<String, Object>> saveCursorPriority(
+            @PathVariable Long id,
+            @RequestParam(name = "cursorColumnPriority", required = false)
+            List<String> cursorColumnPriority) {
+        try {
+            projectService.saveCursorPriority(id, cursorColumnPriority, AccessGuard.current());
+            return ResponseEntity.ok(ok("msg.cursor.priority.saved"));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("success", false);
+            body.put("message", e.getMessage());
+            return ResponseEntity.ok(body);
+        }
     }
 
     /** Columns of a source table that could serve as a cursor. */

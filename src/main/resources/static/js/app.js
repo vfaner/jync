@@ -1688,6 +1688,155 @@
    * 纯 GET，不改变任何同步状态。数据库里的内容一律经 textContent 写入：
    * 单元格里出现 "<script>" 也只是文本，不会变成标记；列名同理。
    */
+  /* ─── 批量游标优先级 ───────────────────────────────────── */
+
+  /**
+   * 项目级游标优先级标签输入。标签顺序就是匹配顺序；Enter/失焦生成标签，× 删除，
+   * 拖动或 Alt+←/→ 调整顺序。保存只提交这组列名，不在这里读取源库。
+   */
+  function bindCursorPriority(btn) {
+    var modal = document.getElementById('cursor-priority-modal');
+    if (!modal || !btn || !btn.dataset.action) { return; }
+    var tagsBox = modal.querySelector('[data-role="cursor-priority-tags"]');
+    var input = modal.querySelector('[data-role="cursor-priority-input"]');
+    var saveBtn = modal.querySelector('[data-role="cursor-priority-save"]');
+    if (!tagsBox || !input || !saveBtn) { return; }
+
+    var initial = Array.prototype.slice.call(
+      modal.querySelectorAll('[data-role="cursor-priority-initial"] input'))
+      .map(function (item) { return item.value; });
+    var saved = initial.slice();
+    var draft = initial.slice();
+    var dragFrom = -1;
+
+    function commit() {
+      var value = input.value.trim();
+      input.value = '';
+      if (!value) { return; }
+      var duplicate = draft.some(function (item) {
+        return item.toLowerCase() === value.toLowerCase();
+      });
+      if (!duplicate) {
+        if (draft.length >= 20) {
+          toast(t('cursor.priority.tooMany'), 'warn');
+          return;
+        }
+        draft.push(value);
+      }
+      render();
+    }
+
+    function moveTag(from, to) {
+      if (to < 0 || to >= draft.length || from === to) { return; }
+      var moved = draft.splice(from, 1)[0];
+      draft.splice(to, 0, moved);
+      render();
+      var chips = tagsBox.querySelectorAll('.tag-chip');
+      if (chips[to]) { chips[to].focus(); }
+    }
+
+    function render() {
+      Array.prototype.slice.call(tagsBox.querySelectorAll('.tag-chip'))
+        .forEach(function (chip) { chip.remove(); });
+      draft.forEach(function (value, index) {
+        var chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.draggable = true;
+        chip.tabIndex = 0;
+        chip.dataset.index = String(index);
+        chip.dataset.value = value;
+
+        var label = document.createElement('span');
+        label.textContent = value;
+        chip.appendChild(label);
+
+        var remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '×';
+        remove.title = t('cursor.priority.remove').replace('{0}', value);
+        remove.setAttribute('aria-label', remove.title);
+        remove.addEventListener('click', function (event) {
+          event.stopPropagation();
+          draft.splice(index, 1);
+          render();
+          input.focus();
+        });
+        chip.appendChild(remove);
+
+        chip.addEventListener('dragstart', function (event) {
+          dragFrom = index;
+          chip.classList.add('dragging');
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('text/plain', value);
+          }
+        });
+        chip.addEventListener('dragend', function () {
+          dragFrom = -1;
+          chip.classList.remove('dragging');
+        });
+        chip.addEventListener('dragover', function (event) {
+          event.preventDefault();
+          if (event.dataTransfer) { event.dataTransfer.dropEffect = 'move'; }
+        });
+        chip.addEventListener('drop', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          if (dragFrom < 0 || dragFrom === index) { dragFrom = -1; return; }
+          var target = dragFrom < index ? index - 1 : index;
+          moveTag(dragFrom, target);
+          dragFrom = -1;
+        });
+        chip.addEventListener('keydown', function (event) {
+          if (!event.altKey) { return; }
+          if (event.key === 'ArrowLeft') { event.preventDefault(); moveTag(index, index - 1); }
+          if (event.key === 'ArrowRight') { event.preventDefault(); moveTag(index, index + 1); }
+        });
+
+        tagsBox.insertBefore(chip, input);
+      });
+    }
+
+    tagsBox.addEventListener('click', function (event) {
+      if (event.target === tagsBox) { input.focus(); }
+    });
+    btn.addEventListener('click', function () {
+      draft = saved.slice();
+      input.value = '';
+      render();
+    });
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        commit();
+      } else if (event.key === 'Backspace' && !input.value && draft.length) {
+        draft.pop();
+        render();
+      }
+    });
+    input.addEventListener('blur', commit);
+    saveBtn.addEventListener('click', function () {
+      commit();
+      saveBtn.disabled = true;
+      var data = new FormData();
+      draft.forEach(function (value) { data.append('cursorColumnPriority', value); });
+      postJson(modal.dataset.action, data, false).then(function (payload) {
+        if (!payload.success) {
+          toast(t(payload.message || 'error.unexpected'), 'danger');
+          return;
+        }
+        saved = draft.slice();
+        setModalOpen('cursor-priority-modal', false);
+        toast(t(payload.message || 'msg.cursor.priority.saved'), 'ok');
+      }).catch(function () {
+        toast(t('error.unexpected'), 'danger');
+      }).then(function () {
+        saveBtn.disabled = false;
+      });
+    });
+    render();
+  }
+
   /* ─── 行数核对 ──────────────────────────────────────────── */
 
   /**
@@ -4906,6 +5055,7 @@
       .forEach(bindCursorInput);
     document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
     document.querySelectorAll('[data-role="column-rule-table"]').forEach(bindColumnRuleFilter);
+    document.querySelectorAll('[data-role="cursor-priority-open"]').forEach(bindCursorPriority);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
     document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);

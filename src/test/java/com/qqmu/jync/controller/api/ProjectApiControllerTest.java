@@ -62,6 +62,31 @@ class ProjectApiControllerTest {
     }
 
     @Test
+    void cursorPriorityAcceptsRepeatedParametersAndReturnsTheSavedKey() throws Exception {
+        mvc.perform(post("/api/projects/1/cursor-priority").with(csrf())
+                        .param("cursorColumnPriority", "update_stamp", "update_time"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.message").value("msg.cursor.priority.saved"));
+
+        verify(projectService).saveCursorPriority(eq(1L),
+                eq(List.of("update_stamp", "update_time")), any());
+    }
+
+    @Test
+    void aRefusedCursorPriorityIsReportedWithoutAnHtmlErrorPage() throws Exception {
+        doThrow(new IllegalStateException("error.project.cursor.priority.cdc"))
+                .when(projectService).saveCursorPriority(eq(1L), any(), any());
+
+        mvc.perform(post("/api/projects/1/cursor-priority").with(csrf())
+                        .param("cursorColumnPriority", "update_stamp"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.message")
+                        .value("error.project.cursor.priority.cdc"));
+    }
+
+    @Test
     void tableColumnsFeedTheCleansingColumnPicker() throws Exception {
         when(projectService.listTableColumns(7L, "orders"))
                 .thenReturn(List.of("id", "customer_name", "amount"));
