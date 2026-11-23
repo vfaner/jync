@@ -24,10 +24,13 @@ v2.4.5 聚焦**数据库元数据完整性与同步可控性**：SQL Server 源�
 - 修复内容校验使用旧水位误报，以及全量比对 / Redis / CDC 项目接受无效优先级的问题。
 - 修复海量 Vastbase 目标整批写入失败：其解析器接受 `ON CONFLICT ... DO UPDATE`，但不接受 Jync 追加的“值未变化”`WHERE` 守卫；Vastbase 目标的原生批量写入保留 `ON CONFLICT` 并去掉该守卫；带安全余量的增量窗口改为 UPDATE + INSERT 模拟，未变化的重放仍报 0 行。
 - 神通 OSCAR 目标的 upsert 改用 Oracle 兼容的 `MERGE`，不再生成其文档未覆盖的 `ON CONFLICT`。
+- 修复源库与海量目标列名大小写不一致（如达梦大写、海量 `lower_case_column_names` 小写）时 upsert 报 `Column ... not found in upsert attrno state initialization`：写入前读取目标目录的实际列名并按它生成 SQL，实例内按表缓存，目标表变化后自动失效。
+- 修复 MySQL → MySQL 结构同步改写同族类型的问题：`DATETIME` / `TIME` 保留源列的小数秒精度，`TEXT` / `BLOB` / `JSON` / `BINARY` 保留原类型与容量，`CURRENT_TIMESTAMP` 默认值同步匹配目标精度。
+- 修复达梦 → MySQL 的 CDC 把有主键的小写表误判为“无主键表”：LogMiner 元数据先按事件中的实际大小写读取，失败再回退大写查找。
 
 ## 测试
 
-6667 个测试：6666 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
+6678 个测试：6677 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
 
 ## 升级
 

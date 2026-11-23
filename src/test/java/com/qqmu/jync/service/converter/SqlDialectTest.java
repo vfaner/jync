@@ -222,11 +222,11 @@ class SqlDialectTest {
     @Test
     void timeColumnsKeepFractionalSecondsOnMySqlTargets() {
         ColumnMeta time = column("shift", "TIME", Types.TIME, 8);
-        // Plain TIME means scale 0 in MySQL, so the fraction of every synced value would be
-        // truncated — the same loss DATETIME(6) exists to avoid. PostgreSQL and SQL Server
-        // TIME already carry fractional seconds by default.
+        // Plain TIME means scale 0 in MySQL, so a source from another family may carry a
+        // fraction the bare type would truncate. A MySQL source has no hidden fraction: its
+        // TIME column keeps its own scale instead of being widened to (6).
         assertThat(mysql.mapType(time, DatabaseType.POSTGRESQL)).isEqualTo("TIME(6)");
-        assertThat(mysql.mapType(time, DatabaseType.MYSQL)).isEqualTo("TIME(6)");
+        assertThat(mysql.mapType(time, DatabaseType.MYSQL)).isEqualTo("TIME");
     }
 
     @Test

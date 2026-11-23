@@ -31,6 +31,7 @@ import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.MySqlDialect;
 import com.qqmu.jync.service.converter.PostgresDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.service.converter.VastbaseDialect;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 
 /**
@@ -125,6 +126,23 @@ class DataSyncServiceInsertFirstWriteTest {
         assertThat(probed).contains("SELECT 1 FROM \"ORDERS\" LIMIT 1");
         assertThat(prepared).anyMatch(sql -> sql.startsWith("INSERT INTO \"ORDERS\" ("));
         assertThat(prepared).noneMatch(sql -> sql.contains("ON CONFLICT"));
+    }
+
+    @Test
+    void aVastbaseTargetUsesTheCatalogColumnSpelling() throws SQLException {
+        // The table stores lower-case quoted columns (Vastbase lower_case_column_names),
+        // while the DM source reports upper case. The writer must quote what the catalog has.
+        target = DriverManager.getConnection(
+                "jdbc:h2:mem:ins_tgt_vb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1", "sa", "");
+        exec(target, "CREATE TABLE ORDERS (\"id\" BIGINT PRIMARY KEY,\"name\" VARCHAR(50))");
+
+        DataSyncService.TableSyncResult result =
+                load(new VastbaseDialect(), DatabaseType.VASTBASE);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(countOrders()).isEqualTo(3);
+        assertThat(prepared).anyMatch(sql -> sql.contains("\"id\"") && sql.contains("\"name\""));
+        assertThat(prepared).noneMatch(sql -> sql.contains("\"ID\""));
     }
 
     private DataSyncService.TableSyncResult load(SqlDialect targetDialect,

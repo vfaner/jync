@@ -53,6 +53,16 @@ class TargetTableVerifierTest {
     }
 
     @Test
+    void actualColumnNamesExposeTheCatalogSpelling() throws SQLException {
+        createTarget("CREATE TABLE T (\"id\" BIGINT, \"werks\" VARCHAR(10))");
+
+        assertThat(TargetTableVerifier.actualColumnNames(conn, null, "T",
+                DatabaseType.VASTBASE))
+                .containsEntry("ID", "id")
+                .containsEntry("WERKS", "werks");
+    }
+
+    @Test
     void aMissingColumnIsReported() throws SQLException {
         createTarget("CREATE TABLE T (ID BIGINT)");
 

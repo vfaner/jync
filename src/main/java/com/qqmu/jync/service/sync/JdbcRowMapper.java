@@ -477,7 +477,7 @@ public final class JdbcRowMapper {
             throws SQLException {
         for (int i = 0; i < bindOrder.size(); i++) {
             String column = bindOrder.get(i);
-            Object value = row.get(column);
+            Object value = valueFor(row, column);
             int idx = i + 1;
             if (value == null) {
                 // Some drivers (Oracle in particular) reject setObject(idx, null) without a type.
@@ -489,6 +489,24 @@ public final class JdbcRowMapper {
                         targetDialect, lobTracker);
             }
         }
+    }
+
+    /**
+     * The row value for a bind name, falling back to a case-insensitive match. The target
+     * may spell a column differently from the source result set (Vastbase lower-cased a
+     * quoted name, DM reports upper case); the bind order carries the target spelling while
+     * the row map is keyed by the source's.
+     */
+    private static Object valueFor(Map<String, Object> row, String column) {
+        Object value = row.get(column);
+        if (value == null && !row.containsKey(column)) {
+            for (Map.Entry<String, Object> entry : row.entrySet()) {
+                if (entry.getKey().equalsIgnoreCase(column)) {
+                    return entry.getValue();
+                }
+            }
+        }
+        return value;
     }
 
     private static void bindValue(PreparedStatement ps, int idx, Object value,

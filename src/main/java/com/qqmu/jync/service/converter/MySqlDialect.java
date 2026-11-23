@@ -225,6 +225,66 @@ public class MySqlDialect extends AbstractSqlDialect {
         return "TIME(6)";
     }
 
+    /**
+     * MySQL → MySQL keeps the source column's fractional-second precision. The generic
+     * {@link #timestampType()} widens every TIMESTAMP bind to DATETIME(6) so a source from
+     * another family is not truncated, but applying that to a same-family source rewrites a
+     * plain {@code DATETIME} into {@code DATETIME(6)}: the target schema no longer matches
+     * the source, and structure sync then keeps "fixing" a column that was never wrong.
+     */
+    @Override
+    public String mapType(ColumnMeta column, DatabaseType sourceType) {
+        String preserved = preservedMySqlType(column, sourceType);
+        return preserved != null ? preserved : super.mapType(column, sourceType);
+    }
+
+    /**
+     * Same-family MySQL types keep their source shape where that shape is valid target DDL.
+     *
+     * <p>The generic mapping widens temporal values to (6) and turns every large text/blob
+     * into LONGTEXT/LONGBLOB. Correct for a cross-family source that may carry more precision
+     * or bytes, but for MySQL → MySQL it silently rewrites the target schema, so structure
+     * sync keeps seeing a difference the user never asked for.
+     */
+    private static String preservedMySqlType(ColumnMeta column, DatabaseType sourceType) {
+        if (sourceType == null || sourceType.getFamily() != DatabaseType.DialectFamily.MYSQL
+                || column.getTypeName() == null) {
+            return null;
+        }
+        String type = column.getTypeName().trim().toUpperCase(Locale.ROOT);
+        switch (type) {
+            case "TINYTEXT", "TEXT", "MEDIUMTEXT", "LONGTEXT", "JSON",
+                    "TINYBLOB", "BLOB", "MEDIUMBLOB", "LONGBLOB" -> {
+                return type;
+            }
+            case "BINARY" -> {
+                int size = column.getSize() == null ? 0 : column.getSize();
+                return size > 0 ? "BINARY(" + size + ")" : null;
+            }
+            default -> {
+                // Fall through to the precision-aware temporal branch below.
+            }
+        }
+        int digits;
+        if (column.getDecimalDigits() != null) {
+            digits = Math.max(0, Math.min(6, column.getDecimalDigits()));
+        } else {
+            // Hand-built metadata (and drivers that omit DECIMAL_DIGITS) still carry the
+            // rendered width: Connector/J reports 19 for DATETIME and 20–26 for (1)–(6).
+            int size = column.getSize() == null ? 0 : column.getSize();
+            digits = Math.max(0, Math.min(6, size > 19 ? size - 19 : 0));
+        }
+        String suffix = digits == 0 ? "" : "(" + digits + ")";
+        if (type.startsWith("TIMESTAMP") || type.startsWith("DATETIME")) {
+            // MySQL reports both as DATETIME (Jync's portable timestamp target type).
+            return "DATETIME" + suffix;
+        }
+        if (type.startsWith("TIME")) {
+            return "TIME" + suffix;
+        }
+        return null;
+    }
+
     @Override
     protected String timestampType() {
         // DATETIME(6), not DATETIME: scale 0 silently truncates fractional seconds on
@@ -310,6 +370,21 @@ public class MySqlDialect extends AbstractSqlDialect {
                 return null;
             }
             return "(CURRENT_DATE)";
+        }
+        // A DATETIME(0) column cannot take CURRENT_TIMESTAMP(6): MySQL compares the
+        // fractional precision of the default with the column and rejects the mismatch.
+        if (renderedDefault != null
+                && renderedDefault.trim().toUpperCase(Locale.ROOT)
+                        .startsWith("CURRENT_TIMESTAMP")) {
+            String type = targetType.trim().toUpperCase(Locale.ROOT);
+            if (type.startsWith("DATETIME") || type.startsWith("TIMESTAMP")) {
+                int open = type.indexOf('(');
+                int close = type.indexOf(')', open + 1);
+                String digits = open >= 0 && close > open
+                        ? type.substring(open + 1, close).trim() : "0";
+                return "0".equals(digits) ? "CURRENT_TIMESTAMP"
+                        : "CURRENT_TIMESTAMP(" + digits + ")";
+            }
         }
         return renderedDefault;
     }

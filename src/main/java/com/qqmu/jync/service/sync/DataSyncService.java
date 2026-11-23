@@ -38,6 +38,7 @@ import com.qqmu.jync.repository.ChunkCheckpointRepository;
 import com.qqmu.jync.service.connection.PoolContentionException;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlDialect;
+import com.qqmu.jync.service.converter.VastbaseDialect;
 import com.qqmu.jync.service.converter.VendorTypeMap;
 import com.qqmu.jync.service.lob.LobReadPolicy;
 import com.qqmu.jync.service.lob.LobSpillSession;
@@ -125,6 +126,16 @@ public class DataSyncService {
      */
     private final Set<String> nullCursorChecked =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * Target table's actual column spellings, keyed by project/schema/table/source-columns.
+     * PG-family targets in a MySQL-compatible lower-case mode may have stored a quoted
+     * {@code "WERKS"} as {@code werks}; the upsert must quote the catalog's spelling or the
+     * server reports "Column ... not found in upsert attrno state initialization". Cached per
+     * table shape, so the dictionary lookup costs one query per table per process.
+     */
+    private final Map<String, Map<String, String>> targetColumnSpellings =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public DataSyncService(SyncProperties properties) {
         this(properties, null);
@@ -1785,6 +1796,24 @@ public class DataSyncService {
                 for (ColumnMeta column : table.getColumns()) {
                     metaByColumn.put(column.getName().toUpperCase(java.util.Locale.ROOT), column);
                 }
+                // PG-family targets can store a quoted identifier in a different case than
+                // the source reports (Vastbase's lower_case_column_names, for one). Quote the
+                // target catalog's spelling so the upsert can resolve its columns.
+                Map<String, String> spellings = targetDialect instanceof VastbaseDialect
+                        ? targetColumnSpellings(targetConn, ctx, targetTable, columns)
+                        : Map.of();
+                List<String> sqlColumns = columns;
+                List<String> sqlPkColumns = pkColumns;
+                if (!spellings.isEmpty()) {
+                    sqlColumns = columns.stream()
+                            .map(c -> spellings.getOrDefault(
+                                    c.toUpperCase(java.util.Locale.ROOT), c))
+                            .toList();
+                    sqlPkColumns = pkColumns.stream()
+                            .map(c -> spellings.getOrDefault(
+                                    c.toUpperCase(java.util.Locale.ROOT), c))
+                            .toList();
+                }
                 Map<String, Integer> typeByColumn = new HashMap<>();
                 // Target-dialect DDL declarations per result column, so dialects whose upsert
                 // needs typed markers (DB2 MERGE, SQL0418) can wrap each placeholder in CAST.
@@ -1794,21 +1823,21 @@ public class DataSyncService {
                             typeNames.get(i), md.getPrecision(i + 1));
                     ColumnMeta columnMeta = metaByColumn.get(
                             columns.get(i).toUpperCase(java.util.Locale.ROOT));
-                    typeByColumn.put(columns.get(i), bindTypeFor(targetDialect, columnMeta,
+                    typeByColumn.put(sqlColumns.get(i), bindTypeFor(targetDialect, columnMeta,
                             ctx.effectiveSourceType(), effectiveType, typeNames.get(i)));
                     if (columnMeta != null) {
                         String mapped = targetDialect.mapType(columnMeta,
                                 ctx.effectiveSourceType());
                         String castable = mapped == null ? null : targetDialect.castType(mapped);
                         if (castable != null) {
-                            declarationByColumn.put(columns.get(i), castable);
+                            declarationByColumn.put(sqlColumns.get(i), castable);
                         }
                     }
                 }
 
                 // An INSERT has no match clause, so the key columns only decide that shape —
                 // the cursor and replay logic above keeps using the real key list.
-                List<String> statementKeys = insertFirst ? List.of() : pkColumns;
+                List<String> statementKeys = insertFirst ? List.of() : sqlPkColumns;
                 boolean emulateUpsert = pkColumns.isEmpty()
                         || (targetDialect instanceof GenericSqlDialect
                             && !((GenericSqlDialect) targetDialect).supportsNativeUpsert())
@@ -1816,7 +1845,7 @@ public class DataSyncService {
                         // guarded incremental window is written UPDATE-then-INSERT; bulk
                         // loads keep the single statement.
                         || (guardReplayedRows && targetDialect.emulatesUpsertGuard());
-                boolean emulated = emulateUpsert && !pkColumns.isEmpty();
+                boolean emulated = emulateUpsert && !sqlPkColumns.isEmpty();
                 // One dictionary read per table per pass — and none at all when the answer
                 // cannot be used: insert-first ignores the guard (empty statement keys), and
                 // an emulated full load never guards replayed rows. Oracle/MySQL dictionary
@@ -1824,11 +1853,11 @@ public class DataSyncService {
                 // for answers thrown away.
                 boolean canGuard = !insertFirst && !(emulated && !guardReplayedRows)
                         && (emulated || targetDialect.supportsUpsertGuard())
-                        && canGuardUnchangedRows(targetConn, ctx, targetTable, columns,
-                                pkColumns);
+                        && canGuardUnchangedRows(targetConn, ctx, targetTable, sqlColumns,
+                                sqlPkColumns);
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
-                        columns, statementKeys, typeByColumn, canGuard, declarationByColumn);
-                List<String> bindOrder = targetDialect.upsertBindOrder(columns, statementKeys);
+                        sqlColumns, statementKeys, typeByColumn, canGuard, declarationByColumn);
+                List<String> bindOrder = targetDialect.upsertBindOrder(sqlColumns, statementKeys);
 
                 if (pkColumns.isEmpty()) {
                     // Without a key there is no way to identify an existing row, so repeated
@@ -1861,7 +1890,7 @@ public class DataSyncService {
                     // its extra log line for a replayed row) instead.
                     boolean guardEmulated = guardReplayedRows && canGuard;
                     total = emulated
-                            ? writeWithEmulatedUpsert(targetConn, targetTable, columns, pkColumns,
+                            ? writeWithEmulatedUpsert(targetConn, targetTable, sqlColumns, sqlPkColumns,
                                     typeByColumn, rs, readPlan, ctx, cleanser, pkTrack,
                                     sink, throughput, batchSize, spillSession, guardEmulated)
                             : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
@@ -1889,6 +1918,7 @@ public class DataSyncService {
             }
             throw e;
         } catch (SQLException e) {
+            invalidateColumnSpellingsOnCaseError(ctx, targetTable, e);
             try {
                 targetConn.rollback();
             } catch (SQLException rollbackError) {
@@ -1932,6 +1962,73 @@ public class DataSyncService {
             }
         }
         return total;
+    }
+
+    /**
+     * A Vastbase upsert that still cannot resolve a column may have a stale cached spelling
+     * (the table was recreated with a different case while the process kept running). Drop
+     * the entry so the next cycle reads the catalog again instead of failing forever.
+     */
+    private void invalidateColumnSpellingsOnCaseError(SyncContext ctx, String targetTable,
+                                                      SQLException error) {
+        if (!(ctx.getTargetDialect() instanceof VastbaseDialect)) {
+            return;
+        }
+        String message = error.getMessage();
+        if (message == null
+                || !message.contains("not found in upsert attrno state initialization")) {
+            return;
+        }
+        String prefix = ctx.projectId() + "|" + ctx.getTargetSchema() + "|"
+                + targetTable.toUpperCase(java.util.Locale.ROOT) + "|";
+        int before = targetColumnSpellings.size();
+        targetColumnSpellings.keySet().removeIf(key -> key.startsWith(prefix));
+        if (targetColumnSpellings.size() != before) {
+            log.info("Dropped the cached column spellings of {} after the target rejected them;"
+                    + " the next cycle re-reads the catalog", targetTable);
+        }
+    }
+
+    /** Maps source column names to the target catalog's spelling (identity when unknown). */
+    private List<String> targetSpellings(Connection targetConn, SyncContext ctx,
+                                         String targetTable, List<String> names) {
+        if (!(ctx.getTargetDialect() instanceof VastbaseDialect) || names.isEmpty()) {
+            return names;
+        }
+        Map<String, String> spellings = targetColumnSpellings(targetConn, ctx, targetTable, names);
+        if (spellings.isEmpty()) {
+            return names;
+        }
+        return names.stream()
+                .map(c -> spellings.getOrDefault(c.toUpperCase(java.util.Locale.ROOT), c))
+                .toList();
+    }
+
+    /**
+     * The target table's actual column spellings, keyed by upper-cased source name. Cached
+     * per project/schema/table/source column list; an unreadable dictionary returns an empty
+     * map and leaves the source spellings untouched.
+     */
+    private Map<String, String> targetColumnSpellings(Connection targetConn, SyncContext ctx,
+                                                      String targetTable,
+                                                      List<String> sourceColumns) {
+        String key = ctx.projectId() + "|" + ctx.getTargetSchema() + "|"
+                + targetTable.toUpperCase(java.util.Locale.ROOT) + "|"
+                + String.join("|", sourceColumns);
+        Map<String, String> cached = targetColumnSpellings.get(key);
+        if (cached != null) {
+            return cached;
+        }
+        try {
+            Map<String, String> actual = TargetTableVerifier.actualColumnNames(targetConn,
+                    ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType());
+            targetColumnSpellings.put(key, actual);
+            return actual;
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Could not read the target column spellings of {}.{}: {}",
+                    ctx.getTargetSchema(), targetTable, e.getMessage());
+            return Map.of();
+        }
     }
 
     /**
@@ -4010,6 +4107,7 @@ public class DataSyncService {
         SqlDialect sourceDialect = ctx.getSourceDialect();
         SqlDialect targetDialect = ctx.getTargetDialect();
         String targetTable = ctx.getConfig().targetTableName(table.getName());
+        List<String> targetPk = targetSpellings(targetConn, ctx, targetTable, pk);
 
         java.util.Set<String> sourceKeys = new java.util.HashSet<>();
         String sourceSql = "SELECT " + pk.stream().map(sourceDialect::quoteIdentifier)
@@ -4029,7 +4127,7 @@ public class DataSyncService {
         }
 
         List<List<Object>> toDelete = new ArrayList<>();
-        String targetSql = "SELECT " + pk.stream().map(targetDialect::quoteIdentifier)
+        String targetSql = "SELECT " + targetPk.stream().map(targetDialect::quoteIdentifier)
                 .reduce((a, b) -> a + ", " + b).orElseThrow()
                 + " FROM " + targetDialect.qualify(ctx.getTargetSchema(), targetTable);
         try (Statement st = targetConn.createStatement()) {
@@ -4056,7 +4154,7 @@ public class DataSyncService {
         boolean originalAutoCommit = targetConn.getAutoCommit();
         targetConn.setAutoCommit(false);
         int deleted = 0;
-        String deleteSql = targetDialect.getDeleteByPkSql(ctx.getTargetSchema(), targetTable, pk);
+        String deleteSql = targetDialect.getDeleteByPkSql(ctx.getTargetSchema(), targetTable, targetPk);
         try (PreparedStatement ps = targetConn.prepareStatement(deleteSql)) {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             // 与写入路径同一套批处理：逐行 executeUpdate 意味着每删一行一次网络往返。
@@ -4128,9 +4226,10 @@ public class DataSyncService {
         SqlDialect sourceDialect = ctx.getSourceDialect();
         SqlDialect targetDialect = ctx.getTargetDialect();
         String targetTableName = ctx.getConfig().targetTableName(table.getName());
+        List<String> targetPk = targetSpellings(targetConn, ctx, targetTableName, pk);
         String targetRef = targetDialect.qualify(ctx.getTargetSchema(), targetTableName);
         String sourceRef = sourceDialect.qualify(ctx.getSourceSchema(), table.getName());
-        String targetColumns = pk.stream().map(targetDialect::quoteIdentifier)
+        String targetColumns = targetPk.stream().map(targetDialect::quoteIdentifier)
                 .reduce((a, b) -> a + ", " + b).orElseThrow();
         String sourceColumns = pk.stream().map(sourceDialect::quoteIdentifier)
                 .reduce((a, b) -> a + ", " + b).orElseThrow();
@@ -4139,8 +4238,8 @@ public class DataSyncService {
         String firstPage = "SELECT " + targetColumns + " FROM " + targetRef
                 + " ORDER BY " + targetColumns;
         String nextPage = "SELECT " + targetColumns + " FROM " + targetRef
-                + " WHERE " + keysetPredicate(targetDialect, pk) + " ORDER BY " + targetColumns;
-        String deleteSql = targetDialect.getDeleteByPkSql(ctx.getTargetSchema(), targetTableName, pk);
+                + " WHERE " + keysetPredicate(targetDialect, targetPk) + " ORDER BY " + targetColumns;
+        String deleteSql = targetDialect.getDeleteByPkSql(ctx.getTargetSchema(), targetTableName, targetPk);
 
         boolean originalAutoCommit = targetConn.getAutoCommit();
         int deleted = 0;
@@ -4151,7 +4250,7 @@ public class DataSyncService {
             JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
             while (true) {
                 List<Object[]> chunk = readTargetPage(targetConn, targetDialect,
-                        lastKey == null ? firstPage : nextPage, pk, chunkKeys, lastKey,
+                        lastKey == null ? firstPage : nextPage, targetPk, chunkKeys, lastKey,
                         ctx.effectiveTargetType());
                 if (chunk.isEmpty()) {
                     break;

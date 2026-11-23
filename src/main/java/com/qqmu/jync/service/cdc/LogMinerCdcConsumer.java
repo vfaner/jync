@@ -940,16 +940,33 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             }
             try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                 MetadataReader reader = ctx.getSourceReader();
-                TableMeta meta = reader.readTable(conn,
-                        owner.toUpperCase(Locale.ROOT), table.toUpperCase(Locale.ROOT));
+                // Oracle folds unquoted names to upper case, but DM (and quoted tables) can
+                // keep the spelling LogMiner reports. Read the reported case first, then fall
+                // back to the upper-case form that Oracle's dictionary expects. Without this,
+                // a lower-case DM table is read as a table with no columns and therefore
+                // reported as keyless even though it has a primary key.
+                String metadataOwner = owner;
+                String metadataTable = table;
+                TableMeta meta = reader.readTable(conn, metadataOwner, metadataTable);
+                if ((meta == null || !meta.hasPrimaryKey())
+                        && (!owner.equals(owner.toUpperCase(Locale.ROOT))
+                            || !table.equals(table.toUpperCase(Locale.ROOT)))) {
+                    String upperOwner = owner.toUpperCase(Locale.ROOT);
+                    String upperTable = table.toUpperCase(Locale.ROOT);
+                    TableMeta upper = reader.readTable(conn, upperOwner, upperTable);
+                    if (upper != null && (meta == null || upper.hasPrimaryKey())) {
+                        meta = upper;
+                        metadataOwner = upperOwner;
+                        metadataTable = upperTable;
+                    }
+                }
                 if (meta == null || !meta.hasPrimaryKey()) {
                     log.warn("LogMiner cannot map source table {}.{} (missing or no PK);"
                             + " skipping its row events", owner, table);
                     cache.put(key, unmappable);
                     return null;
                 }
-                CdcTableBinding b = CdcTableBinding.of(owner.toUpperCase(Locale.ROOT),
-                        table.toUpperCase(Locale.ROOT), meta,
+                CdcTableBinding b = CdcTableBinding.of(metadataOwner, metadataTable, meta,
                         ctx.getConfig().targetTableName(meta.getName()),
                         Collections.emptyMap());
                 cache.put(key, b);

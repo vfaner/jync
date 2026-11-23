@@ -262,6 +262,30 @@ public final class TargetTableVerifier {
         return oracleFamily && name != null ? name.toUpperCase(Locale.ROOT) : name;
     }
 
+    /**
+     * The target table's actual column spellings, keyed by upper-cased name.
+     *
+     * <p>PG-family targets created while a MySQL-compatible {@code lower_case_column_names}
+     * setting is active may store quoted identifiers in lower case, so the source's
+     * {@code "WERKS"} no longer resolves in an upsert even though an unquoted lookup would.
+     * Jync uses these spellings when generating the statement; an empty map means the table
+     * (or its metadata) is unavailable and the caller keeps the source names.
+     */
+    public static Map<String, String> actualColumnNames(Connection conn, String schema,
+                                                        String tableName,
+                                                        DatabaseType targetType)
+            throws SQLException {
+        boolean oracleFamily = isOracleFamily(targetType);
+        Map<String, TargetColumn> columns = readTargetColumns(conn,
+                foldIfOracle(oracleFamily, normalizeSchema(schema)),
+                foldIfOracle(oracleFamily, tableName), targetType);
+        Map<String, String> actual = new LinkedHashMap<>();
+        for (TargetColumn column : columns.values()) {
+            actual.put(column.name().toUpperCase(Locale.ROOT), column.name());
+        }
+        return actual;
+    }
+
     /** Column name (upper-cased) to JDBC type of the target table. Empty when it is absent. */
     private static Map<String, TargetColumn> readTargetColumns(Connection conn, String schema,
                                                                String tableName,
