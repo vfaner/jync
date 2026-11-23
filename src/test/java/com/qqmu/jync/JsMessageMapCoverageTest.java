@@ -67,6 +67,8 @@ class JsMessageMapCoverageTest {
             "error.project.cursor.priority.cdc",
             "error.project.cursor.priority.too.many",
             "error.project.cursor.priority.invalid",
+            "error.project.stop.before.config",
+            "error.project.stillStopping",
             "cdc.rebaseline.not.holder",
             "error.project.redis.rebuild.mustStop",
             "error.project.redis.rebuild.notRedis",

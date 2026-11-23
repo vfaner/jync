@@ -1234,7 +1234,10 @@ public class SyncEngine {
             log.info("Project '{}': cursor column of {} changed from {} to {}; reloading this table",
                     ctx.projectName(), table.getName(), progress.getCursorColumn(),
                     strategy.getColumn());
-            progress = stateWriter.forceReload(progress);
+            // clearCursor, not forceReload: the target may be populated, and re-arming
+            // initialLoadDone would also re-arm truncateBeforeInitialLoad and the keyless
+            // full-load refusal. This is the same contract the per-table override uses.
+            progress = stateWriter.clearCursor(progress);
         }
 
         // 目标表可能被手动删除了，或者快照与实际状态不同步。

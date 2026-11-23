@@ -143,6 +143,21 @@ class ProjectServiceCursorPriorityTest {
     }
 
     @Test
+    void fullCompareProjectsRefuseACursorPriority() {
+        Project stopped = project(false);
+        SyncConfig config = new SyncConfig();
+        config.setCaptureStrategy(CaptureStrategy.FULL_COMPARE);
+        stoppedProjectWith(stopped, config);
+
+        assertThatThrownBy(() -> service.saveCursorPriority(1L,
+                List.of("update_stamp"), AccessGuard.system()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.cursor.priority.cdc");
+
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
     void logCdcProjectsRefuseACursorPriority() {
         Project stopped = project(false);
         SyncConfig config = new SyncConfig();

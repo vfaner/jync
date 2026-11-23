@@ -537,7 +537,9 @@ public class ProjectService {
                     "error.project.stop.before.config"));
         }
         SyncConfig config = loadConfig(project);
-        if (config.getCaptureStrategyOrDefault().isLogCdc()) {
+        if (config.getCaptureStrategyOrDefault().isLogCdc()
+                || config.getCaptureStrategyOrDefault() == CaptureStrategy.FULL_COMPARE
+                || project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             throw new IllegalStateException("error.project.cursor.priority.cdc");
         }
         List<String> normalized = normalizeCursorPriority(cursorColumnPriority);

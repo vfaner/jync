@@ -121,6 +121,12 @@ class SyncEngineMissingTargetReloadTest {
             cleared.setInitialLoadDone(false);
             return cleared;
         });
+        when(stateWriter.clearCursor(progress)).thenAnswer(inv -> {
+            SyncProgress cleared = inv.getArgument(0);
+            cleared.setLastSyncValue(null);
+            cleared.setFullLoadWithoutCursor(false);
+            return cleared;
+        });
 
         DataSyncService.TableSyncResult result = mock(DataSyncService.TableSyncResult.class);
         when(result.isInitialLoad()).thenReturn(true);
@@ -134,6 +140,25 @@ class SyncEngineMissingTargetReloadTest {
     void tearDown() throws Exception {
         sourceConn.close();
         targetConn.close();
+    }
+
+    @Test
+    void aCursorColumnChangeClearsTheCursorWithoutRearmingTheFirstLoadTruncate()
+            throws Exception {
+        progress.setCursorColumn("OLD_COLUMN");
+        when(targetReader.listTableNames(any(), any())).thenReturn(List.of("ORDERS"));
+        try (Statement statement = targetConn.createStatement()) {
+            statement.execute("CREATE TABLE ORDERS (ID BIGINT PRIMARY KEY)");
+        }
+
+        engine.runCycle(ctx());
+
+        // forceReload would set initialLoadDone=false and re-arm truncateBeforeInitialLoad
+        // on a table that may already contain target-only columns. clearCursor keeps the
+        // initial-load flag and still makes the next pass a full load because lastSyncValue
+        // is null.
+        verify(stateWriter).clearCursor(progress);
+        verify(stateWriter, never()).forceReload(progress);
     }
 
     @Test

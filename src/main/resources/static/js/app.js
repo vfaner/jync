@@ -1755,11 +1755,28 @@
         remove.textContent = '×';
         remove.title = t('cursor.priority.remove').replace('{0}', value);
         remove.setAttribute('aria-label', remove.title);
-        remove.addEventListener('click', function (event) {
-          event.stopPropagation();
+        var removeHandledOnPointerDown = false;
+        var removeTag = function () {
           draft.splice(index, 1);
           render();
           input.focus();
+        };
+        // mousedown runs before the input's blur. Without preventDefault, blur's commit()
+        // recreates every chip and detaches this button before its click handler can run.
+        remove.addEventListener('mousedown', function (event) {
+          event.preventDefault();
+          event.stopPropagation();
+          removeHandledOnPointerDown = true;
+          removeTag();
+        });
+        remove.addEventListener('click', function (event) {
+          event.stopPropagation();
+          if (removeHandledOnPointerDown) {
+            removeHandledOnPointerDown = false;
+            return;
+          }
+          // Keyboard activation and touch have no mousedown; handle the click normally.
+          removeTag();
         });
         chip.appendChild(remove);
 

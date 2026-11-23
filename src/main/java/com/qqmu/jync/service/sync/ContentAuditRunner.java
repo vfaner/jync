@@ -89,6 +89,12 @@ public class ContentAuditRunner {
             TableMeta tableMeta = ctx.getSourceReader().readTable(
                     sourceConn, ctx.getSourceSchema(), table);
             CursorStrategy strategy = cursorResolver.resolve(tableMeta, ctx.getConfig());
+            if (SyncEngine.cursorColumnChanged(progress, strategy, ctx.getConfig())) {
+                // The stored watermark belongs to the old column; the next engine cycle will
+                // clear it. Auditing now would compare two unrelated value domains and report
+                // a false target/source mismatch.
+                return TableContentAudit.skipped(table, "cursor-changed", elapsed(started));
+            }
             TableContentAudit result = contentAudit.auditNow(sourceConn, targetConn, tableMeta,
                     strategy, progress, ctx);
             record(ctx, result);
