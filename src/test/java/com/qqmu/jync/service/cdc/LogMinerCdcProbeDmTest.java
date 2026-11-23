@@ -44,6 +44,8 @@ class LogMinerCdcProbeDmTest {
     private String version = "8.1.2.128";
     private String archMode = "Y";
     private String logicRedo = "2";
+    private String parseLob = "1";
+    private String maxInRow = "8000";
     private long archiveCount = 18;
     private long minChange = 38_827;
     private long maxChange = 44_776;
@@ -70,6 +72,10 @@ class LogMinerCdcProbeDmTest {
             } else if (sql.contains("RLOG_APPEND_LOGIC")) {
                 when(rs.next()).thenReturn(true);
                 when(rs.getString(1)).thenReturn(logicRedo);
+            } else if (sql.contains("LOGMNR_PARSE_LOB")) {
+                when(rs.next()).thenReturn(true, true, false);
+                when(rs.getString(1)).thenReturn("LOGMNR_PARSE_LOB", "LOB_MAX_INROW_LEN");
+                when(rs.getString(2)).thenReturn(parseLob, maxInRow);
             } else if (sql.startsWith("SELECT COUNT(*), MIN(")) {
                 when(rs.next()).thenReturn(true);
                 when(rs.getLong(1)).thenReturn(archiveCount);
@@ -150,6 +156,23 @@ class LogMinerCdcProbeDmTest {
                 .contains("RLOG_APPEND_LOGIC=1")
                 .contains("SP_SET_PARA_VALUE(1,'RLOG_APPEND_LOGIC',2)")
                 .contains("restart");
+    }
+
+    @Test
+    void lobParametersAreReportedAsAdviceWithoutBlockingCdc() {
+        parseLob = "0";
+        maxInRow = "900";
+
+        CdcProbeResult result = probe.probe(conn, List.of());
+
+        assertThat(result.passed()).isTrue();
+        CdcProbeResult.Check check = byName(result, CdcProbeResult.DM_LOGIC_REDO);
+        assertThat(check.isPassed()).isTrue();
+        assertThat(check.getDetail())
+                .contains("LOGMNR_PARSE_LOB=0")
+                .contains("LOB_MAX_INROW_LEN=900")
+                .contains("SP_SET_PARA_VALUE(1,'LOGMNR_PARSE_LOB',1)")
+                .contains("LOB_MAX_INROW_LEN',8000");
     }
 
     @Test

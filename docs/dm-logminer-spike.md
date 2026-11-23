@@ -143,6 +143,7 @@ DM（`options => 2+16`）与 Oracle 的 `SQL_REDO` 形态逐项对照：
 | `TIMESTAMP WITH TIME ZONE` | `TO_TIMESTAMP_TZ(...)` | **`TIMESTAMP'2026-03-04 05:06:07.123456 +08:00'`** | ❌ 同上（带时区偏移的同一个前缀） |
 | `BLOB` / `VARBINARY` | `HEXTORAW('DEAD')` | **`0xDEADBEEF`** | ❌ 需要新增 `0x` 分支 |
 | 行外 LOB | 列直接从 redo 里消失 | **`"C" = OUT_CLOB` / `OUT_BLOB`** | ❌ 必须映射到"缺列"路径（见 3.1） |
+| LOB 参数 | 默认 `LOGMNR_PARSE_LOB=0`、`LOB_MAX_INROW_LEN` 900 | 设为 `1` / `8000` 后 8KB 以内可挖出；更大仍只有占位 | ⚠️ 能力探测提示，不自动改源库参数 |
 | `ROWID` | WHERE 末尾带 `ROWID='...'` | 不带 | ✅ 解析器本来就忽略 |
 | CLOB（行内） | 有值 | **有值**（30000 字节以内实测内联） | ✅ |
 

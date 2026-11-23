@@ -295,8 +295,10 @@ public class SqlRedoParser {
                 + " Applying this change would NULL those target column(s) instead. The whole"
                 + " change is skipped so the target row keeps its previous consistent version."
                 + " On Oracle, add SUPPLEMENTAL LOG DATA (ALL) COLUMNS to the source table; on"
-                + " DM, set RLOG_APPEND_LOGIC=2. Neither setting helps for an out-of-line LOB,"
-                + " whose content the redo log does not contain at all.", missing);
+                + " DM, set RLOG_APPEND_LOGIC=2, and also LOGMNR_PARSE_LOB=1 plus"
+                + " LOB_MAX_INROW_LEN=8000 to mine LOB values up to 8KB."
+                + " Larger or genuinely out-of-row LOB content is not in the redo log at all,"
+                + " regardless of those settings.", missing);
     }
 
     // —— DELETE ——

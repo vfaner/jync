@@ -348,7 +348,7 @@ app:
 |---|---|---|
 | MySQL binlog | 5.7+；`log_bin=ON`、`binlog_format=ROW`、`binlog_row_image=FULL`；账号具备 `REPLICATION SLAVE` 与 `REPLICATION CLIENT`；binlog 保留 ≥ 24h | binlog 文件 + 偏移（含 GTID） |
 | Oracle LogMiner | 11g+；`ARCHIVELOG` 模式；库级 `SUPPLEMENTAL LOG DATA`；表级 `SUPPLEMENTAL LOG DATA (ALL) COLUMNS`；挖掘权限；归档保留 ≥ 24h | SCN |
-| 达梦 LogMiner | DM8；`ARCH_MODE=Y` 归档模式；`RLOG_APPEND_LOGIC=2`（redo 含完整旧镜像）；`V$ARCHIVED_LOG` 可读且 `DBMS_LOGMNR` 可执行；只能挖已归档文件，归档切换周期就是延迟下限（建议定时 `ALTER SYSTEM SWITCH LOGFILE`） | SCN（`MAX(NEXT_CHANGE#)`） |
+| 达梦 LogMiner | DM8；`ARCH_MODE=Y` 归档模式；`RLOG_APPEND_LOGIC=2`（redo 含完整旧镜像）；如需 CDC 同步 LOB，另设 `LOGMNR_PARSE_LOB=1`、`LOB_MAX_INROW_LEN=8000`（只覆盖 8KB 以内的 LOB）；`V$ARCHIVED_LOG` 可读且 `DBMS_LOGMNR` 可执行；只能挖已归档文件，归档切换周期就是延迟下限（建议定时 `ALTER SYSTEM SWITCH LOGFILE`） | SCN（`MAX(NEXT_CHANGE#)`） |
 | PostgreSQL 逻辑解码 | PostgreSQL 11+ 及 PG 系国产内核（openGauss、GaussDB、Kingbase、Highgo、Vastbase、Oscar、RaseSQL、SeaBoxSQL）；`wal_level=logical`；账号具备 `REPLICATION`（openGauss 不要求该属性）；表 `REPLICA IDENTITY` 非 `NOTHING`；openGauss 建议 `enable_slot_log=on` | LSN |
 | SQL Server CDC | 2012+；库级 `sp_cdc_enable_db`；SQL Server Agent 运行中；账号在 `cdc_Admin` / `cdc_reader` | LSN |
 | 崖山 YStream | YashanDB 23.4+；`ARCHIVELOG` 且连的是主库；账号具备 `CREATE SESSION`、`SELECT ANY TABLE`、`YSTREAM_CAPTURE`、`SELECT ANY DICTIONARY`；**每张选表**执行 `ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`；必须显式选表；每个实例最多 32 个 YStream 服务 | 五元组（`commitScn` / 实例号 / `groupLsn` / `groupOffset` / 行号） |

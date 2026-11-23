@@ -168,15 +168,59 @@ public class LogMinerCdcProbe {
             String raw = rs.next() ? rs.getString(1) : null;
             String value = raw == null ? null : raw.trim();
             boolean ok = "2".equals(value);
-            return CdcProbeResult.Check.of(CdcProbeResult.DM_LOGIC_REDO, ok,
-                    ok ? "RLOG_APPEND_LOGIC=2 (full old image in redo)"
-                            : "RLOG_APPEND_LOGIC=" + raw + " — only 2 writes the full old image;"
-                            + " without it an UPDATE's redo carries just the changed columns and"
-                            + " the upsert cannot apply the row; set it with CALL"
-                            + " SP_SET_PARA_VALUE(1,'RLOG_APPEND_LOGIC',2); then restart the"
-                            + " instance");
+            String base = ok ? "RLOG_APPEND_LOGIC=2 (full old image in redo)"
+                    : "RLOG_APPEND_LOGIC=" + raw + " — only 2 writes the full old image;"
+                    + " without it an UPDATE's redo carries just the changed columns and"
+                    + " the upsert cannot apply the row; set it with CALL"
+                    + " SP_SET_PARA_VALUE(1,'RLOG_APPEND_LOGIC',2); then restart the"
+                    + " instance";
+            return CdcProbeResult.Check.of(CdcProbeResult.DM_LOGIC_REDO,
+                    // The LOB parameters are advisory: they do not block CDC, so the
+                    // RLOG verdict alone decides pass/fail, and their detail is appended.
+                    ok, base + dmLobAdvice(conn));
         } catch (SQLException e) {
             return CdcProbeResult.Check.of(CdcProbeResult.DM_LOGIC_REDO, false, msg(e));
+        }
+    }
+
+    /**
+     * DM8 mines LOB values only while {@code LOGMNR_PARSE_LOB=1} and the value fits
+     * {@code LOB_MAX_INROW_LEN} (900–8000). Both are dm.ini system parameters; a probe must
+     * not change them, but it must tell the operator why CLOB/BLOB rows are arriving as
+     * {@code OUT_CLOB}/{@code OUT_BLOB}. Unreadable parameters add nothing: this is advice,
+     * not a gate.
+     */
+    private static String dmLobAdvice(Connection conn) {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT PARA_NAME, PARA_VALUE FROM V$DM_INI"
+                     + " WHERE PARA_NAME IN ('LOGMNR_PARSE_LOB','LOB_MAX_INROW_LEN')")) {
+            String parseLob = null;
+            String maxInRow = null;
+            while (rs.next()) {
+                String name = rs.getString(1);
+                String value = rs.getString(2);
+                if ("LOGMNR_PARSE_LOB".equalsIgnoreCase(name)) {
+                    parseLob = value == null ? null : value.trim();
+                } else if ("LOB_MAX_INROW_LEN".equalsIgnoreCase(name)) {
+                    maxInRow = value == null ? null : value.trim();
+                }
+            }
+            if (parseLob == null && maxInRow == null) {
+                return "";
+            }
+            if ("1".equals(parseLob) && maxInRow != null && Integer.parseInt(maxInRow) >= 8000) {
+                return "; LOB: LOGMNR_PARSE_LOB=1, LOB_MAX_INROW_LEN=" + maxInRow
+                        + " (LOB values up to 8KB are mineable; larger/out-of-row values"
+                        + " remain OUT_CLOB/OUT_BLOB)";
+            }
+            return "; LOB: LOGMNR_PARSE_LOB=" + (parseLob == null ? "?" : parseLob)
+                    + ", LOB_MAX_INROW_LEN=" + (maxInRow == null ? "?" : maxInRow)
+                    + " — CLOB/BLOB arrive as OUT_CLOB/OUT_BLOB; set CALL"
+                    + " SP_SET_PARA_VALUE(1,'LOGMNR_PARSE_LOB',1) and"
+                    + " SP_SET_PARA_VALUE(1,'LOB_MAX_INROW_LEN',8000), then restart the"
+                    + " instance (values above 8KB or out-of-row are still not in redo)";
+        } catch (SQLException | RuntimeException e) {
+            return "";
         }
     }
 
