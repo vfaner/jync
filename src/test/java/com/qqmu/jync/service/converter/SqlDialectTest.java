@@ -226,6 +226,7 @@ class SqlDialectTest {
         // fraction the bare type would truncate. A MySQL source has no hidden fraction: its
         // TIME column keeps its own scale instead of being widened to (6).
         assertThat(mysql.mapType(time, DatabaseType.POSTGRESQL)).isEqualTo("TIME(6)");
+        time.setDecimalDigits(0);
         assertThat(mysql.mapType(time, DatabaseType.MYSQL)).isEqualTo("TIME");
     }
 

@@ -52,6 +52,20 @@ class MySqlTemporalPrecisionTest {
     }
 
     @Test
+    void aMissingTimeFractionalPrecisionWidensInsteadOfTruncating() {
+        ColumnMeta time = column("TIME", 0);
+        time.setJdbcType(Types.TIME);
+        time.setDecimalDigits(null);
+        time.setSize(15);
+        // The DATETIME width formula (19 + fsp) does not apply to TIME. With no fsp
+        // reported, widening to (6) is safe; emitting TIME(0) would truncate every row.
+        assertThat(dialect.mapType(time, DatabaseType.MYSQL)).isEqualTo("TIME(6)");
+
+        time.setSize(8);
+        assertThat(dialect.mapType(time, DatabaseType.MYSQL)).isEqualTo("TIME(6)");
+    }
+
+    @Test
     void sameFamilyTextAndBlobTypesKeepTheirCapacity() {
         ColumnMeta text = column("TEXT", 0);
         text.setJdbcType(Types.LONGVARCHAR);

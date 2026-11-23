@@ -1800,6 +1800,7 @@ public class DataSyncService {
                 // the source reports (Vastbase's lower_case_column_names, for one). Quote the
                 // target catalog's spelling so the upsert can resolve its columns.
                 Map<String, String> spellings = targetDialect instanceof VastbaseDialect
+                        && !hasCaseOnlyDuplicates(columns)
                         ? targetColumnSpellings(targetConn, ctx, targetTable, columns)
                         : Map.of();
                 List<String> sqlColumns = columns;
@@ -1989,10 +1990,26 @@ public class DataSyncService {
         }
     }
 
+    /**
+     * A schema may quote two columns that differ only by case ("id" and "ID"). A
+     * case-insensitive spelling map cannot represent both, and rewriting them would emit
+     * the same target column twice; such tables keep their source spellings.
+     */
+    private static boolean hasCaseOnlyDuplicates(List<String> names) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (String name : names) {
+            if (!seen.add(name.toUpperCase(java.util.Locale.ROOT))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Maps source column names to the target catalog's spelling (identity when unknown). */
     private List<String> targetSpellings(Connection targetConn, SyncContext ctx,
                                          String targetTable, List<String> names) {
-        if (!(ctx.getTargetDialect() instanceof VastbaseDialect) || names.isEmpty()) {
+        if (!(ctx.getTargetDialect() instanceof VastbaseDialect) || names.isEmpty()
+                || hasCaseOnlyDuplicates(names)) {
             return names;
         }
         Map<String, String> spellings = targetColumnSpellings(targetConn, ctx, targetTable, names);

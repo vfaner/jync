@@ -265,12 +265,21 @@ public class MySqlDialect extends AbstractSqlDialect {
                 // Fall through to the precision-aware temporal branch below.
             }
         }
+        if (type.startsWith("TIME") && !type.startsWith("TIMESTAMP")) {
+            // A missing DECIMAL_DIGITS must not silently become TIME(0): a source TIME(6)
+            // would lose its fractional seconds on every row. Connector/J normally reports
+            // the fsp, and this fallback deliberately widens when it does not.
+            int digits = column.getDecimalDigits() == null ? 6
+                    : Math.max(0, Math.min(6, column.getDecimalDigits()));
+            return digits == 0 ? "TIME" : "TIME(" + digits + ")";
+        }
         int digits;
         if (column.getDecimalDigits() != null) {
             digits = Math.max(0, Math.min(6, column.getDecimalDigits()));
         } else {
-            // Hand-built metadata (and drivers that omit DECIMAL_DIGITS) still carry the
-            // rendered width: Connector/J reports 19 for DATETIME and 20–26 for (1)–(6).
+            // DATETIME/TIMESTAMP's rendered width is 19 + fsp; drivers that omit
+            // DECIMAL_DIGITS still carry it (Connector/J: 19 for DATETIME, 20–26 for
+            // (1)–(6)). TIME has a different width, handled above.
             int size = column.getSize() == null ? 0 : column.getSize();
             digits = Math.max(0, Math.min(6, size > 19 ? size - 19 : 0));
         }
@@ -278,9 +287,6 @@ public class MySqlDialect extends AbstractSqlDialect {
         if (type.startsWith("TIMESTAMP") || type.startsWith("DATETIME")) {
             // MySQL reports both as DATETIME (Jync's portable timestamp target type).
             return "DATETIME" + suffix;
-        }
-        if (type.startsWith("TIME")) {
-            return "TIME" + suffix;
         }
         return null;
     }
