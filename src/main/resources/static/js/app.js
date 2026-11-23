@@ -1761,9 +1761,10 @@
           render();
           input.focus();
         };
-        // mousedown runs before the input's blur. Without preventDefault, blur's commit()
-        // recreates every chip and detaches this button before its click handler can run.
-        remove.addEventListener('mousedown', function (event) {
+        // pointerdown runs before the input's blur and covers mouse and touch. Without
+        // preventDefault, blur's commit() recreates every chip and detaches this button
+        // before its click handler can run.
+        remove.addEventListener('pointerdown', function (event) {
           event.preventDefault();
           event.stopPropagation();
           removeHandledOnPointerDown = true;
