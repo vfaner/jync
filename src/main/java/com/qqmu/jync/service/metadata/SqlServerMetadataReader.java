@@ -129,8 +129,8 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
      * SQL Server has no native table/column comments: SSMS stores them as the
      * {@code MS_Description} extended property. The JDBC driver does not surface those rows
      * through {@code getTables}/{@code getColumns} REMARKS, so a structure sync from SQL Server
-     * would otherwise create the target without comments even when every target dialect can
-     * carry them.
+     * would otherwise create a MySQL-family target (including OceanBase MySQL mode) without
+     * comments even though that dialect can carry them.
      *
      * <p>The dictionary read is deliberately best-effort: an account without
      * {@code VIEW DEFINITION} may not see {@code sys.extended_properties}, and a missing
