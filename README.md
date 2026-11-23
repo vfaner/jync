@@ -100,9 +100,9 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
 容器部署（官方镜像由 tag 触发的 GitHub Actions 构建，amd64 + arm64）：
 
 ```bash
-docker pull vfaner/jync:2.4.4
+docker pull vfaner/jync:2.4.5
 docker compose -f docker-compose.release.yml up -d
-# 备用镜像 ghcr.io/vfaner/jync:2.4.4；容器内升级请拉取新镜像并重建容器
+# 备用镜像 ghcr.io/vfaner/jync:2.4.5；容器内升级请拉取新镜像并重建容器
 ```
 
 首次访问 `http://<服务器>:8080`，使用内置账号 `admin / 123456`、`ops / 123456` 或 `view / 123456` 登录，**首次登录强制修改密码**。生产部署、外部元数据库、Docker / Kubernetes、HTTPS 与升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)与[部署说明](docs/deploy-container.md)。

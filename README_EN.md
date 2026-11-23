@@ -133,9 +133,9 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
 Container deployment (official images built by GitHub Actions on tags, amd64 + arm64):
 
 ```bash
-docker pull vfaner/jync:2.4.4
+docker pull vfaner/jync:2.4.5
 docker compose -f docker-compose.release.yml up -d
-# Mirror: ghcr.io/vfaner/jync:2.4.4; in a container upgrade by pulling the new image
+# Mirror: ghcr.io/vfaner/jync:2.4.5; in a container upgrade by pulling the new image
 ```
 
 Open `http://<host>:8080` and sign in with `admin / 123456`, `ops / 123456` or `view / 123456`;

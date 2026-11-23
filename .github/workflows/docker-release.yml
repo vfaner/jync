@@ -1,6 +1,6 @@
 name: Docker image
 
-# 发布 tag（v2.4.4 这种）时构建官方镜像；也可以在 Actions 页面手动指定 tag 运行。
+# 发布 tag（v2.4.5 这种）时构建官方镜像；也可以在 Actions 页面手动指定 tag 运行。
 # 推送目标：
 #   Docker Hub  vfaner/jync:<tag> / :latest   —— 需要 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN
 #   GHCR        ghcr.io/vfaner/jync:<tag> / :latest —— 使用 GITHUB_TOKEN，无需额外配置
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（例如 v2.4.4）'
+        description: '要发布的 tag（例如 v2.4.5）'
         required: true
 
 permissions:
