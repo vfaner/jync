@@ -870,8 +870,25 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
             }
             try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                 MetadataReader reader = ctx.getSourceReader();
-                TableMeta meta = reader.readTable(conn, schema.toUpperCase(Locale.ROOT),
-                        table.toUpperCase(Locale.ROOT));
+                // Yashan normally folds to upper case, but a quoted lower-case table keeps
+                // its dictionary spelling. Try the event's spelling first and fall back to
+                // upper case; forcing upper case alone reads such a table as column-less and
+                // reports it under "no primary key" even when it has one.
+                String metadataSchema = schema;
+                String metadataTable = table;
+                TableMeta meta = reader.readTable(conn, metadataSchema, metadataTable);
+                if ((meta == null || !meta.hasPrimaryKey())
+                        && (!schema.equals(schema.toUpperCase(Locale.ROOT))
+                            || !table.equals(table.toUpperCase(Locale.ROOT)))) {
+                    String upperSchema = schema.toUpperCase(Locale.ROOT);
+                    String upperTable = table.toUpperCase(Locale.ROOT);
+                    TableMeta upper = reader.readTable(conn, upperSchema, upperTable);
+                    if (upper != null && (meta == null || upper.hasPrimaryKey())) {
+                        meta = upper;
+                        metadataSchema = upperSchema;
+                        metadataTable = upperTable;
+                    }
+                }
                 if (meta == null || !meta.hasPrimaryKey()) {
                     // The panel lists it with the other engines' "No-PK tables"; a WARN
                     // alone left every change silently dropped with nothing on the page.
@@ -881,8 +898,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                     cache.put(key, unmappable);
                     return null;
                 }
-                CdcTableBinding binding = CdcTableBinding.of(schema.toUpperCase(Locale.ROOT),
-                        table.toUpperCase(Locale.ROOT), meta,
+                CdcTableBinding binding = CdcTableBinding.of(metadataSchema, metadataTable, meta,
                         ctx.getConfig().targetTableName(meta.getName()),
                         Collections.emptyMap());
                 cache.put(key, binding);
