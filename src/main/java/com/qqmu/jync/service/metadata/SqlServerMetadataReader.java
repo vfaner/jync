@@ -4,6 +4,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.stereotype.Component;
@@ -150,15 +153,99 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
     }
 
     /**
-     * Reads {@code MS_Description} for the table and each of its columns in one dictionary
-     * round trip. Kept package-private so the comment mapping can be tested without a live
-     * SQL Server.
+     * Per-thread cache populated by {@link #preloadTableComments} during a {@code readAll}
+     * pass. Keeping it thread-local is essential: one reader bean serves concurrent projects.
+     */
+    private final ThreadLocal<Map<String, TableComments>> preloadedComments =
+            new ThreadLocal<>();
+
+    private static final class TableComments {
+        private String tableComment;
+        private final Map<String, String> columnComments = new HashMap<>();
+    }
+
+    @Override
+    protected void preloadTableComments(Connection conn, String schema, List<String> tableNames) {
+        String schemaName = schemaPattern(schema);
+        String sql = "SELECT comments.table_name, comments.column_name, comments.comment_text "
+                + "FROM ("
+                + "SELECT o.name AS table_name, CAST(NULL AS NVARCHAR(128)) AS column_name, "
+                + "CONVERT(NVARCHAR(MAX), ep.value) AS comment_text "
+                + "FROM sys.objects o "
+                + "JOIN sys.schemas s ON s.schema_id = o.schema_id "
+                + "JOIN sys.extended_properties ep ON ep.class = 1 "
+                + "AND ep.major_id = o.object_id AND ep.minor_id = 0 "
+                + "AND ep.name = 'MS_Description' "
+                + "WHERE s.name = ? AND o.type IN ('U','V') "
+                + "UNION ALL "
+                + "SELECT o.name, c.name, CONVERT(NVARCHAR(MAX), ep.value) "
+                + "FROM sys.objects o "
+                + "JOIN sys.schemas s ON s.schema_id = o.schema_id "
+                + "JOIN sys.columns c ON c.object_id = o.object_id "
+                + "JOIN sys.extended_properties ep ON ep.class = 1 "
+                + "AND ep.major_id = c.object_id AND ep.minor_id = c.column_id "
+                + "AND ep.name = 'MS_Description' "
+                + "WHERE s.name = ? AND o.type IN ('U','V')"
+                + ") comments";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, schemaName);
+            ps.setString(2, schemaName);
+            Map<String, TableComments> cache = new HashMap<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String tableName = rs.getString(1);
+                    String columnName = rs.getString(2);
+                    String comment = rs.getString(3);
+                    if (tableName == null || comment == null || comment.isBlank()) {
+                        continue;
+                    }
+                    TableComments entry = cache.computeIfAbsent(
+                            tableName.toUpperCase(Locale.ROOT), k -> new TableComments());
+                    if (columnName == null || columnName.isBlank()) {
+                        entry.tableComment = comment;
+                    } else {
+                        entry.columnComments.put(columnName, comment);
+                    }
+                }
+            }
+            preloadedComments.set(cache);
+        } catch (SQLException e) {
+            // Leave the thread-local empty so the per-table fallback still reads comments.
+            log.debug("SQL Server schema comment preload failed for {}: {}",
+                    schemaName, e.getMessage());
+        }
+    }
+
+    @Override
+    protected void clearPreloadedTableComments() {
+        preloadedComments.remove();
+    }
+
+    /**
+     * Reads {@code MS_Description} for the table and each of its columns. A {@code readAll}
+     * pass preloads the whole schema in one query; direct {@code readTable} callers fall back
+     * to one query for this table. Kept package-private so the mapping can be tested without a
+     * live SQL Server.
      *
      * <p>The first branch produces a row with a null column name for the table comment; the
-     * second produces one row per commented column. A table with hundreds of columns still
-     * costs one query, not one per column.
+     * second produces one row per commented column.
      */
     void readComments(Connection conn, String schema, String tableName, TableMeta table) {
+        Map<String, TableComments> cache = preloadedComments.get();
+        if (cache != null) {
+            TableComments entry = cache.get(tableName.toUpperCase(Locale.ROOT));
+            if (entry != null) {
+                if (entry.tableComment != null && !entry.tableComment.isBlank()) {
+                    table.setRemarks(entry.tableComment);
+                }
+                for (Map.Entry<String, String> column : entry.columnComments.entrySet()) {
+                    table.column(column.getKey()).ifPresent(
+                            col -> col.setRemarks(column.getValue()));
+                }
+            }
+            return;
+        }
         String schemaName = schemaPattern(schema);
         String sql = "SELECT comments.column_name, comments.comment_text FROM ("
                 + "SELECT CAST(NULL AS NVARCHAR(128)) AS column_name, "

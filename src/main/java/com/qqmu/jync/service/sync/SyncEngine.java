@@ -1251,6 +1251,11 @@ public class SyncEngine {
             return;
         }
         table = ensured.table();
+        if (!ensured.created()) {
+            // One-time backfill for targets created before comment sync existed. The service
+            // keeps a per-process set, so this is not repeated on every poll.
+            structureSync.ensureExistingTableComments(targetConn, table, ctx);
+        }
         // 修复周期里,目标表可能仍存在(重建后被空表顶替,或者删除与修复之间被手工
         // 重建):它上面的游标一律不可信,必须从零重灌,和 polling 重建表后的行为一致。
         if (ensured.created() || ctx.isCdcRepairRun()) {

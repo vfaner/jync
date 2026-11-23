@@ -631,17 +631,24 @@ public class GenericMetadataReader implements MetadataReader {
         // null = "all discovered"; an EMPTY list = "none". The two must stay distinct or an
         // unchecked picker silently syncs everything again.
         List<String> tableNames = tables != null ? tables : listTableNames(conn, schema);
-        for (String name : tableNames) {
-            try {
-                meta.getTables().add(readTable(conn, schema, name, includeTableDetail,
-                        includeForeignKeys));
-            } catch (SQLException e) {
-                // One unreadable table (e.g. permissions) must not abort the whole pass.
-                // Record it as unreadable (not absent): it demonstrably exists, so the change
-                // detector must not read its absence here as a source-side DROP.
-                log.warn("Skipping table {} — could not read metadata: {}", name, e.getMessage());
-                meta.addUnreadableTable(name);
+        if (includeTableDetail && !tableNames.isEmpty()) {
+            preloadTableComments(conn, schema, tableNames);
+        }
+        try {
+            for (String name : tableNames) {
+                try {
+                    meta.getTables().add(readTable(conn, schema, name, includeTableDetail,
+                            includeForeignKeys));
+                } catch (SQLException e) {
+                    // One unreadable table (e.g. permissions) must not abort the whole pass.
+                    // Record it as unreadable (not absent): it demonstrably exists, so the change
+                    // detector must not read its absence here as a source-side DROP.
+                    log.warn("Skipping table {} — could not read metadata: {}", name, e.getMessage());
+                    meta.addUnreadableTable(name);
+                }
             }
+        } finally {
+            clearPreloadedTableComments();
         }
 
         // Explicit selection: the only way to tell "dropped at the source" from "this pass
@@ -680,6 +687,20 @@ public class GenericMetadataReader implements MetadataReader {
             }
         }
         return meta;
+    }
+
+    /**
+     * Optional per-pass preload hook. The SQL Server reader uses it to read all
+     * {@code MS_Description} properties for the schema in one query instead of once per table.
+     * The default is a no-op so other databases keep their existing read pattern.
+     */
+    protected void preloadTableComments(Connection conn, String schema, List<String> tableNames) {
+        // no-op by default
+    }
+
+    /** Releases any per-pass comment cache; called even when a table read throws. */
+    protected void clearPreloadedTableComments() {
+        // no-op by default
     }
 
     @Override

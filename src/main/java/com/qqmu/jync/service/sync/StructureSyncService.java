@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
@@ -55,6 +56,13 @@ public class StructureSyncService {
      * queue, and the table then simply runs without that index until re-created or re-detected.
      */
     private final Map<String, List<PendingIndex>> pendingIndexes = new ConcurrentHashMap<>();
+
+    /**
+     * Existing target tables whose source comments have already been reconciled once in this
+     * process. New tables get comments in the create path; this set covers tables created by an
+     * older Jync version, without issuing COMMENT DDL on every polling cycle.
+     */
+    private final Set<String> commentsInitialized = ConcurrentHashMap.newKeySet();
 
     /**
      * A queued index plus the table it belongs to. The retry runs in a later cycle with no
@@ -439,6 +447,53 @@ public class StructureSyncService {
         log.info("Added missing column(s) {} to target table {} (project {})",
                 String.join(", ", added), targetTable, ctx.projectId());
         return added;
+    }
+
+    /**
+     * One-time backfill for target tables that predate comment support. Runs at most once per
+     * table per process; later comment edits still travel through the normal change events.
+     */
+    public void ensureExistingTableComments(Connection targetConn, TableMeta table,
+                                            SyncContext ctx) {
+        if (!ctx.getConfig().isSyncStructure() || !hasAnyComment(table)) {
+            return;
+        }
+        String key = ctx.projectId() + "|" + ctx.getConfig().targetTableName(table.getName())
+                .toUpperCase(java.util.Locale.ROOT);
+        if (!commentsInitialized.add(key)) {
+            return;
+        }
+        SqlDialect dialect = ctx.getTargetDialect();
+        String targetTable = ctx.getConfig().targetTableName(table.getName());
+        List<String> ddl = new ArrayList<>(dialect.getCreatedTableCommentDdl(
+                table, ctx.getTargetSchema(), targetTable, ctx.effectiveSourceType()));
+        if (table.getRemarks() == null || table.getRemarks().isBlank()) {
+            String clear = dialect.getAlterTableCommentSql(ctx.getTargetSchema(), targetTable, null);
+            if (clear != null) {
+                ddl.add(clear);
+            }
+        }
+        try {
+            DdlExecutor executor = new DdlExecutor(targetConn);
+            for (String sql : ddl) {
+                executor.executeIdempotentCreate(sql);
+            }
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not backfill comments on existing target table {}: {}",
+                    targetTable, e.getMessage());
+        }
+    }
+
+    private static boolean hasAnyComment(TableMeta table) {
+        if (table.getRemarks() != null && !table.getRemarks().isBlank()) {
+            return true;
+        }
+        for (ColumnMeta column : table.getColumns()) {
+            if (column.getRemarks() != null && !column.getRemarks().isBlank()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Sets the existing target table's comment to match the source (null/blank clears it). */

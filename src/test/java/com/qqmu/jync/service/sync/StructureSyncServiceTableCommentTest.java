@@ -8,6 +8,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +23,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.converter.SqlBodyConverter;
+import com.qqmu.jync.model.DatabaseType;
 
 /**
  * A comment edited at the source must reach a table that already exists. The detector emits
@@ -68,6 +70,13 @@ class StructureSyncServiceTableCommentTest {
                 ctx);
 
         assertThat(outcome.applied).isTrue();
+        assertThat(targetComment()).isEqualTo("订单主表");
+    }
+
+    @Test
+    void anExistingTargetGetsAOneTimeCommentBackfill() throws SQLException {
+        structure.ensureExistingTableComments(target, table("订单主表"), ctx);
+
         assertThat(targetComment()).isEqualTo("订单主表");
     }
 
@@ -135,6 +144,12 @@ class StructureSyncServiceTableCommentTest {
         public String getAlterTableCommentSql(String schema, String table, String comment) {
             return "COMMENT ON TABLE " + table + " IS '"
                     + (comment == null ? "" : comment.replace("'", "''")) + "'";
+        }
+
+        @Override
+        public List<String> getCreatedTableCommentDdl(TableMeta table, String schema,
+                                                      String tableName, DatabaseType sourceType) {
+            return List.of(getAlterTableCommentSql(schema, tableName, table.getRemarks()));
         }
     }
 }

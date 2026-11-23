@@ -16,6 +16,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Types;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
@@ -55,6 +56,28 @@ class SqlServerMetadataReaderCommentsTest {
         TableMeta table = reader.readTable(conn, "dbo", "ORDERS");
 
         assertThat(table.getRemarks()).isEqualTo("订单主表");
+        verify(conn).prepareStatement(contains("UNION ALL"));
+    }
+
+    @Test
+    void aReadAllPassUsesOneSchemaQuery() throws Exception {
+        Connection conn = mock(Connection.class);
+        ResultSet rs = mock(ResultSet.class);
+        when(rs.next()).thenReturn(true, true, false);
+        when(rs.getString(1)).thenReturn("ORDERS", "ORDERS");
+        when(rs.getString(2)).thenReturn(null, "ID");
+        when(rs.getString(3)).thenReturn("订单主表", "主键");
+        PreparedStatement ps = mock(PreparedStatement.class);
+        when(ps.executeQuery()).thenReturn(rs);
+        when(conn.prepareStatement(contains("UNION ALL"))).thenReturn(ps);
+
+        reader.preloadTableComments(conn, "dbo", List.of("ORDERS"));
+        TableMeta table = table();
+        reader.readComments(conn, "dbo", "ORDERS", table);
+        reader.clearPreloadedTableComments();
+
+        assertThat(table.getRemarks()).isEqualTo("订单主表");
+        assertThat(column(table, "ID").getRemarks()).isEqualTo("主键");
         verify(conn).prepareStatement(contains("UNION ALL"));
     }
 
