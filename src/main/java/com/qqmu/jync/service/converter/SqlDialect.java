@@ -416,6 +416,38 @@ public interface SqlDialect {
     String getDropProcedureSql(String schema, String procedure, boolean isFunction);
 
     /**
+     * Whether this dialect's upsert can carry the "something really differs" condition that
+     * makes an unchanged replayed row report zero affected rows. Dialects whose form has no
+     * place for it (MySQL's {@code ON DUPLICATE KEY UPDATE}, openGauss's variant, Vastbase's
+     * rejected trailing WHERE) answer {@code false}; the caller then skips the target-column
+     * dictionary read that would otherwise decide an answer the dialect cannot use.
+     */
+    default boolean supportsUpsertGuard() {
+        return true;
+    }
+
+    /**
+     * Whether the engine should emulate the upsert as {@code UPDATE … WHERE key AND differs}
+     * followed by an {@code INSERT} when a guarded incremental window is written, because the
+     * dialect's native upsert has no place for that condition. Bulk loads and unguarded
+     * windows keep the native statement.
+     */
+    default boolean emulatesUpsertGuard() {
+        return false;
+    }
+
+    /**
+     * {@code UPDATE … SET … WHERE key = ?}, used by the update-then-insert fallback. With
+     * {@code guardUnchanged} the WHERE also requires a non-key value to differ, so a replayed
+     * row reports zero affected rows. Returns null when every column is part of the key.
+     */
+    String getUpdateByPkSql(String schema, String table, List<String> columns,
+                            List<String> pkColumns, boolean guardUnchanged);
+
+    /** {@code SELECT 1 FROM t WHERE key = ?}, the existence probe of the fallback. */
+    String getSelectByPkSql(String schema, String table, List<String> pkColumns);
+
+    /**
      * An idempotent insert-or-update statement — the core of safe re-delivery.
      *
      * <p>Because the sync cursor is only advanced after a successful target commit, a crash

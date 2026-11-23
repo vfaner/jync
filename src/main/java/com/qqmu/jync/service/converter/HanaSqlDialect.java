@@ -104,6 +104,12 @@ public class HanaSqlDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean supportsUpsertGuard() {
+        // UPSERT ... WITH PRIMARY KEY has no conditional update branch.
+        return false;
+    }
+
+    @Override
     public String getUpsertSql(String schema, String table, List<String> columns,
                                List<String> pkColumns) {
         if (pkColumns == null || pkColumns.isEmpty()) {

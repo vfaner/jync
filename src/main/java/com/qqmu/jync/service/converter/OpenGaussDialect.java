@@ -29,6 +29,11 @@ public class OpenGaussDialect extends PostgresDialect {
     }
 
     @Override
+    public boolean supportsUpsertGuard() {
+        return false;
+    }
+
+    @Override
     protected String upsertSuffix(String tableRef, List<String> columns, List<String> pkColumns,
                                   java.util.Map<String, Integer> columnJdbcTypes,
                                   boolean guardUnchangedRows) {

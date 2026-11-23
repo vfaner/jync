@@ -14,9 +14,10 @@ import com.qqmu.jync.model.DatabaseType;
  * DDL and every DML statement must fold the same way. A dialect-built {@code "dst"} would not
  * reach the unquoted {@code dst} on products that fold to upper case (Oracle, Dameng).
  *
- * <p>MySQL, PostgreSQL (not openGauss/GaussDB), Oracle-family and SQL Server targets each have
- * a single-statement form, see {@link #nativeUpsert}. Everything else — DB2, HANA, Doris,
- * unknown targets — gets the universal update-then-insert emulation the sync engine also uses
+ * <p>MySQL, PostgreSQL (not openGauss/GaussDB, and with OSCAR on the Oracle-style branch),
+ * Oracle-family and SQL Server targets each have a single-statement form, see
+ * {@link #nativeUpsert}. Everything else — DB2, HANA, Doris, unknown targets — gets the
+ * universal update-then-insert emulation the sync engine also uses
  * ({@code UPDATE ... WHERE key}; insert when no row matched).
  */
 final class EtlUpsertSql {
@@ -89,7 +90,8 @@ final class EtlUpsertSql {
      *       speaks the MySQL wire protocol but rejects that clause.</li>
      *   <li>PostgreSQL family: {@code ON CONFLICT ... DO UPDATE}. openGauss / GaussDB are
      *       excluded for the same reason the sync engine excludes them — their default
-     *       {@code sql_compatibility='A'} parser rejects {@code ON CONFLICT}.</li>
+     *       {@code sql_compatibility='A'} parser rejects {@code ON CONFLICT}; 神通 (OSCAR)
+     *       uses Oracle's {@code MERGE}, which its vendor documents.</li>
      *   <li>Oracle family (Oracle, Dameng, YashanDB): {@code MERGE} whose source is the bound
      *       row.</li>
      *   <li>SQL Server: {@code MERGE} over a {@code VALUES} row constructor, trailing
@@ -114,6 +116,10 @@ final class EtlUpsertSql {
                 if (targetType == DatabaseType.OPENGAUSS
                         || targetType == DatabaseType.GAUSSDB) {
                     return mysqlUpsert(targetName, columns, keyColumns);
+                }
+                // 神通的 DML 走 Oracle 兼容语法，ON CONFLICT 未见于其文档。
+                if (targetType == DatabaseType.OSCAR) {
+                    return oracleMerge(targetName, columns, keyColumns);
                 }
                 return postgresUpsert(targetName, columns, keyColumns);
             case ORACLE:

@@ -77,6 +77,31 @@ class EtlUpsertSqlTest {
                 .contains("ON DUPLICATE KEY UPDATE");
     }
 
+    /** 神通 (OSCAR) 走 Oracle 兼容 MERGE，不生成 ON CONFLICT。 */
+    @Test
+    void oscarUsesOracleStyleMerge() {
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.OSCAR, "dst",
+                List.of("id", "name"), List.of("id")))
+                .isEqualTo("MERGE INTO dst t"
+                        + " USING (SELECT ? AS id, ? AS name FROM DUAL) s"
+                        + " ON (t.id = s.id)"
+                        + " WHEN MATCHED THEN UPDATE SET t.name = s.name"
+                        + " WHEN NOT MATCHED THEN INSERT (id, name)"
+                        + " VALUES (s.id, s.name)");
+    }
+
+    /**
+     * 海量 Vastbase 接受 ON CONFLICT，只是不接受同步侧那层 WHERE 守卫；ETL 的单语句
+     * upsert 本来就不带守卫，因此保持标准 PostgreSQL 写法。
+     */
+    @Test
+    void vastbaseKeepsTheStandardPostgresForm() {
+        assertThat(EtlUpsertSql.nativeUpsert(DatabaseType.VASTBASE, "dst",
+                List.of("id", "name"), List.of("id")))
+                .isEqualTo("INSERT INTO dst (id, name) VALUES (?, ?)"
+                        + " ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name");
+    }
+
     /** Oracle 系(Oracle / 达梦 / 崖山):MERGE 的源行就是绑定列。 */
     @Test
     void oracleUsesMergeWithTheBoundRowAsTheSource() {

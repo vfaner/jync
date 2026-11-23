@@ -915,6 +915,13 @@ public class MySqlDialect extends AbstractSqlDialect {
     }
 
     @Override
+    public boolean supportsUpsertGuard() {
+        // ON DUPLICATE KEY UPDATE has nowhere to put the row comparison; MySQL's own
+        // affected-rows semantics already report 0 for an unchanged replay.
+        return false;
+    }
+
+    @Override
     public boolean supportsInsertFirstInitialLoad() {
         return true;
     }

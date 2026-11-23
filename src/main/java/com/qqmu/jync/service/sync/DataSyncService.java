@@ -1811,7 +1811,11 @@ public class DataSyncService {
                 List<String> statementKeys = insertFirst ? List.of() : pkColumns;
                 boolean emulateUpsert = pkColumns.isEmpty()
                         || (targetDialect instanceof GenericSqlDialect
-                            && !((GenericSqlDialect) targetDialect).supportsNativeUpsert());
+                            && !((GenericSqlDialect) targetDialect).supportsNativeUpsert())
+                        // Vastbase's native ON CONFLICT has no place for the guard, so a
+                        // guarded incremental window is written UPDATE-then-INSERT; bulk
+                        // loads keep the single statement.
+                        || (guardReplayedRows && targetDialect.emulatesUpsertGuard());
                 boolean emulated = emulateUpsert && !pkColumns.isEmpty();
                 // One dictionary read per table per pass — and none at all when the answer
                 // cannot be used: insert-first ignores the guard (empty statement keys), and
@@ -1819,6 +1823,7 @@ public class DataSyncService {
                 // queries are ms-scale; a 50-table 2s poll used to pay ~25 of them a second
                 // for answers thrown away.
                 boolean canGuard = !insertFirst && !(emulated && !guardReplayedRows)
+                        && (emulated || targetDialect.supportsUpsertGuard())
                         && canGuardUnchangedRows(targetConn, ctx, targetTable, columns,
                                 pkColumns);
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
@@ -2294,13 +2299,9 @@ public class DataSyncService {
                                                boolean guardUnchanged)
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
-        GenericSqlDialect generic = dialect instanceof GenericSqlDialect
-                ? (GenericSqlDialect) dialect : null;
 
-        String updateSql = generic != null
-                ? generic.getUpdateByPkSql(ctx.getTargetSchema(), targetTable, columns,
-                        pkColumns, guardUnchanged)
-                : null;
+        String updateSql = dialect.getUpdateByPkSql(ctx.getTargetSchema(), targetTable, columns,
+                pkColumns, guardUnchanged);
         String insertSql = dialect.getUpsertSql(ctx.getTargetSchema(), targetTable, columns,
                 List.of(), typeByColumn);
 
@@ -2332,8 +2333,8 @@ public class DataSyncService {
         // The existence probe runs once per replayed-but-unchanged row, which a cursor
         // window's safety margin can make every row of the window on every cycle. Prepared
         // once here, like the UPDATE and INSERT, instead of once per probe.
-        String existsSql = guardUnchanged && generic != null
-                ? generic.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns)
+        String existsSql = guardUnchanged
+                ? dialect.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns)
                 : null;
         try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
              PreparedStatement update = updateSql == null ? null
@@ -2398,7 +2399,7 @@ public class DataSyncService {
                     // key needs the INSERT; the replay must stay a no-op, or the change log
                     // files the same edit again on every poll.
                     if (updated == 0 && guardUnchanged
-                            && rowExists(exists, targetConn, generic, targetTable, pkColumns,
+                            && rowExists(exists, targetConn, dialect, targetTable, pkColumns,
                                     row, typeByColumn, ctx)) {
                         log.debug("Row already holds these values in {}; replayed, not written",
                                 targetTable);
@@ -2430,7 +2431,7 @@ public class DataSyncService {
                                 if (update.executeUpdate() != 0) {
                                     stats.updated++;
                                 } else if (guardUnchanged && rowExists(exists, targetConn,
-                                        generic, targetTable, pkColumns, row,
+                                        dialect, targetTable, pkColumns, row,
                                         typeByColumn, ctx)) {
                                     log.debug("Row already holds these values in {};"
                                             + " replayed, not written", targetTable);
@@ -2444,7 +2445,7 @@ public class DataSyncService {
                                 // holding this key is identical to the one rejected, making
                                 // re-delivery a no-op. An absent key means some other
                                 // constraint rejected the row, and that must surface.
-                                if (generic == null || !rowExists(exists, targetConn, generic,
+                                if (!rowExists(exists, targetConn, dialect,
                                         targetTable, pkColumns, row, typeByColumn, ctx)) {
                                     throw e;
                                 }
@@ -2483,14 +2484,14 @@ public class DataSyncService {
      * path; {@code prepared} is the statement the caller prepared once per copy pass.
      */
     private boolean rowExists(PreparedStatement prepared, Connection conn,
-                              GenericSqlDialect generic, String targetTable,
+                              SqlDialect dialect, String targetTable,
                               List<String> pkColumns, Map<String, Object> row,
                               Map<String, Integer> typeByColumn, SyncContext ctx)
             throws SQLException {
         if (prepared == null) {
             // Only reachable on the key-only conflict path, where the caller did not ask for
             // the probe statement up front; that path is a one-off, not a per-row loop.
-            String sql = generic.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns);
+            String sql = dialect.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
                 return probe(ps, pkColumns, row, typeByColumn, ctx);

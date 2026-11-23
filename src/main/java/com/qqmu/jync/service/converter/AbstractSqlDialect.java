@@ -1142,4 +1142,39 @@ public abstract class AbstractSqlDialect implements SqlDialect {
     protected String quotedList(List<String> names) {
         return names.stream().map(this::quoteIdentifier).collect(Collectors.joining(", "));
     }
+
+    @Override
+    public String getUpdateByPkSql(String schema, String table, List<String> columns,
+                                   List<String> pkColumns, boolean guardUnchanged) {
+        List<String> updatable = nonKeyColumns(columns, pkColumns);
+        if (updatable.isEmpty()) {
+            return null;
+        }
+        String sets = updatable.stream()
+                .map(c -> quoteIdentifier(c) + " = ?")
+                .collect(Collectors.joining(", "));
+        String where = pkColumns.stream()
+                .map(c -> quoteIdentifier(c) + " = ?")
+                .collect(Collectors.joining(" AND "));
+        if (guardUnchanged) {
+            // NULL-safe: a value appearing or disappearing counts as a difference.
+            String guard = updatable.stream()
+                    .map(c -> {
+                        String ref = quoteIdentifier(c);
+                        return "(" + ref + " <> ? OR (" + ref + " IS NULL AND ? IS NOT NULL)"
+                                + " OR (" + ref + " IS NOT NULL AND ? IS NULL))";
+                    })
+                    .collect(Collectors.joining(" OR "));
+            where = where + " AND (" + guard + ")";
+        }
+        return "UPDATE " + qualify(schema, table) + " SET " + sets + " WHERE " + where;
+    }
+
+    @Override
+    public String getSelectByPkSql(String schema, String table, List<String> pkColumns) {
+        String where = pkColumns.stream()
+                .map(c -> quoteIdentifier(c) + " = ?")
+                .collect(Collectors.joining(" AND "));
+        return "SELECT 1 FROM " + qualify(schema, table) + " WHERE " + where;
+    }
 }

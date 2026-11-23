@@ -22,10 +22,12 @@ v2.4.5 聚焦**数据库元数据完整性与同步可控性**：SQL Server 源�
 - 修复 Oracle / DB2 清空注释的非法 SQL，以及注释失败阻塞列变更的问题。
 - 修复无主键表被优先级推进全量重装循环、优先级配置含 null 时保存 NPE。
 - 修复内容校验使用旧水位误报，以及全量比对 / Redis / CDC 项目接受无效优先级的问题。
+- 修复海量 Vastbase 目标整批写入失败：其解析器接受 `ON CONFLICT ... DO UPDATE`，但不接受 Jync 追加的“值未变化”`WHERE` 守卫；Vastbase 目标的原生批量写入保留 `ON CONFLICT` 并去掉该守卫；带安全余量的增量窗口改为 UPDATE + INSERT 模拟，未变化的重放仍报 0 行。
+- 神通 OSCAR 目标的 upsert 改用 Oracle 兼容的 `MERGE`，不再生成其文档未覆盖的 `ON CONFLICT`。
 
 ## 测试
 
-6653 个测试：6652 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
+6667 个测试：6666 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
 
 ## 升级
 

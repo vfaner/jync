@@ -15,9 +15,11 @@ import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
 /**
- * PostgreSQL dialect, shared with 人大金仓 (KingBase) and 神通 (Oscar). openGauss has
- * its own {@link OpenGaussDialect}: its default MySQL-compatibility mode rejects
- * ON CONFLICT upserts.
+ * PostgreSQL dialect, shared with 人大金仓 (KingBase), 瀚高 (HighGo) and the other
+ * PG-9.5+ derivatives. Three products diverge on the upsert and have their own dialect:
+ * openGauss/GaussDB ({@link OpenGaussDialect}) use the MySQL-flavoured form, Vastbase
+ * ({@link VastbaseDialect}) accepts ON CONFLICT but rejects the unchanged-row WHERE, and
+ * 神通 OSCAR ({@link OscarDialect}) speaks Oracle-style MERGE.
  */
 @Component
 @Slf4j
@@ -395,7 +397,7 @@ public class PostgresDialect extends AbstractSqlDialect {
         String updates = updatable.stream()
                 .map(c -> quoteIdentifier(c) + " = EXCLUDED." + quoteIdentifier(c))
                 .collect(Collectors.joining(", "));
-        String guard = guardUnchangedRows
+        String guard = guardUnchangedRows && supportsUpsertGuard()
                 ? UpsertChangeGuard.condition(updatable,
                         c -> tableRef + "." + quoteIdentifier(c),
                         c -> "EXCLUDED." + quoteIdentifier(c))
@@ -404,6 +406,16 @@ public class PostgresDialect extends AbstractSqlDialect {
         // 报 0，引擎就能像对 MySQL 那样把重放认成「什么都没发生」。
         return conflict + " DO UPDATE SET " + updates
                 + (guard == null ? "" : " WHERE " + guard);
+    }
+
+    /**
+     * Whether this product's {@code ON CONFLICT … DO UPDATE} accepts the trailing
+     * "something really differs" {@code WHERE}. PostgreSQL and its PG-9.5+ derivatives do;
+     * Vastbase parses the conflict clause but rejects that WHERE, so it overrides this to
+     * {@code false} (see {@link VastbaseDialect}).
+     */
+    public boolean supportsUpsertGuard() {
+        return true;
     }
 
     @Override
