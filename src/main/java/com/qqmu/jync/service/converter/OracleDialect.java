@@ -404,6 +404,26 @@ public class OracleDialect extends AbstractSqlDialect {
     }
 
     @Override
+    protected String commentOnTableSql(String schema, String table, String comment) {
+        return "COMMENT ON TABLE " + qualify(schema, table) + " IS "
+                + oracleCommentLiteral(comment);
+    }
+
+    @Override
+    protected String commentOnColumnSql(String schema, String table, String column,
+                                        String comment) {
+        return "COMMENT ON COLUMN " + qualify(schema, table) + "."
+                + quoteIdentifier(column) + " IS " + oracleCommentLiteral(comment);
+    }
+
+    /** Oracle clears a comment with an empty string; {@code IS NULL} is not valid grammar. */
+    private static String oracleCommentLiteral(String comment) {
+        return comment == null || comment.isBlank()
+                ? "''"
+                : "'" + comment.replace("'", "''") + "'";
+    }
+
+    @Override
     public List<String> getCreatedTableCommentDdl(TableMeta table, String schema,
                                                   String tableName, DatabaseType sourceType) {
         return standardCommentDdl(table, schema, tableName);

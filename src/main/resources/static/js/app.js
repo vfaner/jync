@@ -1696,7 +1696,7 @@
    */
   function bindCursorPriority(btn) {
     var modal = document.getElementById('cursor-priority-modal');
-    if (!modal || !btn || !btn.dataset.action) { return; }
+    if (!modal || !btn || !modal.dataset.action) { return; }
     var tagsBox = modal.querySelector('[data-role="cursor-priority-tags"]');
     var input = modal.querySelector('[data-role="cursor-priority-input"]');
     var saveBtn = modal.querySelector('[data-role="cursor-priority-save"]');

@@ -465,9 +465,16 @@ public class StructureSyncService {
                 ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType())) {
             executor.executeIdempotentCreate(extra);
         }
-        for (String extra : dialect.getColumnCommentDdl(
-                ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType())) {
-            executor.executeIdempotentCreate(extra);
+        try {
+            for (String extra : dialect.getColumnCommentDdl(
+                    ctx.getTargetSchema(), targetTable, column, ctx.effectiveSourceType())) {
+                executor.executeIdempotentCreate(extra);
+            }
+        } catch (SQLException | RuntimeException e) {
+            // A comment is metadata-only. A target limit or a missing COMMENT privilege must
+            // not block the column change itself and retry the whole table every cycle.
+            log.warn("Could not apply the comment of target column {}.{}: {}",
+                    targetTable, column.getName(), e.getMessage());
         }
     }
 

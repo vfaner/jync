@@ -40,6 +40,12 @@ class CommentDdlTest {
     }
 
     @Test
+    void oracleClearsACommentWithAnEmptyStringNotNull() {
+        String sql = new OracleDialect().getAlterTableCommentSql("S", "T", null);
+        assertThat(sql).isEqualTo("COMMENT ON TABLE \"S\".\"T\" IS ''");
+    }
+
+    @Test
     void postgresFamilyGetsTableAndColumnComments() {
         String ddl = joined(new PostgresDialect().getCreatedTableCommentDdl(
                 table(), "public", "orders", DatabaseType.MYSQL));

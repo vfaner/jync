@@ -555,7 +555,9 @@ public class ProjectService {
             return left == right;
         }
         for (int i = 0; i < left.size(); i++) {
-            if (!left.get(i).equalsIgnoreCase(right.get(i))) {
+            String l = left.get(i);
+            String r = right.get(i);
+            if (l == null ? r != null : !l.equalsIgnoreCase(r)) {
                 return false;
             }
         }

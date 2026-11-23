@@ -81,7 +81,10 @@ public class CursorStrategyResolver {
         // a per-table override on every table. Matching is case-insensitive but exact — a
         // prefix must not accidentally select update_stamp_old. Log-CDC projects do not use
         // cursor columns at all, so this list is deliberately ignored there.
-        if (!config.getCaptureStrategyOrDefault().isLogCdc()) {
+        // A keyless table cannot be re-baselined safely into a non-empty target (a full load
+        // without a key would duplicate every row), so project priority must not move it off
+        // its previously working cursor. Per-table overrides are an explicit, separate action.
+        if (!config.getCaptureStrategyOrDefault().isLogCdc() && table.hasPrimaryKey()) {
             for (String configuredPriority : emptyIfNull(config.getCursorColumnPriority())) {
                 if (configuredPriority == null || configuredPriority.isBlank()) {
                     continue;

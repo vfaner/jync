@@ -186,6 +186,21 @@ class CursorStrategyResolverTest {
     }
 
     @Test
+    void projectPriorityDoesNotMoveAKeylessTableOffItsWorkingCursor() {
+        TableMeta t = table(List.of(
+                col("update_time", Types.TIMESTAMP),
+                col("update_stamp", Types.TIMESTAMP)), List.of(), 1000L);
+        config.setCursorColumnPriority(List.of("update_stamp"));
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        // A keyless full reload into a non-empty target is refused; keeping the existing
+        // auto-detected cursor avoids wedging the table after a priority edit.
+        assertThat(strategy.getColumn()).isEqualTo("update_time");
+        assertThat(strategy.getRationale()).containsIgnoringCase("auto-detected");
+    }
+
+    @Test
     void projectPriorityIsIgnoredForLogCdc() {
         TableMeta t = table(List.of(
                 col("id", Types.INTEGER),
