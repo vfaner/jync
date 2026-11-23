@@ -27,10 +27,11 @@ v2.4.5 聚焦**数据库元数据完整性与同步可控性**：SQL Server 源�
 - 修复源库与海量目标列名大小写不一致（如达梦大写、海量 `lower_case_column_names` 小写）时 upsert 报 `Column ... not found in upsert attrno state initialization`：写入前读取目标目录的实际列名并按它生成 SQL，实例内按表缓存，目标表变化后自动失效。
 - 修复 MySQL → MySQL 结构同步改写同族类型的问题：`DATETIME` / `TIME` 保留源列的小数秒精度，`TEXT` / `BLOB` / `JSON` / `BINARY` 保留原类型与容量，`CURRENT_TIMESTAMP` 默认值同步匹配目标精度。
 - 修复达梦 → MySQL 的 CDC 把有主键的小写表误判为“无主键表”：LogMiner 元数据先按事件中的实际大小写读取，失败再回退大写查找。
+- 修复达梦 LogMiner 的 ANSI `TIME'...'` 字面量不被识别、导致整行被跳过的问题；同时支持 `TIME/TIMESTAMP WITH TIME ZONE`。
 
 ## 测试
 
-6678 个测试：6677 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
+6679 个测试：6678 通过，0 失败 0 错误，1 个仅限 Linux 的用例在 macOS 上按环境跳过。真实数据库集成测试（`*IT`）仍需 Docker 单独运行。
 
 ## 升级
 

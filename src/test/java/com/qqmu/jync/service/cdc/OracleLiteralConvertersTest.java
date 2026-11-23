@@ -71,6 +71,22 @@ class OracleLiteralConvertersTest {
     }
 
     @Test
+    void ansiTimeLiteralIsSurfacedVerbatim() {
+        // Measured in a DM8 redo stream: INSERT ... VALUES (..., TIME'19:55:22', ...).
+        assertThat(OracleLiteralConverters.convert("TIME'19:55:22'", Types.TIME))
+                .isEqualTo("19:55:22");
+        assertThat(OracleLiteralConverters.convert("TIME'19:55:22.123456'", Types.TIME))
+                .isEqualTo("19:55:22.123456");
+        assertThat(OracleLiteralConverters.convert(
+                "TIME WITH TIME ZONE'19:55:22 +08:00'", Types.TIME_WITH_TIMEZONE))
+                .isEqualTo("19:55:22 +08:00");
+        assertThat(OracleLiteralConverters.convert(
+                "TIMESTAMP WITH TIME ZONE'2026-11-23 19:55:22 +08:00'",
+                Types.TIMESTAMP_WITH_TIMEZONE))
+                .isEqualTo("2026-11-23 19:55:22 +08:00");
+    }
+
+    @Test
     void toDateInnerStringSurfacedVerbatim() {
         // NLS-dependent date text is surfaced as-is; the target JDBC driver interprets it.
         Object v = OracleLiteralConverters.convert(

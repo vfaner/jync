@@ -158,8 +158,14 @@ final class OracleLiteralConverters {
         if (quote <= 0 || literal.length() <= quote + 1 || !literal.endsWith("'")) {
             return null;
         }
-        String prefix = literal.substring(0, quote).toUpperCase(java.util.Locale.ROOT);
-        if (!"DATE".equals(prefix) && !"TIMESTAMP".equals(prefix)) {
+        String prefix = literal.substring(0, quote).trim().toUpperCase(java.util.Locale.ROOT);
+        // DM8 emits the ANSI form for every temporal column, including TIME and the
+        // WITH TIME ZONE spellings; Oracle emits TO_DATE/TO_TIMESTAMP instead.
+        if (!"DATE".equals(prefix) && !"TIME".equals(prefix)
+                && !"TIMESTAMP".equals(prefix)
+                && !"TIME WITH TIME ZONE".equals(prefix)
+                && !"TIMESTAMP WITH TIME ZONE".equals(prefix)
+                && !"TIMETZ".equals(prefix) && !"TIMESTAMPTZ".equals(prefix)) {
             return null;
         }
         return unquote(literal.substring(quote));
