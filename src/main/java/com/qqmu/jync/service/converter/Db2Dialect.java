@@ -163,12 +163,20 @@ public class Db2Dialect extends AbstractSqlDialect {
     @Override
     public List<String> getColumnCommentDdl(String schema, String table, ColumnMeta column,
                                             DatabaseType sourceType) {
-        return List.of(commentOnColumnSql(schema, table, column.getName(), column.getRemarks()));
+        return List.of("COMMENT ON COLUMN " + qualify(schema, table) + "."
+                + quoteIdentifier(column.getName()) + " IS " + db2Comment(column.getRemarks()));
     }
 
     @Override
     public String getAlterTableCommentSql(String schema, String table, String comment) {
-        return commentOnTableSql(schema, table, comment);
+        return "COMMENT ON TABLE " + qualify(schema, table) + " IS " + db2Comment(comment);
+    }
+
+    /** DB2 COMMENT requires a string literal; it has no NULL-to-clear form. */
+    private static String db2Comment(String comment) {
+        return comment == null || comment.isBlank()
+                ? "''"
+                : "'" + comment.replace("'", "''") + "'";
     }
 
     @Override

@@ -64,6 +64,12 @@ class CommentDdlTest {
     }
 
     @Test
+    void db2ClearsACommentWithAnEmptyString() {
+        assertThat(new Db2Dialect().getAlterTableCommentSql("S", "T", null))
+                .isEqualTo("COMMENT ON TABLE \"S\".\"T\" IS ''");
+    }
+
+    @Test
     void sqlServerUsesExtendedPropertyUpserts() {
         String ddl = joined(new SqlServerDialect().getCreatedTableCommentDdl(
                 table(), "dbo", "orders", DatabaseType.MYSQL));
