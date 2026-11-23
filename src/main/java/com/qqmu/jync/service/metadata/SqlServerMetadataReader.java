@@ -9,6 +9,7 @@ import java.util.Map;
 import org.springframework.stereotype.Component;
 
 import com.qqmu.jync.dto.meta.ProcedureMeta;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.DatabaseType;
 
@@ -122,6 +123,92 @@ public class SqlServerMetadataReader extends GenericMetadataReader {
                     procedureName, e.getMessage());
         }
         return proc;
+    }
+
+    /**
+     * SQL Server has no native table/column comments: SSMS stores them as the
+     * {@code MS_Description} extended property. The JDBC driver does not surface those rows
+     * through {@code getTables}/{@code getColumns} REMARKS, so a structure sync from SQL Server
+     * would otherwise create the target without comments even when every target dialect can
+     * carry them.
+     *
+     * <p>The dictionary read is deliberately best-effort: an account without
+     * {@code VIEW DEFINITION} may not see {@code sys.extended_properties}, and a missing
+     * comment must never fail the metadata read. A blank property is treated like no
+     * comment, matching the Oracle reader.
+     */
+    @Override
+    protected TableMeta readTable(Connection conn, String schema, String tableName,
+                                  boolean includeDetail, boolean includeForeignKeys)
+            throws SQLException {
+        TableMeta table = super.readTable(conn, schema, tableName, includeDetail,
+                includeForeignKeys);
+        if (table != null && includeDetail) {
+            readComments(conn, schema, tableName, table);
+        }
+        return table;
+    }
+
+    /**
+     * Reads {@code MS_Description} for the table and each of its columns. Kept package-private
+     * so the comment mapping can be tested without a live SQL Server.
+     */
+    void readComments(Connection conn, String schema, String tableName, TableMeta table) {
+        String schemaName = schemaPattern(schema);
+
+        String tableSql = "SELECT CONVERT(NVARCHAR(MAX), ep.value) "
+                + "FROM sys.objects o "
+                + "JOIN sys.schemas s ON s.schema_id = o.schema_id "
+                + "JOIN sys.extended_properties ep ON ep.class = 1 "
+                + "AND ep.major_id = o.object_id AND ep.minor_id = 0 "
+                + "AND ep.name = 'MS_Description' "
+                + "WHERE s.name = ? AND o.name = ? AND o.type IN ('U','V')";
+        try (PreparedStatement ps = conn.prepareStatement(tableSql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, schemaName);
+            ps.setString(2, tableName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String comment = rs.getString(1);
+                    if (comment != null && !comment.isBlank()) {
+                        table.setRemarks(comment);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("SQL Server table comment read failed for {}: {}",
+                    tableName, e.getMessage());
+        }
+
+        if (table.getColumns() == null || table.getColumns().isEmpty()) {
+            return;
+        }
+        String columnSql = "SELECT c.name, CONVERT(NVARCHAR(MAX), ep.value) "
+                + "FROM sys.objects o "
+                + "JOIN sys.schemas s ON s.schema_id = o.schema_id "
+                + "JOIN sys.columns c ON c.object_id = o.object_id "
+                + "JOIN sys.extended_properties ep ON ep.class = 1 "
+                + "AND ep.major_id = c.object_id AND ep.minor_id = c.column_id "
+                + "AND ep.name = 'MS_Description' "
+                + "WHERE s.name = ? AND o.name = ? AND o.type IN ('U','V')";
+        try (PreparedStatement ps = conn.prepareStatement(columnSql)) {
+            MetadataTimeouts.apply(ps);
+            ps.setString(1, schemaName);
+            ps.setString(2, tableName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String name = rs.getString(1);
+                    String comment = rs.getString(2);
+                    if (name == null || comment == null || comment.isBlank()) {
+                        continue;
+                    }
+                    table.column(name).ifPresent(col -> col.setRemarks(comment));
+                }
+            }
+        } catch (SQLException e) {
+            log.debug("SQL Server column comment read failed for {}: {}",
+                    tableName, e.getMessage());
+        }
     }
 
     @Override
