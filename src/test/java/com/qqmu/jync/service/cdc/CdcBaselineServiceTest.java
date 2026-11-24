@@ -263,7 +263,7 @@ class CdcBaselineServiceTest {
     }
 
     @Test
-    void failureRecordsErrorAndDeletesHalfWrittenPosition() throws SQLException {
+    void failureRecordsErrorAndKeepsTheAnchorForResume() throws SQLException {
         Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
         when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
         doThrow(new IllegalStateException("full load exploded"))
@@ -271,7 +271,7 @@ class CdcBaselineServiceTest {
 
         assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> true))
                 .isInstanceOf(IllegalStateException.class);
-        verify(positionStore).delete(7L);                       // 残缺位点必须清掉
+        verify(positionStore, never()).delete(7L);              // 保留锚点与检查点，供继续基线使用
         verify(positionStore, never()).markBaselineDone(anyLong());
         verify(taskStore).recordCdcFailure(eq(7L), org.mockito.ArgumentMatchers.contains("exploded"));
     }
@@ -290,7 +290,7 @@ class CdcBaselineServiceTest {
 
         assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> true))
                 .isInstanceOf(IllegalStateException.class);
-        verify(positionStore).delete(7L);                       // 残缺位点必须清掉
+        verify(positionStore, never()).delete(7L);              // 保留锚点与检查点，供继续基线使用
         verify(positionStore, never()).markBaselineDone(anyLong());
         verify(taskStore).recordCdcFailure(eq(7L),
                 org.mockito.ArgumentMatchers.contains("lease lost"));

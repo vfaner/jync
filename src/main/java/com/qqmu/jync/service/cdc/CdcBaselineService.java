@@ -435,7 +435,12 @@ public class CdcBaselineService {
                 // reruns), keep the contract until a completed baseline replaces it.
                 positionStore.resetAnchorKeepingProjectionSignature(projectId);
             } else {
-                positionStore.delete(projectId);
+                // Keep the not-done row: it carries the original anchor. The next start or
+                // "continue baseline" reuses it together with the chunk checkpoints, so a
+                // failed 500M-row table does not force every completed table to reload. A
+                // deliberate rebuild deletes this row first and starts from a fresh anchor.
+                log.info("CDC baseline for project {} failed; keeping its anchor and chunk"
+                        + " checkpoints for resume (use rebuild for a fresh anchor)", projectId);
             }
             taskStore.recordCdcFailure(projectId, CdcFailureClassifier.describe(e));
             throw e;

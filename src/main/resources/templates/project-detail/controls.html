@@ -136,7 +136,7 @@
             </button>
             <button type="button" class="btn btn-ghost btn-sm"
                     th:if="${cdcActive and !isRedisTarget and cdcBaselinePending
-                              and task != null and task.status != null
+                              and cdcPosition != null and task != null and task.status != null
                               and task.status.name() == 'ERROR'}"
                     data-role="api-btn" data-reload="true" data-cdc-visibility="cdc"
                     th:attr="data-action=@{/api/projects/{id}/cdc-resume-baseline(id=${project.id})},
