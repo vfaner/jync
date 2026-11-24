@@ -1088,7 +1088,7 @@ public class SyncEngine {
             }
 
             int concurrentTables = effectiveTableConcurrency(ctx);
-            if (concurrentTables > 1) {
+            if (concurrentTables > 1 && !hasUnresolvedForeignKeys(sourceMeta.getTables())) {
                 syncTablesConcurrently(sourceMeta.getTables(), ctx, result, blockedTables,
                         knownTargetTables, auditBudget, concurrentTables);
                 return;
@@ -1180,6 +1180,21 @@ public class SyncEngine {
         }
     }
 
+    /** A foreign key with no referenced table cannot be ordered safely. */
+    private static boolean hasUnresolvedForeignKeys(List<TableMeta> tables) {
+        for (TableMeta table : tables) {
+            if (table.getForeignKeys() == null) {
+                continue;
+            }
+            for (TableMeta.ForeignKeyMeta fk : table.getForeignKeys()) {
+                if (fk.getReferencedTable() == null || fk.getReferencedTable().isBlank()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /**
      * Sequential data order. Small-table-first is applied only when every selected table has
      * a reliable estimate; a missing number means the old dependency-only order is safer
@@ -1190,7 +1205,8 @@ public class SyncEngine {
                 .filter(table -> ctx.getConfig().includesTable(table.getName()))
                 .toList();
         if (!properties.isSmallTablesFirst()
-                || selected.stream().anyMatch(t -> t.getApproximateRowCount() == null)) {
+                || selected.stream().anyMatch(t -> t.getApproximateRowCount() == null)
+                || hasUnresolvedForeignKeys(selected)) {
             return structureSync.sortByDependency(selected);
         }
         List<List<TableMeta>> levels = structureSync.dependencyLevels(selected);

@@ -67,6 +67,9 @@ public class RowCountJobService {
     }
 
     private void run(Job job) {
+        if (job.isCancelled()) {
+            return;
+        }
         try {
             int timeout = Math.max(1, properties.getRowCountJobTimeoutSeconds());
             TableRowCount result = preview.rowCount(job.projectId, job.table, true, timeout);
