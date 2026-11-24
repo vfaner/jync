@@ -85,6 +85,15 @@ public class SyncProperties {
     private int chunkSize = 100_000;
 
     /**
+     * When every selected table has a reliable row estimate, process smaller tables first
+     * while preserving foreign-key waves. This does not change total work; it lets the
+     * project page show completed tables earlier and keeps a single huge table from making
+     * the whole baseline look stuck. Without estimates the historical dependency order is
+     * kept.
+     */
+    private boolean smallTablesFirst = true;
+
+    /**
      * Upper bound on the estimated bytes a single chunk may carry during a full load.
      * Tables with wide rows or LOB columns get a smaller row count than {@link #chunkSize}
      * so one chunk cannot become a multi-gigabyte stream that outlives the driver/socket

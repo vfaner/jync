@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.sync;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -136,6 +137,25 @@ class SyncEngineForeignKeyOrderingTest {
                 argThat(t -> t != null && "ORDERS".equals(t.getName())), any(), any(), any());
         order.verify(dataSync).syncTable(any(), any(),
                 argThat(t -> t != null && "ORDER_ITEMS".equals(t.getName())), any(), any(), any());
+    }
+
+    @Test
+    void smallTablesGoFirstInsideTheirForeignKeysWave() {
+        TableMeta child = table("CHILD", "ID");
+        TableMeta small = table("SMALL", "ID");
+        TableMeta big = table("BIG", "ID");
+        small.setApproximateRowCount(10L);
+        child.setApproximateRowCount(20L);
+        big.setApproximateRowCount(1_000_000L);
+        when(structureSync.dependencyLevels(any()))
+                .thenReturn(List.of(List.of(big, small), List.of(child)));
+
+        SyncContext context = ctx(new MySqlDialect(), DatabaseType.MYSQL, true);
+        List<TableMeta> ordered = engine.orderedTablesForData(
+                List.of(child, small, big), context);
+
+        assertThat(ordered).extracting(TableMeta::getName)
+                .containsExactly("SMALL", "BIG", "CHILD");
     }
 
     @Test

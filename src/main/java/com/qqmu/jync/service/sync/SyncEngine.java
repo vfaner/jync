@@ -35,6 +35,7 @@ import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.PoolContentionException;
+import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.monitor.ChangeDetector;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.service.monitor.CursorStrategyResolver;
@@ -116,6 +117,13 @@ public class SyncEngine {
      * WARN and one change-log entry per process, then the note stays in the audit trail.
      */
     private final Set<String> warnedDeletionSkips = ConcurrentHashMap.newKeySet();
+
+    /** Schema-wide row estimates for small-table-first ordering, refreshed every five minutes. */
+    private final Map<String, CachedSchemaStats> schemaStats = new ConcurrentHashMap<>();
+    private static final long SCHEMA_STATS_TTL_MS = 5 * 60_000L;
+
+    private record CachedSchemaStats(Map<String, MetadataReader.TableStat> stats, long at) {
+    }
 
     @Autowired
     public SyncEngine(DataSourceManager dataSourceManager,
@@ -399,7 +407,46 @@ public class SyncEngine {
                 }
             }
         }
+        // Small-table-first needs a number for every selected table. One schema-wide stats
+        // query (cached) is cheaper than a COUNT(*) per table and leaves the historical order
+        // untouched when the product cannot report statistics.
+        if (ctx.getConfig().isSyncData() && properties.isSmallTablesFirst()
+                && ctx.getSourceReader().reportsTableStats()) {
+            Map<String, MetadataReader.TableStat> stats = schemaStatsFor(sourceConn, ctx);
+            if (!stats.isEmpty()) {
+                for (TableMeta table : meta.getTables()) {
+                    if (table.getApproximateRowCount() != null) {
+                        continue;
+                    }
+                    MetadataReader.TableStat stat = null;
+                    for (Map.Entry<String, MetadataReader.TableStat> entry : stats.entrySet()) {
+                        if (entry.getKey().equalsIgnoreCase(table.getName())) {
+                            stat = entry.getValue();
+                            break;
+                        }
+                    }
+                    if (stat != null && stat.rows() != null) {
+                        table.setApproximateRowCount(stat.rows());
+                    }
+                }
+            }
+        }
         return meta;
+    }
+
+    private Map<String, MetadataReader.TableStat> schemaStatsFor(Connection sourceConn,
+                                                                  SyncContext ctx) {
+        String key = ctx.projectId() + "|" + ctx.getSourceSchema();
+        long now = System.currentTimeMillis();
+        CachedSchemaStats cached = schemaStats.get(key);
+        if (cached != null && now - cached.at < SCHEMA_STATS_TTL_MS) {
+            return cached.stats;
+        }
+        Map<String, MetadataReader.TableStat> stats =
+                ctx.getSourceReader().estimateTableStats(sourceConn, ctx.getSourceSchema());
+        stats = stats == null ? Map.of() : stats;
+        schemaStats.put(key, new CachedSchemaStats(stats, now));
+        return stats;
     }
 
     /**
@@ -1050,10 +1097,7 @@ public class SyncEngine {
             // cycle reads that dictionary only when the target loads with its constraints
             // enforced (see readSourceMetadata). Otherwise every table has zero foreign keys
             // and this sort degrades to the source listing order, which is harmless there.
-            for (TableMeta table : structureSync.sortByDependency(sourceMeta.getTables())) {
-                if (!ctx.getConfig().includesTable(table.getName())) {
-                    continue;
-                }
+            for (TableMeta table : orderedTablesForData(sourceMeta.getTables(), ctx)) {
                 // A previous table may have taken its connection with it, and the next table
                 // would then fail in milliseconds with "Connection is closed" rather than a
                 // reason of its own.
@@ -1137,6 +1181,41 @@ public class SyncEngine {
     }
 
     /**
+     * Sequential data order. Small-table-first is applied only when every selected table has
+     * a reliable estimate; a missing number means the old dependency-only order is safer
+     * than moving an unknown table ahead of a presumed parent.
+     */
+    List<TableMeta> orderedTablesForData(List<TableMeta> allTables, SyncContext ctx) {
+        List<TableMeta> selected = allTables.stream()
+                .filter(table -> ctx.getConfig().includesTable(table.getName()))
+                .toList();
+        if (!properties.isSmallTablesFirst()
+                || selected.stream().anyMatch(t -> t.getApproximateRowCount() == null)) {
+            return structureSync.sortByDependency(selected);
+        }
+        List<List<TableMeta>> levels = structureSync.dependencyLevels(selected);
+        if (levels.isEmpty() && !selected.isEmpty()) {
+            // Hand-built test doubles / a reader that could not produce a graph: the
+            // dependency-only order is the safe fallback, not an empty data phase.
+            return structureSync.sortByDependency(selected);
+        }
+        List<TableMeta> ordered = new ArrayList<>();
+        for (List<TableMeta> level : levels) {
+            ordered.addAll(sortedBySize(level));
+        }
+        return ordered;
+    }
+
+    private static List<TableMeta> sortedBySize(List<TableMeta> tables) {
+        List<TableMeta> copy = new ArrayList<>(tables);
+        copy.sort(java.util.Comparator
+                .comparing((TableMeta t) -> t.getApproximateRowCount() == null
+                        ? Long.MAX_VALUE : t.getApproximateRowCount())
+                .thenComparing(TableMeta::getName, String.CASE_INSENSITIVE_ORDER));
+        return copy;
+    }
+
+    /**
      * Opt-in table-level concurrency. The global setting is a ceiling, further reduced by
      * the connection pool and the per-table full-load worker count; a configuration that
      * cannot fit two tables safely stays sequential instead of racing for pool seats.
@@ -1170,7 +1249,10 @@ public class SyncEngine {
         List<TableMeta> selected = allTables.stream()
                 .filter(table -> ctx.getConfig().includesTable(table.getName()))
                 .toList();
-        List<List<TableMeta>> levels = structureSync.dependencyLevels(selected);
+        List<List<TableMeta>> levels = new ArrayList<>();
+        for (List<TableMeta> level : structureSync.dependencyLevels(selected)) {
+            levels.add(properties.isSmallTablesFirst() ? sortedBySize(level) : level);
+        }
         log.info("Project '{}': data phase runs up to {} tables concurrently across {}"
                 + " dependency waves", ctx.projectName(), concurrency, levels.size());
         ExecutorService pool = Executors.newFixedThreadPool(concurrency, runnable -> {
@@ -1903,6 +1985,7 @@ public class SyncEngine {
         verifiedTables.removeIf(key -> key.startsWith(prefix));
         warnedOversizedFullCompare.removeIf(key -> key.startsWith(prefix));
         warnedDeletionSkips.removeIf(key -> key.startsWith(prefix));
+        schemaStats.keySet().removeIf(key -> key.startsWith(prefix));
         structureSync.evictProject(projectId);
         if (contentAudit != null) {
             contentAudit.evictProject(projectId);
