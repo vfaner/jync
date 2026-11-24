@@ -1088,9 +1088,9 @@ public class SyncEngine {
             }
 
             int concurrentTables = effectiveTableConcurrency(ctx);
-            if (concurrentTables > 1 && !hasUnresolvedForeignKeys(sourceMeta.getTables())) {
-                syncTablesConcurrently(sourceMeta.getTables(), ctx, result, blockedTables,
-                        knownTargetTables, auditBudget, concurrentTables);
+            if (concurrentTables > 1 && !hasUnresolvedForeignKeys(sourceMeta.getTables())
+                    && syncTablesConcurrently(sourceMeta.getTables(), ctx, result, blockedTables,
+                            knownTargetTables, auditBudget, concurrentTables)) {
                 return;
             }
             // Parent-first order is derived from the source foreign-key dictionary; a data-only
@@ -1257,17 +1257,22 @@ public class SyncEngine {
         return Math.max(1, Math.min(configured, byPool));
     }
 
-    private void syncTablesConcurrently(List<TableMeta> allTables, SyncContext ctx,
-                                        SyncResult result, Set<String> blockedTables,
-                                        Set<String> knownTargetTables,
-                                        ContentAuditService.CycleBudget auditBudget,
-                                        int concurrency) throws SQLException {
+    private boolean syncTablesConcurrently(List<TableMeta> allTables, SyncContext ctx,
+                                           SyncResult result, Set<String> blockedTables,
+                                           Set<String> knownTargetTables,
+                                           ContentAuditService.CycleBudget auditBudget,
+                                           int concurrency) throws SQLException {
         List<TableMeta> selected = allTables.stream()
                 .filter(table -> ctx.getConfig().includesTable(table.getName()))
                 .toList();
         List<List<TableMeta>> levels = new ArrayList<>();
         for (List<TableMeta> level : structureSync.dependencyLevels(selected)) {
             levels.add(properties.isSmallTablesFirst() ? sortedBySize(level) : level);
+        }
+        if (levels.isEmpty()) {
+            // A mock or a reader that could not produce a graph: fall back to the caller's
+            // sequential loop rather than silently reporting success with no table processed.
+            return false;
         }
         log.info("Project '{}': data phase runs up to {} tables concurrently across {}"
                 + " dependency waves", ctx.projectName(), concurrency, levels.size());
@@ -1307,6 +1312,7 @@ public class SyncEngine {
         } finally {
             DataSyncService.stopWorkers(pool);
         }
+        return true;
     }
 
     /** One table on its own pair of pooled connections; safe to run beside another table. */
