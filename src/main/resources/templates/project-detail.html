@@ -14,6 +14,7 @@
     <th:block th:replace="~{project-detail/controls :: card}"/>
     <th:block th:replace="~{project-detail/cdc-status :: cdc-card}"/>
     <th:block th:replace="~{project-detail/full-load-progress :: card}"/>
+    <th:block th:replace="~{project-detail/table-status :: card}"/>
 
     <!--/* data-original-strategy：已保存的捕获策略，B8 确认框拿它和提交值比对，
            只有「改成任一日志 CDC」才弹确认（app.js isLogCdcStrategy，与后端

@@ -1,6 +1,8 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -181,6 +183,23 @@ class FullLoadProgressViewTest {
         assertThat(fragment).contains("Full-load progress");
         assertThat(fragment).contains("Full load complete: 1/1 tables");
         assertThat(fragment).contains("No full load is currently running");
+    }
+
+    @Test
+    void theAllTablesStatusCardListsUnstartedTablesToo() throws Exception {
+        stubDetail(Map.of());
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("DONE", ProjectService.SyncState.COMPLETED,
+                        10L, java.time.Instant.now(), null, null),
+                new ProjectService.TableSyncStatus("TODO", ProjectService.SyncState.NOT_STARTED,
+                        null, null, null, null)));
+
+        String html = render();
+
+        assertThat(html).contains("Table status");
+        assertThat(html).contains("Full load complete");
+        assertThat(html).contains("Not started");
+        assertThat(html).contains("TODO");
     }
 
     @Test

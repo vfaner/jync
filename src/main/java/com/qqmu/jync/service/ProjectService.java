@@ -1959,6 +1959,61 @@ public class ProjectService {
         return result;
     }
 
+    /** A row of the detail page's all-table status panel. */
+    public record TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
+                                  Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt) {
+    }
+
+    public enum SyncState { NOT_STARTED, IN_PROGRESS, COMPLETED, INCOMPLETE }
+
+    /**
+     * Selected tables plus their last known state. Unlike {@link #findProgress(Long)}, this
+     * includes tables that have not started yet, so the page can show the whole project
+     * instead of only tables that already have a progress row.
+     */
+    public List<TableSyncStatus> findTableSyncStatuses(Long projectId, SyncConfig config) {
+        Map<String, SyncProgress> progressByName = new LinkedHashMap<>();
+        for (SyncProgress progress : progressRepository.findByProjectId(projectId)) {
+            if (progress.getObjectName() != null) {
+                progressByName.put(progress.getObjectName().toUpperCase(Locale.ROOT), progress);
+            }
+        }
+        Map<String, FullLoadProgress> inFlight = findFullLoadProgress(projectId);
+        Set<String> names = new java.util.LinkedHashSet<>(config.getTables());
+        if (names.isEmpty()) {
+            // A legacy project selected "all" and has no source metadata here; the progress
+            // rows are the only names this server-side view can prove without dialing source.
+            for (SyncProgress progress : progressByName.values()) {
+                names.add(progress.getObjectName());
+            }
+        }
+        List<TableSyncStatus> result = new ArrayList<>();
+        for (String name : names) {
+            if (name == null || name.isBlank()) {
+                continue;
+            }
+            String key = name.toUpperCase(Locale.ROOT);
+            SyncProgress progress = progressByName.get(key);
+            FullLoadProgress load = inFlight.get(name);
+            SyncState state;
+            if (load != null) {
+                state = SyncState.IN_PROGRESS;
+            } else if (progress != null && Boolean.TRUE.equals(progress.getInitialLoadDone())) {
+                state = SyncState.COMPLETED;
+            } else if (progress != null) {
+                state = SyncState.INCOMPLETE;
+            } else {
+                state = SyncState.NOT_STARTED;
+            }
+            result.add(new TableSyncStatus(name, state,
+                    progress == null ? null : progress.getRowsSyncedTotal(),
+                    progress == null ? null : progress.getLastSyncTime(),
+                    load == null ? null : load.getRowsCopied(),
+                    load == null ? null : load.getLastUpdatedAt()));
+        }
+        return result;
+    }
+
     /** One table's chunked full-load state, derived from its checkpoint rows. */
     @Getter
     public static class FullLoadProgress {

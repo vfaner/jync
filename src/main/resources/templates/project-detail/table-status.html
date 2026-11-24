@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* 所有已选择表的状态，包括尚未开始的表。它是只读总览，不替代下面的可操作进度表；
+       全量进行中的徽章仍由 full-load-card 的 2 秒片段刷新。 */-->
+<div class="card" th:fragment="card"
+     th:if="${tableStatuses != null and !#lists.isEmpty(tableStatuses)}">
+    <div class="card-head">
+        <h2><svg class="ico"><use href="#list-ul"/></svg>
+            <span th:text="#{tablesync.title}">Table status</span></h2>
+        <span class="badge badge-ok"
+              th:text="#{tablesync.summary(${tableStatusCompleted}, ${tableStatusInProgress},
+                       ${tableStatusIncomplete}, ${tableStatusNotStarted})}">summary</span>
+    </div>
+    <div class="card-body tight">
+        <div class="tbl-wrap">
+            <table class="tbl dense">
+                <thead>
+                <tr>
+                    <th th:text="#{log.objectName}">Table</th>
+                    <th th:text="#{rowcount.status}">Status</th>
+                    <th class="num" th:text="#{rowcount.syncedTotal}">Rows changed</th>
+                    <th th:text="#{dashboard.lastSync}">Last sync</th>
+                    <th class="num" th:text="#{tablesync.fullLoad}">Full load</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="s : ${tableStatuses}">
+                    <td class="mono" th:text="${s.name}">table</td>
+                    <td>
+                        <span class="badge"
+                              th:classappend="${s.state.name() == 'COMPLETED'} ? 'badge-ok'
+                                            : (${s.state.name() == 'IN_PROGRESS'} ? 'badge-info'
+                                            : (${s.state.name() == 'INCOMPLETE'} ? 'badge-warn'
+                                            : 'badge-mute'))"
+                              th:text="#{'tablesync.state.' + ${s.state.name()}}">state</span>
+                    </td>
+                    <td class="num" th:text="${s.rowsSyncedTotal ?: 0}">0</td>
+                    <td class="small muted"
+                        th:text="${s.lastSyncTime != null}
+                                 ? ${#temporals.format(s.lastSyncTime, 'MM-dd HH:mm:ss')}
+                                 : #{common.never}">never</td>
+                    <td class="num">
+                        <span th:if="${s.state.name() == 'IN_PROGRESS'}"
+                              th:text="#{tablesync.copied(${s.rowsCopied ?: 0})}">rows</span>
+                        <span th:unless="${s.state.name() == 'IN_PROGRESS'}"
+                              th:text="#{tablesync.noActive}">—</span>
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+</body>
+</html>

@@ -375,6 +375,17 @@ public class ProjectController {
             }
         }
         model.addAttribute("progressByTable", progressByTable);
+        List<ProjectService.TableSyncStatus> tableStatuses =
+                projectService.findTableSyncStatuses(id, config);
+        model.addAttribute("tableStatuses", tableStatuses);
+        model.addAttribute("tableStatusCompleted", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.COMPLETED).count());
+        model.addAttribute("tableStatusInProgress", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.IN_PROGRESS).count());
+        model.addAttribute("tableStatusIncomplete", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.INCOMPLETE).count());
+        model.addAttribute("tableStatusNotStarted", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.NOT_STARTED).count());
         Set<String> columnRuleTables = new TreeSet<>();
         for (ColumnRule r : config.getColumnRules()) {
             if (r.getTable() != null && !r.getTable().isBlank()) {
