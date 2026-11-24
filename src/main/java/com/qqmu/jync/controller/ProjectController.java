@@ -384,7 +384,7 @@ public class ProjectController {
         model.addAttribute("columnRuleTables", columnRuleTables);
         // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
         // lets the page show chunk progress and the resume promise per table.
-        model.addAttribute("fullLoadProgress", projectService.findFullLoadProgress(id));
+        addFullLoadProgress(id, progressList, model);
         model.addAttribute("scheduled", projectService.isScheduled(id));
         // "When will it actually run?" has to be visible before the time comes: a stopped
         // project and a project whose job failed to register look identical otherwise, and
@@ -562,6 +562,8 @@ public class ProjectController {
         }
         model.addAttribute("cdcPosition", cdcPosition);
         model.addAttribute("cdcStats", cdcStats);
+        model.addAttribute("cdcBaselinePending", cdcActive
+                && (cdcPosition == null || !Boolean.TRUE.equals(cdcPosition.isBaselineDone())));
 
         if (!liveSourceAllowed) {
             // Not a fault: this account may not edit the project, so the page never dials
@@ -601,6 +603,61 @@ public class ProjectController {
      * missing #cdc-card as "reload the page" and lets the full detail route (or the login
      * redirect) show the real state.
      */
+    @GetMapping("/{id}/full-load-card")
+    public String fullLoadCardFragment(@PathVariable Long id, Model model) {
+        projectService.findById(id).ifPresent(project -> model.addAttribute("project", project));
+        addFullLoadProgress(id, projectService.findProgress(id), model);
+        return "project-detail/full-load-progress :: card";
+    }
+
+    /**
+     * Just the per-table full-load badge, refreshed by the progress card every five seconds.
+     * The rest of each row (cursor input, preview buttons) is left untouched so a refresh
+     * cannot discard what the operator is typing.
+     */
+    @GetMapping("/{id}/progress-badges")
+    public String progressBadgesFragment(@PathVariable Long id, Model model) {
+        projectService.findById(id).ifPresent(project -> model.addAttribute("project", project));
+        List<SyncProgress> progress = projectService.findProgress(id);
+        model.addAttribute("progressList", progress);
+        addFullLoadProgress(id, progress, model);
+        return "project-detail/progress-badges :: all";
+    }
+
+    /**
+     * Model attributes shared by the detail page and the lightweight full-load card
+     * fragment. Checkpoint rows exist only while a first/rebuilt full load is unfinished;
+     * completed tables are represented by their SyncProgress row, so the card can stay
+     * visible with a completed-table count after the last checkpoint disappears.
+     */
+    private void addFullLoadProgress(Long projectId, List<SyncProgress> progressList,
+                                     Model model) {
+        Map<String, ProjectService.FullLoadProgress> fullLoadProgress =
+                projectService.findFullLoadProgress(projectId);
+        model.addAttribute("fullLoadProgress", fullLoadProgress);
+        model.addAttribute("fullLoadTableCount", fullLoadProgress.size());
+        model.addAttribute("fullLoadTrackedTables", progressList.size());
+        model.addAttribute("fullLoadCompletedTables", progressList.stream()
+                .filter(progress -> Boolean.TRUE.equals(progress.getInitialLoadDone()))
+                .count());
+        model.addAttribute("fullLoadRows", fullLoadProgress.values().stream()
+                .mapToLong(ProjectService.FullLoadProgress::getRowsCopied).sum());
+        java.time.Instant fullLoadUpdatedAt = fullLoadProgress.values().stream()
+                .map(ProjectService.FullLoadProgress::getLastUpdatedAt)
+                .filter(java.util.Objects::nonNull)
+                .max(java.time.Instant::compareTo)
+                .orElse(null);
+        model.addAttribute("fullLoadUpdatedAt", fullLoadUpdatedAt);
+        model.addAttribute("fullLoadStale", fullLoadUpdatedAt != null
+                && fullLoadUpdatedAt.isBefore(java.time.Instant.now().minusSeconds(600)));
+        model.addAttribute("fullLoadCurrentTable", fullLoadProgress.entrySet().stream()
+                .filter(entry -> entry.getValue().getLastUpdatedAt() != null)
+                .max(java.util.Comparator.comparing(
+                        entry -> entry.getValue().getLastUpdatedAt()))
+                .map(Map.Entry::getKey)
+                .orElse(null));
+    }
+
     @GetMapping("/{id}/cdc-card")
     public String cdcCardFragment(@PathVariable Long id, Model model) {
         boolean cdcActive = false;
@@ -623,6 +680,8 @@ public class ProjectController {
         model.addAttribute("cdcActive", cdcActive);
         model.addAttribute("cdcPosition", cdcPosition);
         model.addAttribute("cdcStats", cdcStats);
+        model.addAttribute("cdcBaselinePending", cdcActive
+                && (cdcPosition == null || !Boolean.TRUE.equals(cdcPosition.isBaselineDone())));
         return "project-detail/cdc-status :: cdc-card";
     }
 

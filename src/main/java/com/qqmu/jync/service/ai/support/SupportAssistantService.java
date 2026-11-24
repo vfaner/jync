@@ -217,6 +217,11 @@ public class SupportAssistantService {
                     没读到主键；后者升级 2.4.5 后重启，真正无主键的表只能基线播种。
                   - 源 `DATETIME` 目标 `DATETIME(6)`：MySQL→MySQL 同族精度问题；2.4.5 起新建
                     目标保留源精度，已有目标列不会自动改。
+                  - `exec format error`：容器镜像架构不匹配；aarch64 是 ARM64，应拉
+                    `linux/arm64` 镜像，不要强制 `--platform linux/amd64`。
+                  - 部署 / 架构问题先区分 JAR 与 Docker：Docker 官方镜像支持
+                    `linux/amd64`（x86_64）与 `linux/arm64`（aarch64）；Docker Hub 不通给
+                    GHCR / 离线 save-load / JAR 方案，具体命令由 search_docs 取，不要凭印象编。
                   报错里的版本号、驱动与目标数据库类型是判断依据；日志没有给出这些信息时，
                   只问一个最关键的补充项，不要凭经验断言。
             五、回答格式

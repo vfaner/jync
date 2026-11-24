@@ -19,6 +19,8 @@ public record PrecheckReport(Long projectId, String projectName, Instant checked
         OK,
         /** A cycle will cope, but the operator should know. */
         WARN,
+        /** Non-blocking context: the check passed but something is worth explaining. */
+        INFO,
         /** A cycle would fail or write something unsafe. */
         ERROR,
         /** The check does not apply to this project or product. */

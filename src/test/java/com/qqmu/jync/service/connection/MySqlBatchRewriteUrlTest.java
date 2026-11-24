@@ -54,4 +54,24 @@ class MySqlBatchRewriteUrlTest {
         assertThat(manager.buildJdbcUrl(config(DatabaseType.ORACLE)))
                 .doesNotContain("rewriteBatchedStatements");
     }
+
+    @Test
+    void connectorJStreamingResultTimeoutIsDisabledButTheOperatorCanOverrideIt() {
+        String url = manager.buildJdbcUrl(config(DatabaseType.MYSQL));
+        assertThat(url).contains("netTimeoutForStreamingResults=0");
+        // Once only: a duplicate is a driver-dependent coin flip over which value wins.
+        assertThat(url.split("netTimeoutForStreamingResults", -1)).hasSize(2);
+
+        DatabaseConfig custom = config(DatabaseType.MYSQL);
+        custom.setCustomUrl("jdbc:mysql://db:3306/shop?netTimeoutForStreamingResults=7200");
+        assertThat(manager.buildJdbcUrl(custom))
+                .contains("netTimeoutForStreamingResults=7200")
+                .doesNotContain("netTimeoutForStreamingResults=0");
+    }
+
+    @Test
+    void mariaDbDoesNotReceiveConnectorJOnlyProperty() {
+        assertThat(manager.buildJdbcUrl(config(DatabaseType.MARIADB)))
+                .doesNotContain("netTimeoutForStreamingResults");
+    }
 }

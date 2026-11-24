@@ -437,6 +437,9 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
   border-radius: var(--radius); overflow: hidden;
 }
 .card + .card { margin-top: 18px; }
+/* The full-load card lives inside a polling wrapper, so the sibling rule above cannot
+   reach it; match the same gap without adding height when the wrapper is empty. */
+#full-load-card > .card { margin-top: 18px; }
 .card-head {
   padding: 15px 20px; border-bottom: 1px solid var(--line);
   display: flex; justify-content: space-between; align-items: center; gap: 12px;

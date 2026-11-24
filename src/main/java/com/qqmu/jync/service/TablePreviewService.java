@@ -116,16 +116,29 @@ public class TablePreviewService {
      * reported in place instead of failing the whole comparison.
      */
     public TableRowCount rowCount(Long projectId, String table) {
+        return rowCount(projectId, table, true);
+    }
+
+    /**
+     * Row counts for one table. {@code exact=false} asks the product for catalog statistics
+     * (InnoDB {@code TABLE_ROWS}, PostgreSQL {@code reltuples}, Oracle {@code NUM_ROWS},
+     * ...) and marks both sides approximate. Readers without a statistics source use their
+     * own short metadata-bound fallback; this path never applies the row-count query's
+     * 15-second full-scan budget. The page uses it as the default because a
+     * five-hundred-million-row table cannot be counted inside a browser request.
+     */
+    public TableRowCount rowCount(Long projectId, String table, boolean exact) {
         long started = System.currentTimeMillis();
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
         return new TableRowCount(table,
-                countSide(project, table, Side.SOURCE),
-                countSide(project, table, Side.TARGET),
+                countSide(project, table, Side.SOURCE, exact),
+                countSide(project, table, Side.TARGET, exact),
                 System.currentTimeMillis() - started);
     }
 
-    private TableRowCount.SideCount countSide(Project project, String table, Side side) {
+    private TableRowCount.SideCount countSide(Project project, String table, Side side,
+                                              boolean exact) {
         long started = System.currentTimeMillis();
         Long databaseId = side == Side.SOURCE ? project.getSourceDbId() : project.getTargetDbId();
         if (databaseId == null) {
@@ -142,13 +155,18 @@ public class TablePreviewService {
             String requested = side == Side.TARGET
                     ? parseConfig(project).targetTableName(table) : table;
             String actualTable = resolveTableName(conn, reader, schema, requested);
+            if (!exact) {
+                long count = reader.estimateRowCount(conn, schema, actualTable);
+                return new TableRowCount.SideCount(TableRowCount.Status.OK, count,
+                        System.currentTimeMillis() - started, true);
+            }
             String sql = "SELECT COUNT(*) FROM " + dialect.qualify(schema, actualTable);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
                 JdbcUtil.applyQueryTimeout(ps, ROW_COUNT_TIMEOUT_SECONDS);
                 try (ResultSet rs = ps.executeQuery()) {
                     long count = rs.next() ? rs.getLong(1) : 0L;
                     return new TableRowCount.SideCount(TableRowCount.Status.OK, count,
-                            System.currentTimeMillis() - started);
+                            System.currentTimeMillis() - started, false);
                 }
             }
         } catch (SQLException e) {

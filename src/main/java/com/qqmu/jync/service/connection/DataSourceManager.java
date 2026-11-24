@@ -360,6 +360,7 @@ public class DataSourceManager {
             }
         }
         url = disableTinyIntBooleanCollapse(appendExtraParams(url, config));
+        url = disableStreamingResultTimeout(url);
         url = appendSocketTimeout(url);
         // The extraParams blacklist alone is not enough: a custom URL or an interpolated
         // host/dbName can carry dangerous properties directly. Validate the assembled URL.
@@ -419,6 +420,30 @@ public class DataSourceManager {
 
     private static boolean endsWithParamSeparator(String url) {
         return url.endsWith("?") || url.endsWith("&") || url.endsWith(";");
+    }
+
+    /**
+     * Connector/J sets the server-side {@code net_write_timeout} to 600 seconds for streaming
+     * result sets by default. A wide-table full load can pause the source read while the
+     * target commits a batch; once that pause crosses ten minutes MySQL closes the
+     * connection mid-read, and on Connector/J the follow-up statement cancel can surface as
+     * {@code NativeSession.getCancelTimer() ... this.session is null}. The copy already has
+     * its own bound ({@code sync.copy-timeout-seconds}), so disable this second, much shorter
+     * server-side timeout. Only {@code jdbc:mysql:} (Connector/J) understands the property;
+     * MariaDB's driver and the PostgreSQL family must not receive it. An explicit operator
+     * value in the URL or extraParams wins.
+     */
+    private String disableStreamingResultTimeout(String url) {
+        if (url == null) {
+            return null;
+        }
+        String lower = url.toLowerCase(java.util.Locale.ROOT);
+        if (!(lower.startsWith("jdbc:mysql:") || lower.startsWith("jdbc:mysql+srv:"))
+                || lower.contains("nettimeoutforstreamingresults=")) {
+            return url;
+        }
+        return url + (endsWithParamSeparator(url) ? "" : (url.indexOf('?') >= 0 ? "&" : "?"))
+                + "netTimeoutForStreamingResults=0";
     }
 
     /**

@@ -7,7 +7,7 @@ README 只保留上手所需的最少信息；参数、调度规则、列清洗�
 全量阶段每张表、每个 worker 打印一行吞吐日志，把"慢"拆成三个可操作的占比：
 
 ```text
-table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s rows/s=216000.0 read=38% write=52% commit=10% batches=250 rowsPerBatch=2000
+table=orders thread=full-load-orders rows=10000000 changed=10000000 elapsed=40.0s rows/s=250000.0 read=38% write=52% commit=10% batches=5000 rowsPerBatch=2000
 ```
 
 `read%` 高先查源库游标与网络；`write%` 高先查目标库约束、索引与大字段；`commit%` 高先加大批量减少提交次数。多数场景只需调这四个参数：
@@ -19,7 +19,9 @@ table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s row
 | `sync.full-load-parallelism` | `2` | 1–4 | 单表并行 worker，受连接池约束；1→2 收益最大 |
 | `sync.chunk-size` | `100000` | 5 万–20 万 | 每块行数，也是崩溃后最多重读的行数 |
 
-容器单机 50 万行实测：空表 `INSERT` 约 21 万行/秒（`MERGE` 约 8.4 万）；并行度 1 / 2 / 4 对应 11.7 万 / 18.4 万 / 21.6 万行/秒；延迟建二级索引约快 47%。基准只说明方向，实际取决于磁盘、网络、表宽与并发负载。
+实测 1000 万行表全量约 40 秒（约 25 万行/秒）；延迟建二级索引通常仍有收益，但具体幅度取决于表宽、索引数量、磁盘、网络、目标库写入能力与并发负载，建议以自己环境的吞吐日志为准。
+
+MySQL 源连接由程序自动追加 `netTimeoutForStreamingResults=0`（URL 或 extraParams 里显式设置的值优先），避免 Connector/J 默认的 600 秒流式结果集服务端超时在宽表全量时把连接关掉；整体复制仍受 `copy-timeout-seconds` 约束。
 
 > 完整的日志字段说明、瓶颈判断表、连接池硬约束与分步调优见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)；性能曲线与采样配置见[用户操作手册](https://jync.qqmu.com/docs/jync-user-guide.pdf)。
 

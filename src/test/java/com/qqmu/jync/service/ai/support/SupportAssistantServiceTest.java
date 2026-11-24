@@ -700,6 +700,14 @@ class SupportAssistantServiceTest {
     }
 
     @Test
+    void theSystemPromptExplainsArm64ForDeploymentQuestions() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("exec format error")
+                .contains("linux/arm64")
+                .contains("aarch64 是 ARM64");
+    }
+
+    @Test
     void theSystemPromptMapsKnownLogSignaturesToCauses() {
         assertThat(SupportAssistantService.SYSTEM_PROMPT)
                 .contains("attrno state initialization")

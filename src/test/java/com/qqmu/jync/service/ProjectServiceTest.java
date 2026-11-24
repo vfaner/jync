@@ -133,6 +133,8 @@ class ProjectServiceTest {
 
         assertThat(progress).containsOnlyKeys("A", "B");
         assertThat(progress.get("A").getChunksDone()).isEqualTo(2);
+        assertThat(progress.get("A").getRowsCopied()).isEqualTo(4);
+        assertThat(progress.get("A").getLastUpdatedAt()).isNotNull();
         assertThat(progress.get("A").isParallel()).isFalse();
         assertThat(progress.get("B").isParallel()).isTrue();
         assertThat(progress.get("B").getRangesDone()).isEqualTo(1);
@@ -155,6 +157,8 @@ class ProjectServiceTest {
 
         assertThat(progress).containsOnlyKeys("EVENTS");
         assertThat(progress.get("EVENTS").getChunksDone()).isEqualTo(1);
+        // rowsCopied is cumulative for a keyless walk, not a per-page count.
+        assertThat(progress.get("EVENTS").getRowsCopied()).isEqualTo(2);
     }
 
     @Test

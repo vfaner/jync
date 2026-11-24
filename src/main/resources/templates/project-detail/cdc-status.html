@@ -25,15 +25,27 @@
               lastError=${stats != null ? stats.lastError : null},
               lastErrorShort=${lastError != null and #strings.length(lastError) > 160 ? #strings.substring(lastError, 0, 160) + '…' : lastError}">
     <div class="card-head">
-        <h2><svg class="ico"><use href="#activity"/></svg> <span th:text="#{cdc.status.title}">CDC status</span></h2>
-        <!--/* 连接状态圆点:connected 绿(呼吸动画)/断红。持有者才有圆点。 */-->
-        <span class="badge" th:if="${stats != null}"
-              th:classappend="${stats.connected} ? 'badge-ok' : 'badge-danger'">
-            <span class="dot" th:classappend="${stats.connected} ? 'dot-live' : ''"></span>
-            <span th:text="${stats.connected} ? #{status.RUNNING} : #{cdc.status.disconnected}">Connected</span>
-        </span>
+        <div style="display:flex;align-items:center;gap:10px;min-width:0">
+            <h2><svg class="ico"><use href="#activity"/></svg> <span th:text="#{cdc.status.title}">CDC status</span></h2>
+            <!--/* 连接状态圆点:connected 绿(呼吸动画)/断红。持有者才有圆点。
+                   与标题同组靠左，避免 card-head 的 space-between 把它挤到卡片中间。 */-->
+            <span class="badge" th:if="${stats != null}"
+                  th:classappend="${stats.connected} ? 'badge-ok' : 'badge-danger'">
+                <span class="dot" th:classappend="${stats.connected} ? 'dot-live' : ''"></span>
+                <span th:text="${stats.connected} ? #{cdc.status.connected} : #{cdc.status.disconnected}">Connected</span>
+            </span>
+        </div>
+        <span class="badge badge-ok"
+              th:if="${cdcPosition != null and cdcPosition.baselineDone}"
+              th:text="#{cdc.status.baseline.done}">Baseline complete</span>
     </div>
     <div class="card-body">
+        <div class="alert" th:if="${cdcBaselinePending}">
+            <div class="alert-body">
+                <b th:text="#{cdc.status.baseline.pending.title}">Baseline pending</b>
+                <div class="small muted" th:text="#{cdc.status.baseline.pending}">Baseline text</div>
+            </div>
+        </div>
         <p class="small muted" th:if="${stats == null}" th:text="#{cdc.status.not.holder}">not holder</p>
         <!--/* 指标用 .kv 成对包起来交给 .dl.auto:宽屏按可用宽度自动排成多列,窄屏回退
                单列。位点与错误各自跨满一行(位点带 GTID 和时间,挤在窄格里会折成好几行)。 */-->
@@ -78,7 +90,8 @@
                     <dd th:text="${stats.skippedDdl}">0</dd>
                 </div>
                 <div class="kv">
-                    <dt th:text="#{cdc.status.pruned.columns}">Columns pruned</dt>
+                    <dt th:text="#{cdc.status.pruned.columns}"
+                        th:title="#{cdc.status.pruned.columns.help}">Columns pruned</dt>
                     <dd th:text="${stats.prunedColumns}">0</dd>
                 </div>
                 <div class="kv">

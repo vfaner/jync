@@ -142,6 +142,22 @@ public class GlobalModelAdvice {
     }
 
     /**
+     * Cache-busting token for CSS/JS, deliberately separate from {@link #appVersion()}.
+     * A same-version rebuild (the common support flow) keeps {@code appVersion} unchanged;
+     * browsers then keep the old {@code app.js} and any new fragment polling silently does
+     * not run. The build timestamp changes on every jar, so it also distinguishes IDE runs
+     * (no build-info) without exposing a misleading version in the header.
+     */
+    @ModelAttribute("assetVersion")
+    public String assetVersion() {
+        BuildProperties props = buildProperties.getIfAvailable();
+        String version = props == null || !StringUtils.hasText(props.getVersion())
+                ? "dev" : props.getVersion().trim();
+        Instant time = props == null ? null : props.getTime();
+        return time == null ? version : version + "-" + time.toEpochMilli();
+    }
+
+    /**
      * Build timestamp of the running artifact, or {@code null} when the artifact carries no
      * build-info.
      *

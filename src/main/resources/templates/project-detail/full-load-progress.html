@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* 全量进度摘要：checkpoint 只在首次/重建全量尚未完成时存在，所以有进行中
+       的卡就说明至少一张表仍在基线装载中。完成后的表由 SyncProgress 统计，
+       因此最后一张大表完成后卡片仍保留“已完成 N/M 张表”，不会突然消失。
+       外层占位节点始终存在，片段端点在活动全量期间每 2 秒刷新，解决“页面先渲染、全量后开始”
+       的竞态。 */-->
+<div id="full-load-card" th:fragment="card"
+     th:attr="data-refresh-url=@{/projects/{id}/full-load-card(id=${project.id})},
+              data-full-load-active=${fullLoadTableCount > 0}">
+    <div class="card"
+         th:if="${fullLoadTableCount > 0 or fullLoadCompletedTables > 0}">
+        <div class="card-head">
+            <h2><svg class="ico"><use href="#graph-up"/></svg>
+                <span th:text="#{fullload.title}">Full-load progress</span></h2>
+            <span class="badge badge-info" th:if="${fullLoadTableCount > 0}"
+                  th:text="#{fullload.summary(${fullLoadTableCount}, ${fullLoadRows})}">summary</span>
+            <span class="badge badge-ok" th:if="${fullLoadTableCount == 0}"
+                  th:text="#{fullload.completedSummary(${fullLoadCompletedTables}, ${fullLoadTrackedTables})}">completed</span>
+            <span class="badge badge-warn" th:if="${fullLoadTableCount > 0 and fullLoadStale}"
+                  th:text="#{fullload.stale}">stale</span>
+        </div>
+        <div class="card-body">
+            <dl class="dl auto">
+                <div class="kv" th:if="${fullLoadTrackedTables > 0}">
+                    <dt th:text="#{fullload.tableProgressLabel}">Tables</dt>
+                    <dd th:text="#{fullload.tableProgress(${fullLoadCompletedTables}, ${fullLoadTrackedTables})}">0/0</dd>
+                </div>
+                <div class="kv" th:if="${fullLoadCurrentTable != null}">
+                    <dt th:text="#{fullload.currentLabel}">Current table</dt>
+                    <dd class="mono" th:text="${fullLoadCurrentTable}">table</dd>
+                </div>
+                <div class="kv" th:if="${fullLoadTableCount > 0}">
+                    <dt th:text="#{fullload.rowsLabel}">Rows written</dt>
+                    <dd th:text="${fullLoadRows}">0</dd>
+                </div>
+                <div class="kv" th:if="${fullLoadUpdatedAt != null}">
+                    <dt th:text="#{fullload.updatedLabel}">Last update</dt>
+                    <dd th:text="${#temporals.format(fullLoadUpdatedAt, 'yyyy-MM-dd HH:mm:ss')}">—</dd>
+                </div>
+            </dl>
+            <p class="small muted" th:if="${fullLoadTableCount == 0}"
+               th:text="#{fullload.noActive}">No full load is currently running.</p>
+        </div>
+    </div>
+</div>
+</body>
+</html>

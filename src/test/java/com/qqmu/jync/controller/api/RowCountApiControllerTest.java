@@ -32,7 +32,7 @@ class RowCountApiControllerTest {
 
     @Test
     void returnsBothSideCounts() throws Exception {
-        when(tablePreviewService.rowCount(1L, "orders")).thenReturn(new TableRowCount(
+        when(tablePreviewService.rowCount(1L, "orders", true)).thenReturn(new TableRowCount(
                 "orders",
                 new TableRowCount.SideCount(TableRowCount.Status.OK, 3L, 5L),
                 new TableRowCount.SideCount(TableRowCount.Status.OK, 1L, 6L),
@@ -45,5 +45,21 @@ class RowCountApiControllerTest {
                 .andExpect(jsonPath("$.rowCount.source.count").value(3))
                 .andExpect(jsonPath("$.rowCount.target.count").value(1))
                 .andExpect(jsonPath("$.rowCount.elapsedMs").value(11));
+    }
+
+    @Test
+    void forwardsEstimateModeToTheService() throws Exception {
+        when(tablePreviewService.rowCount(1L, "orders", false)).thenReturn(new TableRowCount(
+                "orders",
+                new TableRowCount.SideCount(TableRowCount.Status.OK, 3_000_000L, 2L, true),
+                new TableRowCount.SideCount(TableRowCount.Status.OK, 2_999_000L, 2L, true),
+                4L));
+
+        mvc.perform(get("/api/projects/1/row-count")
+                        .param("table", "orders")
+                        .param("mode", "estimate"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rowCount.source.approximate").value(true))
+                .andExpect(jsonPath("$.rowCount.target.approximate").value(true));
     }
 }

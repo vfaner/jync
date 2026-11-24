@@ -50,6 +50,22 @@
                     <tbody data-role="precheck-rows"></tbody>
                 </table>
             </div>
+            <div class="precheck-group is-hidden" data-precheck-group="INFO">
+                <h4><span class="badge badge-info"
+                        th:text="#{precheck.severity.INFO}">Info</span></h4>
+                <div class="tbl-wrap">
+                    <table class="tbl dense">
+                        <thead>
+                        <tr>
+                            <th th:text="#{precheck.object}">Object</th>
+                            <th th:text="#{precheck.message}">Result</th>
+                            <th th:text="#{precheck.detail}">Detail</th>
+                        </tr>
+                        </thead>
+                        <tbody data-role="precheck-rows"></tbody>
+                    </table>
+                </div>
+            </div>
             <div class="precheck-group is-hidden" data-precheck-group="OK">
                 <h4 class="small"><span class="badge badge-ok"
                         th:text="#{precheck.severity.OK}">OK</span></h4>

@@ -346,6 +346,24 @@ class TablePreviewServiceTest {
     }
 
     @Test
+    void estimatedRowCountMarksBothSidesAsApproximate() throws SQLException {
+        createOrders(3);
+        try (Statement st = connection.createStatement()) {
+            st.execute("CREATE SCHEMA IF NOT EXISTS TARGET_SIDE");
+            st.execute("CREATE TABLE TARGET_SIDE.ORDERS (id BIGINT PRIMARY KEY, name VARCHAR(64))");
+            st.execute("INSERT INTO TARGET_SIDE.ORDERS (id, name) VALUES (1, 'order-1')");
+        }
+        target.setSchemaName("TARGET_SIDE");
+
+        TableRowCount counts = service.rowCount(1L, "orders", false);
+
+        assertThat(counts.source().status()).isEqualTo(TableRowCount.Status.OK);
+        assertThat(counts.source().approximate()).isTrue();
+        assertThat(counts.target().status()).isEqualTo(TableRowCount.Status.OK);
+        assertThat(counts.target().approximate()).isTrue();
+    }
+
+    @Test
     void rowCountReportsAMissingTargetTableWithoutFailingTheSourceSide() throws SQLException {
         createOrders(2);
         try (Statement st = connection.createStatement()) {

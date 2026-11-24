@@ -14,6 +14,15 @@ public record TableRowCount(
 
     public enum Status { OK, MISSING_TABLE, TIMEOUT, ERROR }
 
-    public record SideCount(Status status, Long count, long elapsedMs) {
+    /**
+     * @param approximate true when {@code count} comes from database statistics rather
+     *                    than a {@code COUNT(*)}. A difference between two approximate
+     *                    values is only a hint, never a consistency verdict.
+     */
+    public record SideCount(Status status, Long count, long elapsedMs, boolean approximate) {
+
+        public SideCount(Status status, Long count, long elapsedMs) {
+            this(status, count, elapsedMs, false);
+        }
     }
 }

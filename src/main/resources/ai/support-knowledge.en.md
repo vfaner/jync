@@ -91,13 +91,15 @@ Useful sync.* settings (restart to apply):
 - full-load-fetch-size: 2000 (1000–5000). Source result batch; lower it for wide fields.
 - full-load-parallelism: 2 (1–4). Workers per table; 1→2 gains most.
 - chunk-size: 100000 (50k–200k). Rows per chunk and the most a crash re-reads; 0 disables it.
-500k rows: INSERT ~216k rows/s, MERGE ~84k; parallelism 1/2/4 gives ~117k/184k/216k rows/s.
-Raise parallelism first, then batch; deferring secondary indexes is ~47% faster.
+A 10M-row table took about 40 seconds in our test (~250k rows/s). Row width, indexes, network,
+target write capacity and concurrent load all affect the result.
+Raise parallelism first, then batch; deferring secondary indexes usually still helps, but
+measure it on your own environment.
 
 ## Reading the throughput log
 
 Each table and worker prints one throughput line during a full load:
-table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s rows/s=216000.0 query=3% read=35% write=52% commit=10% batches=250 rowsPerBatch=2000
+table=orders thread=full-load-orders rows=10000000 changed=10000000 elapsed=40.0s rows/s=250000.0 query=3% read=35% write=52% commit=10% batches=5000 rowsPerBatch=2000
 - rows/s is that table's sync speed.
 - High query%/read%: the source SQL, cursor or network is the bottleneck.
 - High write%: target constraints, unique indexes, triggers or large fields are slow.
@@ -790,3 +792,12 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - A lower-case Dameng table previously could be read with a forced upper-case name, appearing to have no columns or primary key. 2.4.5 reads the event's spelling first and falls back to upper case.
 - MySQL-to-MySQL keeps `DATETIME`/`TIME` precision and the original `TEXT`/`BLOB`/`JSON`/`BINARY` types; cross-family sources still widen to avoid truncation.
 - These rules apply to newly created targets only; existing columns are not altered automatically.
+
+## Docker deployment and ARM64
+
+- Official images support **linux/amd64 (x86_64)** and **linux/arm64 (aarch64)**. `aarch64` is ARM64, not a third architecture; Docker calls it `arm64`, while 32-bit ARM is `arm/v7`.
+- On a machine where `uname -m` prints `aarch64`, run `docker pull vfaner/jync:2.4.5` and Docker selects the arm64 image automatically. Do not force `--platform linux/amd64`; that uses QEMU and can produce `exec format error` or severe slowdown.
+- Kylin V10 aarch64 (kernel 4.19) can run Jync, but Docker or containerd must actually be installed; a supported kernel alone is not enough. Podman can run the same image.
+- If Docker Hub is unreachable, use `ghcr.io/vfaner/jync:2.4.5`. For fully offline hosts, `docker save` / `docker load` on another machine, or run `jync.jar` with a JDK 17 aarch64 build.
+- On Kylin or SELinux, use named volumes or add `:Z` to bind mounts so the container can write `/app/data` and `/app/logs`.
+- Default accounts are `admin / 123456` (plus `ops` and `view`); the first login forces a password change.

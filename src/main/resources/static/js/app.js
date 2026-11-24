@@ -461,6 +461,9 @@
   function bindActionButton(btn) {
     btn.addEventListener('click', function (e) {
       e.preventDefault();
+      if (/\/(start|sync-now|cdc-rebaseline)(\?|$)/.test(btn.dataset.action || '')) {
+        document.dispatchEvent(new Event('jync:full-load-poll'));
+      }
 
       // 这里不用 withBusy：下方 reload 分支刻意「不恢复」按钮 ——
       // 保持加载态直到页面刷新，避免重载前按钮文案闪回原样
@@ -1869,6 +1872,7 @@
     if (!modal || !body || !btn.dataset.action) { return; }
     var startBtn = document.getElementById('row-count-start');
     var stopBtn = document.getElementById('row-count-stop');
+    var estimateBox = document.getElementById('row-count-estimate');
     var summary = document.getElementById('row-count-summary');
     var badge = document.getElementById('row-count-badge');
     var runId = 0;
@@ -1893,6 +1897,10 @@
       oneButtons().forEach(function (one) { one.disabled = running; });
     }
 
+    function estimateMode() {
+      return !!(estimateBox && estimateBox.checked);
+    }
+
     function setStatus(row, key, cls) {
       var cell = row.querySelector('[data-role="status"]');
       if (!cell) { return; }
@@ -1903,10 +1911,11 @@
       cell.appendChild(span);
     }
 
-    function setCount(row, role, value) {
+    function setCount(row, role, value, approximate) {
       var cell = row.querySelector('[data-role="' + role + '"]');
       if (!cell) { return; }
-      cell.textContent = value == null ? '—' : Number(value).toLocaleString();
+      cell.textContent = value == null ? '—'
+          : (approximate ? '≈ ' : '') + Number(value).toLocaleString();
     }
 
     function fail(row, message) {
@@ -1922,17 +1931,26 @@
     function apply(row, result) {
       var source = result.source || {};
       var target = result.target || {};
-      setCount(row, 'source-count', source.status === 'OK' ? source.count : null);
-      setCount(row, 'target-count', target.status === 'OK' ? target.count : null);
+      var approximate = !!(source.approximate || target.approximate);
+      setCount(row, 'source-count', source.status === 'OK' ? source.count : null,
+          source.approximate);
+      setCount(row, 'target-count', target.status === 'OK' ? target.count : null,
+          target.approximate);
 
       if (source.status === 'OK' && target.status === 'OK') {
         var diff = source.count - target.count;
         var diffCell = row.querySelector('[data-role="diff"]');
         if (diffCell) {
           diffCell.textContent = diff === 0 ? '0'
-              : (diff > 0 ? '+' : '') + Number(diff).toLocaleString();
+              : (approximate ? '≈ ' : '')
+                  + (diff > 0 ? '+' : '') + Number(diff).toLocaleString();
         }
-        if (diff === 0) {
+        if (approximate) {
+          // Statistics are a scale check, not a consistency verdict: a difference
+          // between two estimates must never be presented as proof of missing rows.
+          row.dataset.result = 'estimated';
+          setStatus(row, 'rowcount.estimated', 'badge-info');
+        } else if (diff === 0) {
           row.dataset.result = 'ok';
           setStatus(row, 'rowcount.consistent', 'badge-ok');
         } else {
@@ -1957,7 +1975,8 @@
 
     function checkOne(row) {
       setStatus(row, 'rowcount.checking', 'badge-info');
-      var url = btn.dataset.action + '?table=' + encodeURIComponent(row.dataset.object || '');
+      var url = btn.dataset.action + '?table=' + encodeURIComponent(row.dataset.object || '')
+          + '&mode=' + (estimateMode() ? 'estimate' : 'exact');
       return getJson(url).then(function (payload) {
         if (!payload.success) {
           fail(row, payload.message || '');
@@ -1974,17 +1993,23 @@
       var consistent = 0;
       var mismatch = 0;
       var failed = 0;
+      var estimated = 0;
       all.forEach(function (row) {
         if (row.dataset.result === 'ok') { consistent++; }
         else if (row.dataset.result === 'mismatch') { mismatch++; }
+        else if (row.dataset.result === 'estimated') { estimated++; }
         else if (row.dataset.result === 'failed') { failed++; }
       });
       if (summary) {
-        summary.textContent = (modal.dataset.summary || '')
+        var text = (modal.dataset.summary || '')
             .replace('{0}', all.length)
             .replace('{1}', consistent)
             .replace('{2}', mismatch)
             .replace('{3}', failed);
+        if (estimated > 0) {
+          text += (modal.dataset.summaryEstimated || '').replace('{0}', estimated);
+        }
+        summary.textContent = text;
       }
       if (!badge) { return; }
       if (mismatch > 0) {
@@ -1996,6 +2021,9 @@
       } else if (consistent > 0) {
         badge.textContent = t('rowcount.badgeClean');
         badge.className = 'badge badge-ok';
+      } else if (estimated > 0) {
+        badge.textContent = (modal.dataset.badgeEstimated || '').replace('{0}', estimated);
+        badge.className = 'badge badge-info';
       } else {
         badge.className = 'badge is-hidden';
       }
@@ -2048,8 +2076,15 @@
       startBtn.addEventListener('click', function () {
         var all = rows();
         if (!all.length) { return; }
-        var template = btn.dataset.running === 'true'
-            ? (modal.dataset.confirmRunning || '') : (modal.dataset.confirm || '');
+        var template;
+        if (estimateMode()) {
+          template = btn.dataset.running === 'true'
+              ? (modal.dataset.confirmRunningEstimate || '')
+              : (modal.dataset.confirmEstimate || '');
+        } else {
+          template = btn.dataset.running === 'true'
+              ? (modal.dataset.confirmRunning || '') : (modal.dataset.confirm || '');
+        }
         JyncDialog.confirm(template.replace('{0}', all.length), function () {
           all.forEach(reset);
           if (badge) { badge.className = 'badge is-hidden'; }
@@ -2214,7 +2249,7 @@
     }
 
     function statusText(report) {
-      var counts = { ERROR: 0, WARN: 0, OK: 0, SKIP: 0 };
+      var counts = { ERROR: 0, WARN: 0, INFO: 0, OK: 0, SKIP: 0 };
       (report.checks || []).forEach(function (check) {
         counts[check.severity] = (counts[check.severity] || 0) + 1;
       });
@@ -2224,6 +2259,9 @@
           .replace('{1}', counts.WARN)
           .replace('{2}', counts.OK)
           .replace('{3}', counts.SKIP);
+      if (counts.INFO > 0) {
+        countsText += ' · ' + t('precheck.summaryInfo').replace('{0}', counts.INFO);
+      }
       return verdict + ' · ' + countsText;
     }
 
@@ -3351,6 +3389,183 @@
     });
 
     apply();
+  }
+
+  /**
+   * 「全量进度」卡的活动期轻量刷新（2 秒）。卡片内容只在全量检查点存在时出现，而开始按钮
+   * 触发全量可能与页面渲染存在先后竞态；没有轮询的话，页面会一直空着，直到用户
+   * 手动刷新。外层 #full-load-card 始终在页面上，空片段就是「当前没有全量」。
+   */
+  var FULL_LOAD_REFRESH_INTERVAL = 2000;
+
+  function bindFullLoadRefresh() {
+    var card = document.getElementById('full-load-card');
+    if (!card) return;
+    var refreshUrl = card.getAttribute('data-refresh-url')
+      || (window.location.pathname + '/full-load-card');
+    var timer = null;
+    var inFlight = false;
+    var active = false;
+    var seenActive = false;
+    var watchUntil = 0;
+
+    function stopTimer() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    function startTimer() {
+      if (timer || document.hidden || (!active && Date.now() >= watchUntil)) return;
+      timer = setInterval(refresh, FULL_LOAD_REFRESH_INTERVAL);
+    }
+
+    function refresh() {
+      if (inFlight) return;
+      inFlight = true;
+      fetch(refreshUrl, { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(function (html) {
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var freshCard = fresh.getElementById('full-load-card');
+          // 会话过期/项目删除时片段端点不会返回这个节点；重载让安全层决定去向。
+          if (!freshCard) {
+            stopTimer();
+            window.location.reload();
+            return;
+          }
+          card.innerHTML = freshCard.innerHTML;
+          active = freshCard.getAttribute('data-full-load-active') === 'true';
+          if (active) {
+            seenActive = true;
+            watchUntil = 0;
+            startTimer();
+          } else if (seenActive || Date.now() >= watchUntil) {
+            // 完成后停止轮询：完成态卡片留在页面上，但不再每 2 秒打服务端。
+            stopTimer();
+          } else {
+            // 刚点了开始/立即同步，后端可能还没写出第一个检查点；在短窗口内继续看。
+            startTimer();
+          }
+        })
+        .catch(function () {
+          // 网络抖动保留当前内容，下一轮再试；但观察窗口结束后不能无限重试。
+          if (!active && Date.now() >= watchUntil) stopTimer();
+        })
+        .then(function () { inFlight = false; });
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        stopTimer();
+      } else if (active || Date.now() < watchUntil) {
+        refresh();
+        startTimer();
+      }
+    });
+
+    // 开始/立即同步/重建基线点击时先踢一脚，覆盖“页面先渲染、全量随后开始”的竞态。
+    document.addEventListener('jync:full-load-poll', function () {
+      if (document.hidden) return;
+      seenActive = false;
+      watchUntil = Date.now() + 60000;
+      startTimer();
+      refresh();
+    });
+
+    refresh();
+  }
+
+  /**
+   * 各表进度里的“全量进行中”徽章。只替换每行的徽章容器，不替换整行，
+   * 因此不会打断正在输入的游标列、行数核对弹窗或滚动位置。轮询只在有活动
+   * 全量时开启，最后一块完成后立即停止。
+   */
+  function bindProgressBadgeRefresh() {
+    var card = document.getElementById('progress-card');
+    if (!card) return;
+    var refreshUrl = card.getAttribute('data-badge-refresh-url');
+    if (!refreshUrl) return;
+    var timer = null;
+    var inFlight = false;
+    var active = false;
+    var seenActive = false;
+    var watchUntil = 0;
+
+    function stopTimer() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    function startTimer() {
+      if (timer || document.hidden || (!active && Date.now() >= watchUntil)) return;
+      timer = setInterval(refresh, FULL_LOAD_REFRESH_INTERVAL);
+    }
+
+    function refresh() {
+      if (inFlight) return;
+      inFlight = true;
+      fetch(refreshUrl, { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(function (html) {
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var state = fresh.querySelector('[data-full-load-active]');
+          var rows = {};
+          card.querySelectorAll('tr[data-progress-table]').forEach(function (row) {
+            rows[row.getAttribute('data-progress-table')] = row;
+          });
+          fresh.querySelectorAll('[data-full-load-badge-table]').forEach(function (entry) {
+            var row = rows[entry.getAttribute('data-full-load-badge-table')];
+            var target = row && row.querySelector('[data-role="full-load-badge"]');
+            if (target) {
+              target.innerHTML = entry.innerHTML;
+            }
+          });
+          active = !!state && state.getAttribute('data-full-load-active') === 'true';
+          if (active) {
+            seenActive = true;
+            watchUntil = 0;
+            startTimer();
+          } else if (seenActive || Date.now() >= watchUntil) {
+            stopTimer();
+          } else {
+            startTimer();
+          }
+        })
+        .catch(function () {
+          // 网络抖动保留当前徽章，下一轮再试；观察窗口结束后不能无限重试。
+          if (!active && Date.now() >= watchUntil) stopTimer();
+        })
+        .then(function () { inFlight = false; });
+    }
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        stopTimer();
+      } else if (active || Date.now() < watchUntil) {
+        refresh();
+        startTimer();
+      }
+    });
+
+    document.addEventListener('jync:full-load-poll', function () {
+      if (document.hidden) return;
+      seenActive = false;
+      watchUntil = Date.now() + 60000;
+      startTimer();
+      refresh();
+    });
+
+    refresh();
   }
 
   var RESOURCE_REFRESH_INTERVAL = 5000;
@@ -5082,6 +5297,8 @@
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
+    bindFullLoadRefresh();
+    bindProgressBadgeRefresh();
     bindResourceRefresh();
     bindGaugeTopProcesses();
     bindLiveStats();

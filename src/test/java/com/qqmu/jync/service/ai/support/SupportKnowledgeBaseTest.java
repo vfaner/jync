@@ -162,6 +162,16 @@ class SupportKnowledgeBaseTest {
         });
     }
 
+    @Test
+    void aDockerArm64QuestionFindsTheDeploymentSection() {
+        var hits = kb.search("zh", "Docker ARM64 aarch64 exec format error 麒麟 部署", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("Docker 部署与 ARM64");
+            assertThat(hit.body()).contains("aarch64").contains("linux/arm64").contains("exec format error");
+        });
+    }
+
     /** The per-section cap times topK must still fit the registry's result cap. */
     @Test
     void excerptsStayWithinTheTotalBudget() {

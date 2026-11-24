@@ -118,6 +118,7 @@ public class ProjectRowCountTool implements SupportTool {
         out.put("status", side.status().name());
         out.put("count", side.count());
         out.put("elapsedMs", side.elapsedMs());
+        out.put("approximate", side.approximate());
         return out;
     }
 }

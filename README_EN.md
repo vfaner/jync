@@ -9,6 +9,8 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-brightgreen.svg)](https://spring.io/projects/spring-boot)
+[![Version](https://img.shields.io/badge/version-2.4.5-blue.svg)](https://github.com/vfaner/jync/releases/tag/v2.4.5)
+[![Docker Sponsored OSS](https://img.shields.io/badge/Docker-Sponsored%20OSS-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/vfaner/jync)
 [![GitHub star](https://img.shields.io/github/stars/vfaner/jync?label=GitHub%20star)](https://github.com/vfaner/jync)
 [![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
 
@@ -16,18 +18,20 @@
 
 Jync is an open-source tool for **database migration and heterogeneous data integration**:
 start one jar, open the browser, and build continuous **schema + data** synchronization between
-**35 database types** (custom JDBC types included). Three non-JDBC **dedicated migrations** cover
+**35 database types** (19 domestic / Xinchuang, custom JDBC types included). Three non-JDBC **dedicated migrations** cover
 Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB, and MongoDB → KingbaseES.
 
 No Kafka, Flink or ZooKeeper, and no job code to write. Apache-2.0 licensed and fully
-self-hostable, including air-gapped networks.
+self-hostable, including air-gapped networks. **v2.4.5** adds table/column comment sync and a
+project-level cursor-column priority, plus fixes for Vastbase, Dameng CDC and MySQL type precision.
 
 ## Highlights
 
 - **One JAR, zero dependencies**: Spring Boot monolith + Thymeleaf SSR + Quartz + embedded H2
   metadata store. Offline-ready.
 - **Fast, safe full loads**: primary-key keyset chunks, per-table parallelism, streamed result
-  sets, per-chunk commits and checkpoints — up to **~200k rows/s** per table.
+  sets, per-chunk commits and checkpoints — about **40 seconds for a 10M-row table** in our
+  test (~250k rows/s; depends on row width, indexes, network and target write capacity).
 - **Light incremental sync**: polling reads only rows after the cursor with a read-only account;
   six engines can switch to log CDC for second-level latency.
 - **Schema travels with data**: missing targets are created with tables, indexes, views and
@@ -38,8 +42,14 @@ self-hostable, including air-gapped networks.
   write their own resources.
 - **Alerts that reach you**: sync failures, CDC stalls, drift and unhealthy connections can be
   pushed to DingTalk, WeCom, Feishu or a custom webhook.
+- **Comments travel too**: SQL Server sources read `MS_Description`; Oracle, PostgreSQL, DB2,
+  HANA and SQL Server targets write table/column comments, MySQL-family targets keep inline `COMMENT`.
+- **One cursor policy for the schema**: project-level tags match candidate cursor columns per table,
+  case-insensitively and with fallback; per-table overrides still win.
+- **Performance you can see**: dashboard rings, per-task performance pages and Prometheus metrics
+  for throughput, lag, row counts, connections and database QPS.
 - **Optional AI agent**: ask about task state, performance and alerts in natural language,
-  self-check a stalled CDC stream, or draft a task from a description.
+  self-check a stalled CDC stream, **paste an error log for analysis**, or draft a task from a description.
 
 ## Screenshots
 
@@ -130,7 +140,7 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
   -jar jync.jar --spring.config.additional-location=file:./application.yml
 ```
 
-Container deployment (official images built by GitHub Actions on tags, amd64 + arm64):
+Container deployment (official images built by GitHub Actions on tags, **linux/amd64 (x86_64) and linux/arm64 (aarch64)**; aarch64 is ARM64 and Docker selects it automatically):
 
 ```bash
 docker pull vfaner/jync:2.4.5
@@ -176,7 +186,7 @@ com.qqmu.jync
 - **Verification matrix**: [docs/verification-matrix.md](docs/verification-matrix.md)
 - **Release notes**: [docs/release-notes/](docs/release-notes/)
 
-`mvn test` runs 6600+ unit tests covering dialect and SQL rewriting, full loads and resume, the
+`mvn test` runs 6686 unit tests (6685 pass; 1 Linux-only case is skipped on macOS) covering dialect and SQL rewriting, full loads and resume, the
 six CDC engines, Redis projection, dedicated migration, ETL, alerts, ownership, the AI assistant
 and security. Real-database `*IT` suites need Docker; commands are in the verification matrix.
 

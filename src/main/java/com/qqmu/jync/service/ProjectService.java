@@ -1958,17 +1958,31 @@ public class ProjectService {
         private final int rangesSeen;
         /** Ranges already finished; a resumed load skips them entirely. */
         private final int rangesDone;
+        /**
+         * Rows committed by the chunks this table has finished. Keyed chunks sum their
+         * per-chunk counts; a keyless walk stores the cumulative offset in each row, so the
+         * latest offset is the total, not the sum.
+         */
+        private final long rowsCopied;
+        /** Timestamp of the newest checkpoint, i.e. the last observable load progress. */
+        private final Instant lastUpdatedAt;
 
-        FullLoadProgress(int chunksDone, int rangesSeen, int rangesDone) {
+        FullLoadProgress(int chunksDone, int rangesSeen, int rangesDone, long rowsCopied,
+                         Instant lastUpdatedAt) {
             this.chunksDone = chunksDone;
             this.rangesSeen = rangesSeen;
             this.rangesDone = rangesDone;
+            this.rowsCopied = rowsCopied;
+            this.lastUpdatedAt = lastUpdatedAt;
         }
 
         public static FullLoadProgress of(List<ChunkCheckpoint> rows) {
             int chunks = 0;
             int rangesDone = 0;
             int rangesSeen = 0;
+            long keyedRows = 0;
+            long keylessRows = 0;
+            Instant lastUpdatedAt = null;
             for (ChunkCheckpoint c : rows) {
                 // A negative chunk index is the keyless walk's pre-first-page marker: it guards
                 // the crash window before the first checkpoint row and commits no rows, so it
@@ -1981,10 +1995,23 @@ public class ProjectService {
                 } else {
                     chunks++;
                 }
+                if (ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(c.getStatus())) {
+                    // rowsCopied is the cumulative offset of a keyless walk, not this page's
+                    // size; summing it would multiply the real progress.
+                    keylessRows = Math.max(keylessRows,
+                            c.getRowsCopied() == null ? 0L : c.getRowsCopied());
+                } else if (ChunkCheckpoint.STATUS_CHUNK.equals(c.getStatus())) {
+                    keyedRows += c.getRowsCopied() == null ? 0L : c.getRowsCopied();
+                }
+                if (c.getUpdatedAt() != null
+                        && (lastUpdatedAt == null || c.getUpdatedAt().isAfter(lastUpdatedAt))) {
+                    lastUpdatedAt = c.getUpdatedAt();
+                }
                 int range = c.getRangeIndex() == null ? 0 : c.getRangeIndex();
                 rangesSeen = Math.max(rangesSeen, range + 1);
             }
-            return new FullLoadProgress(chunks, rangesSeen, rangesDone);
+            return new FullLoadProgress(chunks, rangesSeen, rangesDone,
+                    keyedRows + keylessRows, lastUpdatedAt);
         }
 
         /** True when the load split the key span across parallel workers. */

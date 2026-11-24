@@ -289,7 +289,7 @@ public class SyncPrecheckService {
                         ctx.getTargetSchema(), targetTable, targetType, comparable);
                 if (!uncomparable.isEmpty()) {
                     checks.add(new PrecheckReport.Check("target.columns.uncomparable",
-                            PrecheckReport.Severity.WARN, "TABLE", table.getName(),
+                            PrecheckReport.Severity.INFO, "TABLE", table.getName(),
                             "precheck.target.uncomparableColumns", String.join(", ",
                                     uncomparable)));
                 }

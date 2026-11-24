@@ -192,9 +192,9 @@ class TablePreviewViewTest {
         String html = render();
 
         assertThat(html).doesNotContain("<th>Last synced value</th>");
-        // 「Rows synced」 now legitimately labels the modal's cumulative column, so it must
-        // appear exactly once — in the modal, not in the progress table as well.
-        assertThat(countOccurrences(html, "<th class=\"num\">Rows synced</th>")).isEqualTo(1);
+        // The progress table and the row-count modal both explain that this is changed
+        // rows, not the target's total.
+        assertThat(countOccurrences(html, ">Rows changed</th>")).isEqualTo(2);
     }
 
     private static int countOccurrences(String text, String needle) {

@@ -223,6 +223,27 @@ class SyncPrecheckServiceTest {
     }
 
     @Test
+    void lobColumnsAreAnInfoNotABlockingWarning() throws Exception {
+        SyncConfig config = config(false);
+        context(config);
+        execute(targetConn, "CREATE TABLE ORDERS (ID INT PRIMARY KEY, SUMMARY CLOB)");
+        TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
+                column("SUMMARY", Types.CLOB, "CLOB"));
+        DatabaseMeta meta = sourceWith(table);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        stubNoStructureEvents(meta, config);
+
+        PrecheckReport report = service().precheck(PROJECT_ID);
+
+        PrecheckReport.Check columns = check(report, "target.columns.uncomparable");
+        assertThat(columns).isNotNull();
+        assertThat(columns.severity()).isEqualTo(PrecheckReport.Severity.INFO);
+        assertThat(columns.detail()).contains("SUMMARY");
+        // It is context, not a reason to call the whole rehearsal failed.
+        assertThat(report.passed()).isTrue();
+    }
+
+    @Test
     void warnsWhenStructureSyncWillCreateIt() throws Exception {
         SyncConfig config = config(true);
         context(config);

@@ -101,6 +101,10 @@ class FullLoadProgressViewTest {
 
         assertThat(html).contains("Chunked full load in progress");
         assertThat(html).contains("3 chunks committed");
+        assertThat(html).contains("300 rows written");
+        assertThat(html).contains("Full-load progress");
+        assertThat(html).contains("Current table");
+        assertThat(html).contains("ITEMS");
         assertThat(html).contains("resumes from the last committed chunk");
     }
 
@@ -116,6 +120,67 @@ class FullLoadProgressViewTest {
 
         assertThat(html).contains("Parallel full load: 1 of 2 key ranges done");
         assertThat(html).contains("3 chunks committed");
+    }
+
+    @Test
+    void theLightweightCardFragmentCanBePolledWhileThePageIsOpen() throws Exception {
+        stubDetail(Map.of("ITEMS", ProjectService.FullLoadProgress.of(List.of(
+                checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK),
+                checkpoint(0, 1, ChunkCheckpoint.STATUS_CHUNK)))));
+
+        String fragment = mvc.perform(get("/projects/1/full-load-card").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(fragment).contains("id=\"full-load-card\"");
+        assertThat(fragment).contains("data-refresh-url=\"/projects/1/full-load-card\"");
+        assertThat(fragment).contains("Current table");
+        assertThat(fragment).contains("200 rows written");
+    }
+
+    @Test
+    void theFragmentIsAnEmptyPlaceholderWhenNoFullLoadIsRunning() throws Exception {
+        stubDetail(Map.of());
+
+        String fragment = mvc.perform(get("/projects/1/full-load-card").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(fragment).contains("id=\"full-load-card\"");
+        assertThat(fragment).doesNotContain("Full-load progress");
+    }
+
+    @Test
+    void thePerTableBadgeFragmentCanBePolledWithoutReplacingTheWholeRow() throws Exception {
+        stubDetail(Map.of("ITEMS", ProjectService.FullLoadProgress.of(List.of(
+                checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK),
+                checkpoint(0, 1, ChunkCheckpoint.STATUS_CHUNK)))));
+
+        String fragment = mvc.perform(get("/projects/1/progress-badges").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(fragment).contains("data-full-load-badge-table=\"ITEMS\"");
+        assertThat(fragment).contains("2 chunks committed");
+        assertThat(fragment).contains("200 rows written");
+    }
+
+    @Test
+    void aCompletedLoadKeepsTheTableCountInsteadOfVanishingWithTheLastCheckpoint()
+            throws Exception {
+        stubDetail(Map.of());
+        SyncProgress completed = new SyncProgress();
+        completed.setObjectName("ITEMS");
+        completed.setInitialLoadDone(true);
+        when(projectService.findProgress(1L)).thenReturn(List.of(completed));
+
+        String fragment = mvc.perform(get("/projects/1/full-load-card").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(fragment).contains("Full-load progress");
+        assertThat(fragment).contains("Full load complete: 1/1 tables");
+        assertThat(fragment).contains("No full load is currently running");
     }
 
     @Test

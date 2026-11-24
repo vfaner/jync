@@ -81,13 +81,13 @@ sync.delete-compare-max-rows 可分页比较（默认 0 关闭，代价是每轮
 - sync.full-load-fetch-size：默认 2000，建议 1000–5000。源端结果集批量，大字段表调小。
 - sync.full-load-parallelism：默认 2，建议 1–4。单表并行 worker 数，1→2 收益最大。
 - sync.chunk-size：默认 100000，建议 5 万–20 万。每块行数，也是崩溃后最多重读的行数；0 关闭分块。
-50 万行单机实测：INSERT 约 21.6 万行/秒，MERGE 约 8.4 万；并行度 1/2/4 约 11.7/18.4/21.6 万行/秒。
-先调并行度，再看批量；延迟创建二级索引可再快约 47%。
+实测 1000 万行表全量约 40 秒（约 25 万行/秒）；表宽、索引、网络、目标库写入能力与并发负载都会明显影响结果。
+先调并行度，再看批量；延迟创建二级索引通常仍有收益，但幅度以自己环境的吞吐日志为准。
 
 ## 吞吐日志怎么看
 
 全量阶段每张表、每个 worker 打一行吞吐日志：
-table=orders thread=full-load-orders rows=500000 changed=500000 elapsed=2.3s rows/s=216000.0 query=3% read=35% write=52% commit=10% batches=250 rowsPerBatch=2000
+table=orders thread=full-load-orders rows=10000000 changed=10000000 elapsed=40.0s rows/s=250000.0 query=3% read=35% write=52% commit=10% batches=5000 rowsPerBatch=2000
 - rows/s 就是这张表的同步速度。
 - query%/read% 高：瓶颈在源库 SQL、游标与网络，先查源端。
 - write% 高：目标库约束、唯一索引、触发器与大字段写入慢。
@@ -640,3 +640,12 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 - 达梦源表名是小写时，LogMiner 元数据若被强制转大写会读成“无列、无主键”；2.4.5 已改为按事件中的实际大小写读取，失败再回退大写。
 - MySQL → MySQL 的 `DATETIME` / `TIME` 保留源列精度，`TEXT` / `BLOB` / `JSON` / `BINARY` 保留原类型；跨库源仍按更宽精度建目标，避免丢微秒。
 - 这些类型变化只影响新建的目标表；已有目标表不会自动 ALTER，需要重建目标表或等对应列发生结构变更。
+
+## Docker 部署与 ARM64
+
+- 官方镜像支持 **linux/amd64（x86_64）** 与 **linux/arm64（aarch64）**。`aarch64` 就是 ARM64，不是第三种架构；Docker 平台名统一写 `arm64`，32 位 ARM 才是 `arm/v7`。
+- 在 `uname -m` 输出 `aarch64` 的机器上直接运行 `docker pull vfaner/jync:2.4.5`，Docker 会自动选择 arm64 镜像；不要加 `--platform linux/amd64`，否则会走 QEMU 模拟，出现 `exec format error` 或明显变慢。
+- 银河麒麟 V10 aarch64（内核 4.19）可以运行，但需要实际安装 Docker / containerd；只有内核不等于有 Docker。Podman 也可直接运行同一镜像。
+- Docker Hub 不可达时改用 `ghcr.io/vfaner/jync:2.4.5`；完全离线可在一台机器 `docker save` 后拷贝 `docker load`，或直接使用 `jync.jar` + JDK 17 aarch64。
+- 麒麟 / SELinux 环境下目录挂载用命名卷，或给 bind mount 加 `:Z`；否则容器可能没有写权限。
+- 默认账号 `admin / 123456`，首次登录强制修改密码；数据与日志分别挂载 `/app/data`、`/app/logs`。

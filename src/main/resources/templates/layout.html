@@ -25,7 +25,7 @@
     <link rel="icon" type="image/png" sizes="32x32" th:href="@{/vendor/favicon-32.png}">
     <link rel="apple-touch-icon" th:href="@{/vendor/apple-touch-icon.png}">
     <!--/* 带版本号防缓存：发版后浏览器若沿用旧 app.js，新接口会被静默退回旧路径 */-->
-    <link rel="stylesheet" th:href="@{/css/app.css(v=${appVersion})}">
+    <link rel="stylesheet" th:href="@{/css/app.css(v=${assetVersion})}">
 
     <!--/* CSRF 令牌给 app.js 的 postJson 用。表单不需要这个 —— Thymeleaf 见到
            th:action 会自动注入隐藏域，全部 14 个表单都符合。只有 fetch() 要自己带头。 */-->
@@ -639,6 +639,7 @@ docker compose up -d</pre>
         'rowcount.missingTarget': /*[[#{rowcount.missingTarget}]]*/ '',
         'rowcount.timeout': /*[[#{rowcount.timeout}]]*/ '',
         'rowcount.error': /*[[#{rowcount.error}]]*/ '',
+        'rowcount.estimated': /*[[#{rowcount.estimated}]]*/ '',
         'rowcount.badgeClean': /*[[#{rowcount.badgeClean}]]*/ '',
         'cursor.priority.remove': /*[[#{cursor.priority.remove}]]*/ '',
         'cursor.priority.tooMany': /*[[#{cursor.priority.tooMany}]]*/ '',
@@ -695,12 +696,14 @@ docker compose up -d</pre>
         'precheck.passed': /*[[#{precheck.passed}]]*/ '',
         'precheck.failed': /*[[#{precheck.failed}]]*/ '',
         'precheck.summary': /*[[#{precheck.summary}]]*/ '',
+        'precheck.summaryInfo': /*[[#{precheck.summaryInfo}]]*/ '',
         'precheck.error': /*[[#{precheck.error}]]*/ '',
         'precheck.object': /*[[#{precheck.object}]]*/ '',
         'precheck.message': /*[[#{precheck.message}]]*/ '',
         'precheck.detail': /*[[#{precheck.detail}]]*/ '',
         'precheck.severity.ERROR': /*[[#{precheck.severity.ERROR}]]*/ '',
         'precheck.severity.WARN': /*[[#{precheck.severity.WARN}]]*/ '',
+        'precheck.severity.INFO': /*[[#{precheck.severity.INFO}]]*/ '',
         'precheck.severity.OK': /*[[#{precheck.severity.OK}]]*/ '',
         'precheck.severity.SKIP': /*[[#{precheck.severity.SKIP}]]*/ '',
         'precheck.connection.config': /*[[#{precheck.connection.config}]]*/ '',
@@ -977,14 +980,14 @@ docker compose up -d</pre>
         'error.ai.disabled': /*[[#{error.ai.disabled}]]*/ '',
     };
 </script>
-<script th:src="@{/js/theme.js(v=${appVersion})}"></script>
-<script th:src="@{/js/charts.js(v=${appVersion})}"></script>
-<script th:src="@{/js/app.js(v=${appVersion})}"></script>
-<script th:src="@{/js/sql-highlight.js(v=${appVersion})}"></script>
+<script th:src="@{/js/theme.js(v=${assetVersion})}"></script>
+<script th:src="@{/js/charts.js(v=${assetVersion})}"></script>
+<script th:src="@{/js/app.js(v=${assetVersion})}"></script>
+<script th:src="@{/js/sql-highlight.js(v=${assetVersion})}"></script>
 <!--/* AI 运维助手：只读视图者与 AI 关闭时整块不渲染；面板样式与脚本随之缺席。 */-->
 <th:block th:if="${supportEnabled}">
     <div th:replace="~{fragments/support-widget :: widget}"></div>
-    <script th:src="@{/js/support.js(v=${appVersion})}"></script>
+    <script th:src="@{/js/support.js(v=${assetVersion})}"></script>
 </th:block>
 <th:block th:replace="${scripts} ?: _"></th:block>
 </body>

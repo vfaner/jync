@@ -36,9 +36,12 @@ public class RowCountApiController {
 
     @GetMapping("/{id}/row-count")
     public ResponseEntity<Map<String, Object>> rowCount(@PathVariable Long id,
-                                                        @RequestParam String table) {
+                                                        @RequestParam String table,
+                                                        @RequestParam(defaultValue = "exact")
+                                                        String mode) {
         projectService.requireEditable(id, AccessGuard.current());
-        TableRowCount counts = tablePreviewService.rowCount(id, table);
+        boolean exact = !"estimate".equalsIgnoreCase(mode);
+        TableRowCount counts = tablePreviewService.rowCount(id, table, exact);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("rowCount", counts);
