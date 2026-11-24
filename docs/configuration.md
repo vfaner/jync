@@ -17,9 +17,14 @@ table=orders thread=full-load-orders rows=10000000 changed=10000000 elapsed=40.0
 | `sync.full-load-batch-size` | `2000` | 1000–5000 | 每批行数；越大提交越少，回滚与内存成本越高 |
 | `sync.full-load-fetch-size` | `2000` | 1000–5000 | 源端结果集批量；大字段表调小 |
 | `sync.full-load-parallelism` | `2` | 1–4 | 单表并行 worker，受连接池约束；1→2 收益最大 |
-| `sync.chunk-size` | `100000` | 5 万–20 万 | 每块行数，也是崩溃后最多重读的行数 |
+| `sync.chunk-size` | `100000` | 5 万–20 万 | 每块行数上限，也是崩溃后最多重读的行数 |
+| `sync.adaptive-chunk-size` | `true` | 大字段表保留 | 按声明的列宽自动缩小宽表/LOB 表的块行数 |
+| `sync.chunk-target-bytes` | `67108864` | 32–128 MiB | 每个分块的估算字节上限 |
+| `sync.min-adaptive-chunk-size` | `1000` | 1000–5000 | 自适应缩块的下限，避免元数据估算产生过小页 |
 
 实测 1000 万行表全量约 40 秒（约 25 万行/秒）；延迟建二级索引通常仍有收益，但具体幅度取决于表宽、索引数量、磁盘、网络、目标库写入能力与并发负载，建议以自己环境的吞吐日志为准。
+
+自适应缩块只降低 `chunk-size`，不会放大它；窄表仍按配置值装载。连接中断（SQLState `08`、`Connection is closed`、MySQL 取消语句后的 `getCancelTimer` 空指针）会在当前块内最多重试 3 次并换新连接，检查点仍只在整块提交成功后写入。
 
 MySQL 源连接由程序自动追加 `netTimeoutForStreamingResults=0`（URL 或 extraParams 里显式设置的值优先），避免 Connector/J 默认的 600 秒流式结果集服务端超时在宽表全量时把连接关掉；整体复制仍受 `copy-timeout-seconds` 约束。
 

@@ -1658,6 +1658,110 @@ public class DataSyncService {
         return !candidate.equals(reference);
     }
 
+    /** Result of one retryable full-load chunk: rows plus the last key it consumed. */
+    private record ChunkCopy(WriteStats stats, PkCursor sink) {
+    }
+
+    /**
+     * Copies one initial-load chunk, retrying only connection-level failures on fresh
+     * connections. A timeout or a mapping/dialect error is not retried: the former would
+     * reproduce the same oversized chunk, the latter is deterministic. The checkpoint is
+     * written by the caller only after this returns, so a retried chunk cannot skip rows.
+     */
+    private ChunkCopy copyFullLoadChunk(Connection sourceConn, Connection targetConn,
+                                        String sql, List<Object> params, TableMeta table,
+                                        String targetTable, SyncContext ctx, List<String> pkColumns,
+                                        boolean insertFirst) throws SQLException {
+        int maxAttempts = 3;
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            PkCursor sink = pkColumns == null ? null : new PkCursor();
+            Connection src = sourceConn;
+            Connection tgt = targetConn;
+            boolean borrowed = false;
+            try {
+                if (attempt > 0 || src == null || tgt == null) {
+                    if (ctx.getConnectionProvider() == null) {
+                        throw new SQLException("no connection provider available for a retry");
+                    }
+                    src = ctx.getConnectionProvider().openWaiting(ctx.getSourceConfig());
+                    borrowed = true;
+                    tgt = ctx.getConnectionProvider().openWaiting(ctx.getTargetConfig());
+                }
+                // A failed attempt may have committed some batches. The retry must therefore
+                // be idempotent even when the first attempt used INSERT-only on an empty
+                // table; only the first attempt keeps that shortcut.
+                WriteStats stats = copyRows(src, tgt, sql, params, table, targetTable, ctx,
+                        pkColumns, sink, fullLoadBatchSize(ctx), fullLoadFetchSize(ctx),
+                        insertFirst && attempt == 0);
+                return new ChunkCopy(stats, sink);
+            } catch (SQLException e) {
+                if (attempt + 1 >= maxAttempts || !isRetryableCopyFailure(e)) {
+                    throw e;
+                }
+                log.warn("Full-load chunk of {} failed on attempt {} ({}); retrying on fresh"
+                                + " connections", table.getName(), attempt + 1, e.getMessage());
+            } catch (RuntimeException e) {
+                if (attempt + 1 >= maxAttempts || !isRetryableCopyFailure(e)) {
+                    throw e;
+                }
+                log.warn("Full-load chunk of {} failed on attempt {} ({}); retrying on fresh"
+                                + " connections", table.getName(), attempt + 1, e.getMessage());
+            } finally {
+                if (borrowed) {
+                    closeQuietly(src);
+                    closeQuietly(tgt);
+                }
+            }
+        }
+        throw new SQLException("Full-load chunk failed after " + maxAttempts + " attempts");
+    }
+
+    /**
+     * A broken/retired pooled connection is transient; a timeout or a deterministic SQL
+     * error is not. The MySQL driver can also surface the post-cancel state as the unchecked
+     * {@code NativeSession.getCancelTimer()} NPE instead of a SQLException.
+     */
+    static boolean isRetryableCopyFailure(Throwable failure) {
+        if (failure instanceof StopRequestedException
+                || failure instanceof LockLostException
+                || failure instanceof PoolContentionException) {
+            return false;
+        }
+        Throwable current = failure;
+        for (int depth = 0; current != null && depth < 8; depth++) {
+            if (current instanceof SQLException sql) {
+                String state = sql.getSQLState();
+                if (state != null && state.startsWith("08")) {
+                    return true;
+                }
+            }
+            String message = current.getMessage();
+            if (message != null) {
+                String lower = message.toLowerCase(java.util.Locale.ROOT);
+                if (lower.contains("connection is closed")
+                        || lower.contains("connection is broken")
+                        || lower.contains("connection has been closed")
+                        || lower.contains("getcanceltimer")
+                        || lower.contains("this.session\" is null")) {
+                    return true;
+                }
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private static void closeQuietly(Connection connection) {
+        if (connection == null) {
+            return;
+        }
+        try {
+            connection.close();
+        } catch (SQLException | RuntimeException ignored) {
+            // The pool may already have evicted it after the failure.
+        }
+    }
+
     /**
      * Streams rows from the source query and upserts them into the target in batches.
      *
@@ -1696,6 +1800,61 @@ public class DataSyncService {
     private int fullLoadFetchSize(SyncContext ctx) {
         return ctx.getFullLoadFetchSize() > 0
                 ? ctx.getFullLoadFetchSize() : properties.getFetchSize();
+    }
+
+    /**
+     * Rows per chunk for this table. The configured value is a ceiling; a table whose
+     * declared row width is large (many VARCHARs, LOBs) is reduced so one upstream stream
+     * does not run for tens of minutes. This is deliberately a catalog/type-based estimate:
+     * asking every product for actual table bytes would add one metadata query per table to
+     * the very first load, while column widths are already in the metadata snapshot.
+     */
+    int chunkSizeFor(TableMeta table) {
+        int configured = properties.getChunkSize();
+        if (configured <= 0 || !properties.isAdaptiveChunkSize()) {
+            return configured;
+        }
+        long rowBytes = estimatedRowBytes(table);
+        if (rowBytes <= 0) {
+            return configured;
+        }
+        long target = properties.getChunkTargetBytes();
+        if (target <= 0) {
+            return configured;
+        }
+        long bySize = target / rowBytes;
+        if (bySize >= configured) {
+            return configured;
+        }
+        int floor = Math.min(configured, Math.max(1, properties.getMinAdaptiveChunkSize()));
+        return (int) Math.max(floor, bySize);
+    }
+
+    /** Conservative width estimate used only to size an initial-load chunk. */
+    static long estimatedRowBytes(TableMeta table) {
+        long bytes = 32; // row header / protocol overhead
+        for (ColumnMeta column : table.getColumns()) {
+            int type = column.getJdbcType();
+            switch (type) {
+                case Types.CLOB, Types.BLOB, Types.LONGVARCHAR, Types.LONGVARBINARY,
+                        Types.SQLXML -> bytes += 64L * 1024;
+                case Types.CHAR, Types.VARCHAR, Types.NCHAR, Types.NVARCHAR,
+                        Types.BINARY, Types.VARBINARY -> bytes += column.getSize() != null
+                                && column.getSize() > 0
+                                ? Math.min(column.getSize(), 64 * 1024) + 4L : 259L;
+                case Types.TINYINT, Types.BOOLEAN, Types.BIT -> bytes += 1;
+                case Types.SMALLINT -> bytes += 2;
+                case Types.INTEGER, Types.REAL, Types.FLOAT -> bytes += 4;
+                case Types.BIGINT, Types.DOUBLE -> bytes += 8;
+                case Types.NUMERIC, Types.DECIMAL -> bytes += 16;
+                case Types.DATE -> bytes += 6;
+                case Types.TIME -> bytes += 12;
+                case Types.TIMESTAMP -> bytes += 16;
+                case Types.TIME_WITH_TIMEZONE, Types.TIMESTAMP_WITH_TIMEZONE -> bytes += 20;
+                default -> bytes += 32;
+            }
+        }
+        return bytes;
     }
 
     /**
@@ -2736,7 +2895,7 @@ public class DataSyncService {
             saved = List.of();
         }
         List<String> pk = table.getPrimaryKeys();
-        int chunkSize = properties.getChunkSize();
+        int chunkSize = chunkSizeFor(table);
 
         RangeResume resume = resumePoint(saved, 0, table);
         List<Object> lastPk = resume.boundary;
@@ -2770,10 +2929,9 @@ public class DataSyncService {
             List<Object> params = new ArrayList<>();
             String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
                     table.getName(), pk, lastPk, null, strategy, upperBound, chunkSize, params);
-            PkCursor sink = new PkCursor();
-            WriteStats stats = copyRows(sourceConn, targetConn, pageSql, params,
-                    table, targetTable, ctx, pk, sink,
-                    fullLoadBatchSize(ctx), fullLoadFetchSize(ctx), insertFirst);
+            ChunkCopy copy = copyFullLoadChunk(sourceConn, targetConn, pageSql, params,
+                    table, targetTable, ctx, pk, insertFirst);
+            WriteStats stats = copy.stats();
             if (stats.read == 0) {
                 break;
             }
@@ -2785,11 +2943,11 @@ public class DataSyncService {
             // died mid-write leaves no boundary behind and is simply re-read next time. The
             // attempt's watermark rides along so a later resume rewinds the cursor to it.
             ChunkCheckpoint checkpoint = new ChunkCheckpoint(ctx.projectId(), table.getName(), 0,
-                    chunkIndex, KeysetChunker.encodePk(sink.values),
+                    chunkIndex, KeysetChunker.encodePk(copy.sink().values),
                     (int) Math.min(stats.read, Integer.MAX_VALUE), ChunkCheckpoint.STATUS_CHUNK);
             checkpoint.setWatermark(watermark);
             checkpoints.save(checkpoint);
-            lastPk = sink.values;
+            lastPk = copy.sink().values;
             chunkIndex++;
             if (stats.read < chunkSize) {
                 break;
@@ -2884,7 +3042,7 @@ public class DataSyncService {
         for (ChunkCheckpoint checkpoint : saved) {
             chunkIndex = Math.max(chunkIndex, checkpoint.getChunkIndex() + 1);
         }
-        int chunkSize = properties.getChunkSize();
+        int chunkSize = chunkSizeFor(table);
         List<String> columns = new ArrayList<>(table.getColumns().size());
         for (ColumnMeta column : table.getColumns()) {
             columns.add(column.getName());
@@ -2909,9 +3067,8 @@ public class DataSyncService {
             String pageSql = KeysetChunker.keylessPageSql(ctx.getSourceDialect(),
                     ctx.getSourceSchema(), table.getName(), columns, orderColumns,
                     strategy, upperBound, position, chunkSize, params);
-            WriteStats stats = copyRows(sourceConn, targetConn, pageSql, params,
-                    table, targetTable, ctx, null, null,
-                    fullLoadBatchSize(ctx), fullLoadFetchSize(ctx), insertFirst);
+            WriteStats stats = copyFullLoadChunk(sourceConn, targetConn, pageSql, params,
+                    table, targetTable, ctx, null, insertFirst).stats();
             if (stats.read == 0) {
                 break;
             }
@@ -3334,7 +3491,7 @@ public class DataSyncService {
         // value would otherwise be cut across chunks and the "leading > last" resume would
         // skip the rest of that value's rows. The range bounds stay on the leading column.
         List<String> pkColumns = table.getPrimaryKeys();
-        int chunkSize = properties.getChunkSize();
+        int chunkSize = chunkSizeFor(table);
         // A resumed chunk continues after a full key tuple; a fresh range starts at its own
         // lower edge, which may be a single leading-column value (numeric split) or null
         // (the sampled split's first range is unbounded below).
@@ -3353,16 +3510,12 @@ public class DataSyncService {
             String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
                     table.getName(), pkColumns, lastPk, range.upper, strategy, upperBound,
                     chunkSize, params);
-            PkCursor sink = new PkCursor();
-            WriteStats stats;
             // Borrow per chunk, not per range: a worker never holds pooled connections while
-            // queued, so parallelism above the pool size degrades to waiting in line.
-            try (Connection src = ctx.getConnectionProvider().openWaiting(ctx.getSourceConfig());
-                 Connection tgt = ctx.getConnectionProvider().openWaiting(ctx.getTargetConfig())) {
-                stats = copyRows(src, tgt, pageSql, params, table, targetTable, ctx,
-                        pkColumns, sink, fullLoadBatchSize(ctx), fullLoadFetchSize(ctx),
-                        insertFirst);
-            }
+            // queued, so parallelism above the pool size degrades to waiting in line. The
+            // helper retries a broken connection on a fresh pair before failing the range.
+            ChunkCopy copy = copyFullLoadChunk(null, null, pageSql, params, table, targetTable,
+                    ctx, pkColumns, insertFirst);
+            WriteStats stats = copy.stats();
             if (stats.read == 0) {
                 break;
             }
@@ -3371,13 +3524,13 @@ public class DataSyncService {
             totals.updated += stats.updated;
             totals.unclassified += stats.unclassified;
             ChunkCheckpoint checkpoint = new ChunkCheckpoint(ctx.projectId(), table.getName(),
-                    rangeIndex, chunkIndex++, KeysetChunker.encodePk(sink.values),
+                    rangeIndex, chunkIndex++, KeysetChunker.encodePk(copy.sink().values),
                     (int) Math.min(stats.read, Integer.MAX_VALUE),
                     ChunkCheckpoint.STATUS_CHUNK, range.lowerLong(), range.upperLong(),
                     range.lowerKeyJson(), range.upperKeyJson());
             checkpoint.setWatermark(watermark);
             checkpoints.save(checkpoint);
-            lastPk = sink.values;
+            lastPk = copy.sink().values;
             if (stats.read < chunkSize) {
                 break;
             }

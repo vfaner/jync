@@ -218,6 +218,12 @@ sync:
   # page size when the target is empty and at least one column can be ordered; a resumed load
   # continues from the target's row count.
   chunk-size: 100000
+  # Adaptive chunk sizing: the value above is the ceiling. Wide-row/LOB tables get fewer rows
+  # per chunk so one streamed read cannot outlive the driver or socket timeouts; narrow tables
+  # keep the full 100000. 67108864 = 64 MiB of estimated row width per chunk.
+  adaptive-chunk-size: true
+  chunk-target-bytes: 67108864
+  min-adaptive-chunk-size: 1000
   # Worker threads for one chunked initial full load. Requires a single-column integer primary
   # key (MIN/MAX range split); other tables stay sequential. Workers borrow their own
   # connections per chunk, so parallelism above max-pool-size just queues on the pool. Clamped

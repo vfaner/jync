@@ -171,6 +171,8 @@ public class SecurityConfig {
             "/api/projects/*/cursor-candidates",
             "/api/projects/*/cdc-probe",
             "/api/projects/*/row-count",
+            "/api/projects/*/row-count-job",
+            "/api/projects/*/row-count-job/*",
             "/api/projects/*/precheck"
     };
 

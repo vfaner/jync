@@ -494,6 +494,29 @@ class ProjectServiceTest {
         verify(projectRepository, never()).save(any());
     }
 
+    @Test
+    void refusesToLeaveCdcWhileItsBaselineIsIncomplete() {
+        Project p = project(42L);
+        p.setSourceDbId(7L);
+        p.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
+        p.setEnabled(false);
+        when(projectRepository.findById(42L)).thenReturn(Optional.of(p));
+        DatabaseConfig source = new DatabaseConfig();
+        source.setId(7L);
+        source.setType(DatabaseType.MYSQL);
+        when(databaseConfigRepository.findById(7L)).thenReturn(Optional.of(source));
+        com.qqmu.jync.model.CdcPosition position = new com.qqmu.jync.model.CdcPosition();
+        position.setProjectId(42L);
+        position.setBaselineDone(false);
+        when(positionStore.find(42L)).thenReturn(Optional.of(position));
+
+        assertThatThrownBy(() -> service.saveConfig(42L, new SyncConfig(), "POLLING",
+                AccessGuard.system()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.cdc.baselineIncomplete");
+        verify(projectRepository, never()).save(any());
+    }
+
     /**
      * 改选表之后必须重新基线:新加的表在旧位点之前的历史变更已经不在流里了,只从当前位置
      * 续放会让它们缺一段数据 —— 而且没有任何报错。

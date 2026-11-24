@@ -1975,14 +1975,55 @@
 
     function checkOne(row) {
       setStatus(row, 'rowcount.checking', 'badge-info');
-      var url = btn.dataset.action + '?table=' + encodeURIComponent(row.dataset.object || '')
-          + '&mode=' + (estimateMode() ? 'estimate' : 'exact');
-      return getJson(url).then(function (payload) {
-        if (!payload.success) {
-          fail(row, payload.message || '');
+      var table = row.dataset.object || '';
+      if (estimateMode()) {
+        var url = btn.dataset.action + '?table=' + encodeURIComponent(table)
+            + '&mode=estimate';
+        return getJson(url).then(function (payload) {
+          if (!payload.success) {
+            fail(row, payload.message || '');
+            return;
+          }
+          apply(row, payload.rowCount || {});
+        }).catch(function () {
+          fail(row, 'error.unexpected');
+        });
+      }
+
+      // Exact COUNT(*) runs out of band: a very large table can take minutes, so the browser
+      // must not hold the request open. The job is polled until it finishes or fails.
+      var jobBase = btn.dataset.action.replace(/\/row-count$/, '/row-count-job');
+      return postJson(jobBase + '?table=' + encodeURIComponent(table)).then(function (payload) {
+        if (!payload.success || !payload.jobId) {
+          fail(row, payload.message || 'error.unexpected');
           return;
         }
-        apply(row, payload.rowCount || {});
+        return pollJob(row, jobBase + '/' + payload.jobId);
+      }).catch(function () {
+        fail(row, 'error.unexpected');
+      });
+    }
+
+    function pollJob(row, url) {
+      return getJson(url).then(function (payload) {
+        if (!payload.success) {
+          fail(row, payload.message || 'rowcount.error');
+          return;
+        }
+        var job = payload.job || {};
+        if (job.status === 'DONE') {
+          apply(row, job.rowCount || {});
+          return;
+        }
+        if (job.status === 'ERROR') {
+          fail(row, job.error || 'rowcount.error');
+          return;
+        }
+        return new Promise(function (resolve) {
+          setTimeout(resolve, 1500);
+        }).then(function () {
+          return pollJob(row, url);
+        });
       }).catch(function () {
         fail(row, 'error.unexpected');
       });

@@ -85,6 +85,20 @@ public class SyncProperties {
     private int chunkSize = 100_000;
 
     /**
+     * Upper bound on the estimated bytes a single chunk may carry during a full load.
+     * Tables with wide rows or LOB columns get a smaller row count than {@link #chunkSize}
+     * so one chunk cannot become a multi-gigabyte stream that outlives the driver/socket
+     * timeouts. The configured {@code chunk-size} remains the maximum; this only reduces it.
+     */
+    private long chunkTargetBytes = 64L * 1024 * 1024;
+
+    /** Floor for the adaptive chunk size so metadata estimates cannot create tiny pages. */
+    private int minAdaptiveChunkSize = 1000;
+
+    /** Set false to use {@link #chunkSize} verbatim for every table. */
+    private boolean adaptiveChunkSize = true;
+
+    /**
      * Worker threads for one chunked initial full load; 1 keeps the load fully sequential.
      *
      * <p>Parallel workers split the primary-key span into disjoint ranges (MIN/MAX bounds)

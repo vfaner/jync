@@ -128,17 +128,28 @@ public class TablePreviewService {
      * five-hundred-million-row table cannot be counted inside a browser request.
      */
     public TableRowCount rowCount(Long projectId, String table, boolean exact) {
+        return rowCount(projectId, table, exact, ROW_COUNT_TIMEOUT_SECONDS);
+    }
+
+    /**
+     * Same as {@link #rowCount(Long, String, boolean)}, with an explicit per-side timeout.
+     * The background exact-count job uses a much larger budget than the browser request;
+     * keeping it here means the SQL, status mapping and side isolation stay one path.
+     */
+    public TableRowCount rowCount(Long projectId, String table, boolean exact,
+                                  int timeoutSeconds) {
         long started = System.currentTimeMillis();
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        int timeout = Math.max(1, timeoutSeconds);
         return new TableRowCount(table,
-                countSide(project, table, Side.SOURCE, exact),
-                countSide(project, table, Side.TARGET, exact),
+                countSide(project, table, Side.SOURCE, exact, timeout),
+                countSide(project, table, Side.TARGET, exact, timeout),
                 System.currentTimeMillis() - started);
     }
 
     private TableRowCount.SideCount countSide(Project project, String table, Side side,
-                                              boolean exact) {
+                                              boolean exact, int timeoutSeconds) {
         long started = System.currentTimeMillis();
         Long databaseId = side == Side.SOURCE ? project.getSourceDbId() : project.getTargetDbId();
         if (databaseId == null) {
@@ -162,7 +173,7 @@ public class TablePreviewService {
             }
             String sql = "SELECT COUNT(*) FROM " + dialect.qualify(schema, actualTable);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                JdbcUtil.applyQueryTimeout(ps, ROW_COUNT_TIMEOUT_SECONDS);
+                JdbcUtil.applyQueryTimeout(ps, timeoutSeconds);
                 try (ResultSet rs = ps.executeQuery()) {
                     long count = rs.next() ? rs.getLong(1) : 0L;
                     return new TableRowCount.SideCount(TableRowCount.Status.OK, count,

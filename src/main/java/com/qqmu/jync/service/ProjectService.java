@@ -758,6 +758,16 @@ public class ProjectService {
         // engine and clears its cursors in both directions by design.
         applyTargetPolicy(project, config, requested != null ? requested : oldStrategy, source);
         boolean switching = requested != null && requested != oldStrategy;
+        // A CDC baseline is an all-or-nothing full snapshot. Leaving log CDC while it is
+        // unfinished would keep the partially loaded target and hand the project to a path
+        // that only reads changes from now on; the rows before that point would never be
+        // backfilled. Force the operator through "重建基线" (or finish the baseline) first.
+        if (switching && oldStrategy.isLogCdc() && !requested.isLogCdc()) {
+            CdcPosition position = positionStore.find(projectId).orElse(null);
+            if (position != null && !Boolean.TRUE.equals(position.isBaselineDone())) {
+                throw new IllegalStateException("error.project.cdc.baselineIncomplete");
+            }
+        }
         SyncConfig previousConfig = parseConfigLenient(project.getSyncConfig());
         boolean tablesChanged = tableSelectionChanged(previousConfig, config);
         if (!switching && mappingChanged(previousConfig, config)
