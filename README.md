@@ -140,7 +140,7 @@ com.qqmu.jync
 - **真库验证矩阵**：[docs/verification-matrix.md](docs/verification-matrix.md)
 - **发布说明**：[docs/release-notes/](docs/release-notes/)
 
-`mvn test` 运行单元测试（6795 项：6791 通过、3 个 TLS 证书用例受本机证书配置影响、1 个仅限 Linux 的用例按环境跳过），覆盖方言与 SQL 改写、全量与续传、六类 CDC、Redis 投影、专属迁移、ETL、告警、角色归属、AI 助手与安全。真库集成测试（`*IT`）需 Docker，命令见验证矩阵。
+`mvn test` 运行单元测试（6794 项：6790 通过、3 个 TLS 证书用例受本机证书配置影响、1 个仅限 Linux 的用例按环境跳过），覆盖方言与 SQL 改写、全量与续传、六类 CDC、Redis 投影、专属迁移、ETL、告警、角色归属、AI 助手与安全。真库集成测试（`*IT`）需 Docker，命令见验证矩阵。
 
 ## 参与贡献
 

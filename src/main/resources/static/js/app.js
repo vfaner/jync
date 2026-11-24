@@ -1628,33 +1628,6 @@
     });
   }
 
-  function bindCursorInput(input) {
-    var loaded = false;
-    function load() {
-      if (loaded) return;
-      loaded = true;
-      var url = input.dataset.action + '?table=' + encodeURIComponent(input.dataset.table);
-      // getJson 的兜底载荷（success:false）正好被下面第一行守卫拦住，无需另加判断
-      getJson(url)
-        .then(function (data) {
-          if (!data || !data.success || !Array.isArray(data.columns)) return;
-          var listId = input.getAttribute('list');
-          if (!listId) return;
-          var dl = document.getElementById(listId);
-          if (!dl) return;
-          data.columns.forEach(function (col) {
-            var opt = document.createElement('option');
-            opt.value = col;
-            dl.appendChild(opt);
-          });
-        })
-        .catch(function () { /* 加载失败不影响使用，输入框仍可手填 */ });
-    }
-    input.addEventListener('focus', load);
-    // 点击时也触发一次（focus 有时在移动端不触发）
-    input.addEventListener('click', load);
-  }
-
   /* ─── 列清洗规则表单 ──────────────────────────────────────
      两件事都为了少让人手填、少让人猜：
      1) 列候选跟着「表」走 —— 表一变就清空旧候选并重新拉取；
@@ -5414,8 +5387,6 @@
     document.querySelectorAll('[data-role="validate-sql"]').forEach(bindValidateSql);
     document.querySelectorAll('[data-role="nav-toggle"]').forEach(bindNavToggle);
     document.querySelectorAll('[data-role="toggle-password"]').forEach(bindPasswordToggle);
-    document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
-      .forEach(bindCursorInput);
     document.querySelectorAll('[data-role="cursor-open"]').forEach(bindCursorPicker);
     bindCursorPickerSave();
     bindTaskResultTranslation();

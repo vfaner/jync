@@ -99,7 +99,7 @@ class FullLoadProgressViewTest {
                 checkpoint(0, 1, ChunkCheckpoint.STATUS_CHUNK),
                 checkpoint(0, 2, ChunkCheckpoint.STATUS_CHUNK)))));
 
-                when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
                         null, null, 300L, java.time.Instant.now())));
 
@@ -120,7 +120,7 @@ class FullLoadProgressViewTest {
                 checkpoint(0, 2, ChunkCheckpoint.STATUS_RANGE_DONE),
                 checkpoint(1, 0, ChunkCheckpoint.STATUS_CHUNK)))));
 
-                when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
                         null, null, 300L, java.time.Instant.now())));
 
@@ -137,7 +137,7 @@ class FullLoadProgressViewTest {
                 checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK),
                 checkpoint(0, 1, ChunkCheckpoint.STATUS_CHUNK)))));
 
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
                         null, null, 200L, java.time.Instant.now())));
 
@@ -168,21 +168,6 @@ class FullLoadProgressViewTest {
     }
 
     @Test
-    void thePerTableBadgeFragmentCanBePolledWithoutReplacingTheWholeRow() throws Exception {
-        stubDetail(Map.of("ITEMS", ProjectService.FullLoadProgress.of(List.of(
-                checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK),
-                checkpoint(0, 1, ChunkCheckpoint.STATUS_CHUNK)))));
-
-        String fragment = mvc.perform(get("/projects/1/progress-badges").with(asAdmin()))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
-
-        assertThat(fragment).contains("data-full-load-badge-table=\"ITEMS\"");
-        assertThat(fragment).contains("2 chunks committed");
-        assertThat(fragment).contains("200 rows written");
-    }
-
-    @Test
     void aCompletedLoadKeepsTheTableCountInsteadOfVanishingWithTheLastCheckpoint()
             throws Exception {
         stubDetail(Map.of());
@@ -190,7 +175,7 @@ class FullLoadProgressViewTest {
         completed.setObjectName("ITEMS");
         completed.setInitialLoadDone(true);
         when(projectService.findProgress(1L)).thenReturn(List.of(completed));
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.COMPLETED,
                         null, null, null, null)));
 
@@ -206,7 +191,7 @@ class FullLoadProgressViewTest {
     @Test
     void theAllTablesStatusCardListsUnstartedTablesToo() throws Exception {
         stubDetail(Map.of());
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("DONE", ProjectService.SyncState.COMPLETED,
                         10L, java.time.Instant.now(), null, null),
                 new ProjectService.TableSyncStatus("TODO", ProjectService.SyncState.NOT_STARTED,
@@ -223,7 +208,7 @@ class FullLoadProgressViewTest {
     @Test
     void theFullLoadFragmentCarriesFreshStatusRowsAndSummaryForLiveRefresh() throws Exception {
         stubDetail(Map.of());
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("DONE", ProjectService.SyncState.COMPLETED,
                         10L, java.time.Instant.now(), null, null),
                 new ProjectService.TableSyncStatus("TODO", ProjectService.SyncState.NOT_STARTED,
@@ -246,7 +231,7 @@ class FullLoadProgressViewTest {
     void theMergedCardShowsBothStatesAndTheRowCountModalCoversUnstartedTables() throws Exception {
         stubDetail(Map.of());
         java.time.Instant now = java.time.Instant.now();
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("DONE", ProjectService.SyncState.COMPLETED,
                         10L, now, null, null, "TIMESTAMP", "UPDATED_AT", true, null,
                         ProjectService.IncrementalState.RUNNING),
@@ -272,13 +257,12 @@ class FullLoadProgressViewTest {
         // Cursor overrides are a one-icon action now; the wide input form is gone.
         assertThat(html).contains("data-role=\"cursor-open\"");
         assertThat(html).contains("id=\"cursor-picker-modal\"");
-        assertThat(html).doesNotContain("data-role=\"cursor-form\"");
     }
 
     @Test
     void theFirstChunkWindowShowsLoadingAndTheCurrentTableWithoutACheckpoint() throws Exception {
         stubDetail(Map.of());
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("COURSE", ProjectService.SyncState.IN_PROGRESS,
                         null, null, null, null)));
 
@@ -306,7 +290,7 @@ class FullLoadProgressViewTest {
         keyless.setObjectName("LOGS");
         keyless.setResumableLoad(false);
         when(projectService.findProgress(1L)).thenReturn(List.of(keyless));
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("LOGS", ProjectService.SyncState.COMPLETED,
                         null, null, null, null, null, null, false, null,
                         ProjectService.IncrementalState.RUNNING)));

@@ -2080,6 +2080,16 @@ public class ProjectService {
      * instead of only tables that already have a progress row.
      */
     public List<TableSyncStatus> findTableSyncStatuses(Long projectId, SyncConfig config) {
+        return findTableSyncStatuses(projectId, config, findFullLoadProgress(projectId));
+    }
+
+    /**
+     * Same view with the checkpoint map supplied by the caller. The detail page and its
+     * polling fragment already have it for the summary; this avoids querying the checkpoint
+     * table twice on every poll.
+     */
+    public List<TableSyncStatus> findTableSyncStatuses(Long projectId, SyncConfig config,
+                                                       Map<String, FullLoadProgress> inFlight) {
         Project project = projectRepository.findById(projectId).orElse(null);
         boolean enabled = project != null && Boolean.TRUE.equals(project.getEnabled());
         SyncTask task = taskStore.find(projectId).orElse(null);
@@ -2106,7 +2116,6 @@ public class ProjectService {
                 progressByName.put(progress.getObjectName().toUpperCase(Locale.ROOT), progress);
             }
         }
-        Map<String, FullLoadProgress> inFlight = findFullLoadProgress(projectId);
         Set<String> names = new java.util.LinkedHashSet<>(config.getTables());
         if (names.isEmpty()) {
             // A legacy project selected "all" and has no source metadata here; the progress

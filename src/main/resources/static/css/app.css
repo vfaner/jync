@@ -437,9 +437,6 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
   border-radius: var(--radius); overflow: hidden;
 }
 .card + .card { margin-top: 18px; }
-/* The full-load card lives inside a polling wrapper, so the sibling rule above cannot
-   reach it; match the same gap without adding height when the wrapper is empty. */
-#full-load-card > .card { margin-top: 18px; }
 
 /* ─── 各表同步进度：紧凑的游标动作与对齐 ─────────────────── */
 table.tbl th.cursor-col, table.tbl td.cursor-col {

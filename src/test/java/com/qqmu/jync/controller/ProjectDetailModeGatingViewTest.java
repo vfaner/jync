@@ -87,14 +87,14 @@ class ProjectDetailModeGatingViewTest {
             progress.setObjectType(ObjectType.TABLE);
             progress.setObjectName("orders");
             when(projectService.findProgress(1L)).thenReturn(List.of(progress));
-            when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+            when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                     new ProjectService.TableSyncStatus("orders",
                             ProjectService.SyncState.COMPLETED, 10L, null, null, null,
                             "TIMESTAMP", "UPDATED_AT", true, null,
                             ProjectService.IncrementalState.RUNNING)));
         } else {
             when(projectService.findProgress(1L)).thenReturn(List.of());
-            when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of());
+            when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of());
         }
         return project;
     }

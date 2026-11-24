@@ -115,7 +115,7 @@ class ProjectDetailCursorIndexViewTest {
         stubProject();
         when(projectService.findProgress(1L))
                 .thenReturn(List.of(cursor("EVENTS", "NONE")));
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("EVENTS", ProjectService.SyncState.COMPLETED,
                         1L, null, null, null, "NONE", "UPDATED", true, null,
                         ProjectService.IncrementalState.LIMITED)));
@@ -157,7 +157,7 @@ class ProjectDetailCursorIndexViewTest {
         when(projectService.findTask(1L)).thenReturn(Optional.empty());
         when(projectService.findProgress(1L))
                 .thenReturn(List.of(cursor("EVENTS"), cursor("LOGS")));
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("EVENTS", ProjectService.SyncState.COMPLETED,
                         1L, null, null, null, "TIMESTAMP", "UPDATED", true, null,
                         ProjectService.IncrementalState.PAUSED),

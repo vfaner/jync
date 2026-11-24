@@ -24,7 +24,7 @@
                 <span th:text="#{rowcount.open}">Check row counts</span>
             </button>
             <!-- 批量设置只改项目级游标优先级，不读源库、不逐表写配置；表多时也只需一次操作。
-                 未首次跑的项目同样可用，因此不依赖 progressList 是否为空。 -->
+                 未首次跑的项目同样可用，因此不依赖进度表是否为空。 -->
             <button type="button" class="btn btn-ghost btn-sm"
                     data-role="cursor-priority-open"
                     data-open-modal="cursor-priority-modal"

@@ -95,7 +95,7 @@ class TablePreviewViewTest {
         SyncProgress progress = new SyncProgress();
         progress.setObjectName("ITEMS");
         when(projectService.findProgress(1L)).thenReturn(List.of(progress));
-        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.COMPLETED,
                         10L, java.time.Instant.now(), null, null, "TIMESTAMP", "UPDATED_AT",
                         true, null, ProjectService.IncrementalState.RUNNING)));
