@@ -72,6 +72,7 @@ class DataSyncServiceInsertFirstWriteTest {
         DataSyncService.TableSyncResult result = load(new MySqlDialect(), DatabaseType.MYSQL);
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(result.getRowsInserted()).isEqualTo(3);
         assertThat(countOrders()).isEqualTo(3);
         assertThat(probed).contains("SELECT 1 FROM `ORDERS` LIMIT 1");
         assertThat(prepared).anyMatch(sql -> sql.startsWith("INSERT INTO `ORDERS` ("));

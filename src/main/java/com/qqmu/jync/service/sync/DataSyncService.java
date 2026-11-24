@@ -2112,6 +2112,12 @@ public class DataSyncService {
                         spillSession.close();
                     }
                 }
+                // INSERT-first has no upsert key, so the driver's affected count cannot be
+                // classified as insert vs update. Every row of this pass was an insert.
+                if (insertFirst && total.unclassified > 0) {
+                    total.inserted += total.unclassified;
+                    total.unclassified = 0;
+                }
                 throughput.logSummary(total.changedRows());
             }
             // The read is over before the target commits: the source transaction holds no
