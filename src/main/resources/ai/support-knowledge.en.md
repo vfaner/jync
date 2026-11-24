@@ -792,8 +792,10 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 - "Has table X finished?" is project_table_status. States: COMPLETED (initial full load done,
   incremental sync continues), IN_PROGRESS (full-load checkpoints exist; loading or resumable),
   INCOMPLETE (progress exists but the initial load never finished), NOT_STARTED (selected, no
-  progress yet). Each row carries cumulative changed rows, last sync time, rows copied by the
-  current full load and the checkpoint update time.
+  progress yet). Each row carries an incrementalState (RUNNING / PAUSED / ERROR / LIMITED /
+  WAITING, inferred from the project state and the table's cursor capability, not a per-table CDC
+  catch-up proof), cumulative changed rows, last sync time, rows copied by the current full load
+  and the checkpoint update time.
 - Filter by table-name substring (case-insensitive) or by state; large projects return per-state
   counts first, and a capped list is marked truncated — report the total, do not present the
   sample as complete.

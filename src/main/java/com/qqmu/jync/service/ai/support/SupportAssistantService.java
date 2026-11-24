@@ -140,7 +140,10 @@ public class SupportAssistantService {
                - 表状态码含义：COMPLETED=首次全量已完成、正在增量同步；IN_PROGRESS=有全量
                  检查点，正在装载或可续传（fullLoadRowsCopied 是本次全量已写入行数，不等于
                  累计变更行数）；INCOMPLETE=有进度行但首次全量未完成（中断或未跑完）；
-                 NOT_STARTED=已勾选但还没有任何进度。任务 running 只表示任务在运行，不代表
+                 NOT_STARTED=已勾选但还没有任何进度。incrementalState：RUNNING=项目运行且未发现
+               错误（CDC 为项目级状态）、PAUSED=项目停止、ERROR=最近失败/消费者被停住、
+               LIMITED=无可用游标/主键或策略无法感知更新、WAITING=CDC 基线未完成；全量未完成
+               时为 NOT_STARTED。任务 running 只表示任务在运行，不代表
                  每张表都已完成；未开始的表没有进度行，不能从 project_status 的 progress
                  推断。selectionKnown=false 表示旧配置没有明确的表清单，摘要只基于已有进度
                  行，无法列出未开始表，回答时要说明这一限制。

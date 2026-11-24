@@ -16,7 +16,7 @@
             <!-- 行数核对是显式动作：页面打开不查库，点击后才逐表 COUNT(*)。 -->
             <button type="button" class="btn btn-ghost btn-sm"
                     data-role="row-count-open"
-                    th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(progressList)}"
+                    th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(tableStatuses)}"
                     th:attr="data-action=@{/api/projects/{id}/row-count(id=${project.id})},
                              data-running=${project.enabled},
                              title=#{rowcount.hint}">
@@ -36,52 +36,39 @@
         </div>
     </div>
     <div class="card-body tight">
-        <div th:if="${#lists.isEmpty(progressList)}" class="empty">
+        <div id="progress-summary" class="progress-summary-wrap"
+             th:if="${tableStatuses != null and !#lists.isEmpty(tableStatuses)}">
+            <th:block th:replace="~{project-detail/table-progress-summary :: panels}"/>
+        </div>
+        <div th:if="${#lists.isEmpty(tableStatuses)}" class="empty">
             <div class="empty-ico"><svg class="ico"><use href="#hourglass"/></svg></div>
             <h3 th:text="#{dashboard.noActivity}">No activity yet.</h3>
         </div>
-        <div th:unless="${#lists.isEmpty(progressList)}" class="tbl-wrap">
+        <div th:unless="${#lists.isEmpty(tableStatuses)}" class="tbl-wrap">
             <table class="tbl dense">
                 <thead>
                 <tr>
                     <th th:text="#{log.objectName}">Table</th>
-                    <!--/* 游标策略是轮询/全量比对特有：日志 CDC 的变更来自日志流而非游标，
-                           整列隐藏（data-cdc-visibility 由 app.js 随策略联动，对所有角色生效）。 */-->
                     <th data-role="progress-strategy" data-cdc-visibility="non-cdc"
                         th:classappend="${cdcActive} ? 'is-hidden' : ''"
-                        th:text="#{cursor.strategy}">Strategy</th>
-                    <!--/* 游标列同属轮询/全量比对：CDC 不用游标列，整列隐藏。 */-->
-                    <th data-role="progress-cursor-column" data-cdc-visibility="non-cdc"
-                        th:classappend="${cdcActive} ? 'is-hidden' : ''"
-                        th:text="#{cursor.column}">Column</th>
+                        th:text="#{tablesync.strategyCursor}">Strategy / cursor</th>
+                    <th th:text="#{tablesync.fullState}">Full-load state</th>
+                    <th th:text="#{tablesync.incState}">Incremental state</th>
                     <th th:text="#{dashboard.lastSync}">Last sync</th>
-                    <!-- 累计同步行数：轮询与 CDC 都有意义，主表一眼可见进度量（不必点开核对行数）。 -->
-                    <th class="num" data-role="progress-synced-total"
-                        th:title="#{rowcount.syncedTotalHint}"
-                        th:text="#{rowcount.syncedTotal}">Rows changed</th>
-                    <!-- 「设置游标」列：仅轮询/全量比对模式可用。日志 CDC 下游标列是死配置，
-                         同调度卡片一并隐藏（data-role="polling-only" 由 app.js 联动）。 -->
+                    <th class="num" th:text="#{tablesync.fullLoad}">Full-load progress</th>
                     <th class="num"
                         th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
                         th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null"
                         th:text="#{cursor.set}">Set cursor</th>
-                    <!-- 只读预览：源/目标各一个入口。纯 GET，不改变同步状态，访客同样可见。 -->
                     <th class="num" th:text="#{preview.title}">Preview</th>
                 </tr>
                 </thead>
                 <tbody>
-                <tr th:each="p : ${progressList}" th:with="strat=${p.cursorStrategy ?: 'NONE'}"
-                    th:attr="data-progress-table=${p.objectName}">
+                <tr th:each="s : ${tableStatuses}"
+                    th:attr="data-progress-table=${s.name}">
                     <td class="mono" style="font-weight:600">
-                        <span th:text="${p.objectName}">table</span>
-                        <!-- 进行中的分块全量:切分方式、已完成块数、断点续传提示(任务书 A5)。
-                             断点行只在装载未完成时存在,完成即清,所以有徽章 = 该表全量仍在途。
-                             片段端点每 5 秒只替换这个容器，不动整行控件。 -->
-                        <div data-role="full-load-badge">
-                            <th:block th:replace="~{project-detail/progress-badges :: badge(${p})}"/>
-                        </div>
-                        <!-- 无主键表的全量只能流式整拉,中断即整表重来(任务书 A1:UI 明示)。 -->
-                        <div th:if="${p.resumableLoad != null and !p.resumableLoad}"
+                        <span th:text="${s.name}">table</span>
+                        <div th:if="${s.resumableLoad != null and !s.resumableLoad}"
                              class="small" style="font-weight:400;margin-top:2px">
                             <span class="badge badge-warn" th:title="#{fullload.noResumeHint}"
                                   th:text="#{fullload.noResume}">no resume</span>
@@ -89,63 +76,53 @@
                     </td>
                     <td data-role="progress-strategy" data-cdc-visibility="non-cdc"
                         th:classappend="${cdcActive} ? 'is-hidden' : ''">
-                        <span class="badge"
-                              th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
-                                            : (${strat == 'IDENTITY'} ? 'badge-info'
-                                            : (${strat == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
-                              th:title="#{'cursor.strategy.' + ${strat} + '.help'}">
-                            <span th:text="#{'cursor.' + ${strat}}">strategy</span>
-                        </span>
-                        <!-- 策略无法感知更新时明确标出，避免用户误以为数据完全同步。
-                             data-tip 由 app.js 画成与性能配置一样的深色气泡并立即弹出；
-                             原生 title 要等约 1 秒且样式跟着系统走。 -->
-                        <span class="tip-icon tip-warn" tabindex="0" role="img"
-                              th:if="${strat == 'IDENTITY' or strat == 'NONE'}"
-                              th:attr="aria-label=#{project.strategyWarn},
-                                       data-tip=#{project.strategyWarn}">
-                            <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
-                        </span>
+                        <th:block th:if="${s.cursorStrategy != null}"
+                                  th:with="strat=${s.cursorStrategy}">
+                            <span class="badge"
+                                  th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
+                                                : (${strat == 'IDENTITY'} ? 'badge-info'
+                                                : (${strat == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
+                                  th:title="#{'cursor.strategy.' + ${strat} + '.help'}">
+                                <span th:text="#{'cursor.' + ${strat}}">strategy</span>
+                            </span>
+                            <span class="tip-icon tip-warn" tabindex="0" role="img"
+                                  th:if="${strat == 'IDENTITY' or strat == 'NONE'}"
+                                  th:attr="aria-label=#{project.strategyWarn},
+                                           data-tip=#{project.strategyWarn}">
+                                <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+                            </span>
+                            <div class="mono small" style="margin-top:2px">
+                                <span th:text="${s.cursorColumn ?: '—'}">col</span>
+                                <span class="tip-icon tip-warn" tabindex="0" role="img"
+                                      th:if="${unindexedCursorTables != null
+                                               and s.cursorColumn != null
+                                               and unindexedCursorTables.contains(s.name)}"
+                                      th:attr="aria-label=#{project.cursorIndexHint},
+                                               data-tip=#{project.cursorIndexHint}">
+                                    <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+                                </span>
+                            </div>
+                        </th:block>
+                        <span class="muted" th:if="${s.cursorStrategy == null}"
+                              th:text="#{tablesync.noActive}">—</span>
                     </td>
-                    <td class="mono small" data-role="progress-cursor-column" data-cdc-visibility="non-cdc"
-                        th:classappend="${cdcActive} ? 'is-hidden' : ''">
-                        <span th:text="${p.cursorColumn ?: '—'}">col</span>
-                        <!-- 游标列没有前导索引时,每次增量读取都要全表扫描:提示管理员在源库补索引。
-                             data-tip 由 app.js 画成与性能配置一样的深色气泡并立即弹出；
-                             原生 title 要等约 1 秒且样式跟着系统走。 -->
-                        <span class="tip-icon tip-warn" tabindex="0" role="img"
-                              th:if="${unindexedCursorTables != null
-                                       and p.cursorColumn != null
-                                       and unindexedCursorTables.contains(p.objectName)}"
-                              th:attr="aria-label=#{project.cursorIndexHint},
-                                       data-tip=#{project.cursorIndexHint}">
-                            <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
-                        </span>
-                    </td>
-                    <td class="small muted"
-                        th:attr="title=${p.lastSyncValue != null
-                                 ? #messages.msg('cursor.lastValue') + ': ' + p.lastSyncValue : null}"
-                        th:text="${p.lastSyncTime != null}
-                                 ? ${#temporals.format(p.lastSyncTime, 'MM-dd HH:mm:ss')}
-                                 : #{common.never}">never</td>
-                    <td class="num" th:text="${p.rowsSyncedTotal ?: 0}">0</td>
-                    <!-- td 本身不 th:if 藏掉（那样 JS 联动就没法恢复），改为加 is-hidden 类；
-                         isAdmin=false 时始终隐藏（访客态）。 -->
+                    <th:block th:replace="~{project-detail/table-status :: fullState(${s})}"/>
+                    <th:block th:replace="~{project-detail/table-status :: incState(${s})}"/>
+                    <th:block th:replace="~{project-detail/table-status :: lastSync(${s})}"/>
+                    <th:block th:replace="~{project-detail/table-status :: fullProgress(${s})}"/>
                     <td th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
                         th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null">
-                        <!-- 每行一个小表单，可为单表覆盖自动识别的游标列。
-                             输入框带 datalist 候选，聚焦时从后端拉取该表可用的游标列
-                             （时间 + 整数类型），免去手动敲列名。 -->
                         <form method="post" class="input-group" style="justify-content:flex-end"
                               th:action="@{/projects/{id}/cursor(id=${project.id})}"
                               data-role="cursor-form">
-                            <input type="hidden" name="tableName" th:value="${p.objectName}">
+                            <input type="hidden" name="tableName" th:value="${s.name}">
                             <input type="text" class="input mono" style="max-width:145px" name="cursorColumn"
-                                   th:value="${config.cursorColumnFor(p.objectName)}"
+                                   th:value="${config.cursorColumnFor(s.name)}"
                                    th:placeholder="#{cursor.auto}"
-                                   th:attr="list='datalist-cursor-' + ${p.objectName},
-                                            data-table=${p.objectName},
+                                   th:attr="list='datalist-cursor-' + ${s.name},
+                                            data-table=${s.name},
                                             data-action=@{/api/projects/{id}/cursor-candidates(id=${project.id})}">
-                            <datalist th:id="'datalist-cursor-' + ${p.objectName}"></datalist>
+                            <datalist th:id="'datalist-cursor-' + ${s.name}"></datalist>
                             <button type="submit" class="btn-icon" th:title="#{common.apply}">
                                 <svg class="ico"><use href="#check-lg"/></svg>
                             </button>
@@ -155,29 +132,25 @@
                         <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
                                 th:if="${access.canEdit(project.ownerUsername)}"
                                 data-side="source"
-                                th:attr="data-table=${p.objectName},
+                                th:attr="data-table=${s.name},
                                          data-action=@{/api/projects/{id}/preview(id=${project.id})},
                                          title=#{preview.sourceHint}">
                             <svg class="ico"><use href="#table"/></svg>
                             <span th:text="#{preview.source}">Source</span>
                         </button>
-                        <!--/* 目标预览与内容校验都读 JDBC 目标：Redis 目标没有 targetDbId,
-                                按钮只会换来一个错误,因此不渲染。 */-->
                         <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
                                 th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget}"
                                 data-side="target"
-                                th:attr="data-table=${p.objectName},
+                                th:attr="data-table=${s.name},
                                          data-action=@{/api/projects/{id}/preview(id=${project.id})},
                                          title=#{preview.targetHint}">
                             <svg class="ico"><use href="#eye"/></svg>
                             <span th:text="#{preview.target}">Target</span>
                         </button>
-                        <!--/* 内容校验：按主键抽样比对源/目标的行值，只报告不修复。会读两侧
-                               数据库的值，因此仅管理员可见。 */-->
                         <button type="button" class="btn btn-ghost btn-xs"
                                 data-role="content-audit"
                                 th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget}"
-                                th:attr="data-table=${p.objectName},
+                                th:attr="data-table=${s.name},
                                          data-action=@{/api/projects/{id}/content-audit(id=${project.id})},
                                          title=#{contentAudit.hint}">
                             <svg class="ico"><use href="#search"/></svg>
@@ -190,6 +163,9 @@
         </div>
     </div>
 </div>
+
+<th:block th:replace="~{project-detail/full-load-progress :: data}"/>
+
 
 <div style="margin-top:16px">
     <a class="btn btn-ghost btn-sm" th:href="@{/change-logs(projectId=${project.id})}">
@@ -226,7 +202,7 @@
 <!-- 行数核对弹窗：行由服务端按进度列表渲染，app.js 只负责逐表填数。
      带 {0} 的文案放在 data-* 上，由 JS 替换（同 preview.truncated）。 -->
 <div class="modal" id="row-count-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(progressList)}"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(tableStatuses)}"
      th:attr="aria-label=#{rowcount.title},
               data-confirm=#{rowcount.confirm},
               data-confirm-running=#{rowcount.confirmRunning},
@@ -260,21 +236,18 @@
                     <th class="num" th:text="#{rowcount.sourceRows}">Source rows</th>
                     <th class="num" th:text="#{rowcount.targetRows}">Target rows</th>
                     <th class="num" th:text="#{rowcount.diff}">Difference</th>
-                    <th class="num" th:title="#{rowcount.syncedTotalHint}"
-                        th:text="#{rowcount.syncedTotal}">Rows changed</th>
                     <th th:text="#{rowcount.status}">Status</th>
                     <th class="num" th:text="#{rowcount.actions}">Actions</th>
                 </tr>
                 </thead>
                 <tbody>
-                <tr th:each="p : ${progressList}"
+                <tr th:each="s : ${tableStatuses}"
                     data-role="row-count-row"
-                    th:attr="data-object=${p.objectName}">
-                    <td class="mono" th:text="${p.objectName}">table</td>
+                    th:attr="data-object=${s.name}">
+                    <td class="mono" th:text="${s.name}">table</td>
                     <td class="num" data-role="source-count">—</td>
                     <td class="num" data-role="target-count">—</td>
                     <td class="num" data-role="diff" th:title="#{rowcount.diffHint}">—</td>
-                    <td class="num" th:text="${p.rowsSyncedTotal ?: 0}">0</td>
                     <td data-role="status">
                         <span class="badge" th:text="#{rowcount.notChecked}">Not checked</span>
                     </td>
@@ -351,7 +324,7 @@
 <!--/* 内容校验弹窗：一次只校验进度行对应的那张表，结果由 app.js 按接口返回填充。
        页面只渲染空壳；表名、列名与原因都在 JS 里用 textContent 写入。 */-->
 <div class="modal" id="content-audit-modal" aria-hidden="true" role="dialog" aria-modal="true"
-     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(progressList)}"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(tableStatuses)}"
      th:attr="aria-label=#{contentAudit.title}">
     <div class="modal-mask" data-close-modal="content-audit-modal"></div>
     <div class="modal-dialog preview-dialog">

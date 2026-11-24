@@ -1,6 +1,8 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -93,6 +95,10 @@ class TablePreviewViewTest {
         SyncProgress progress = new SyncProgress();
         progress.setObjectName("ITEMS");
         when(projectService.findProgress(1L)).thenReturn(List.of(progress));
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.COMPLETED,
+                        10L, java.time.Instant.now(), null, null, "TIMESTAMP", "UPDATED_AT",
+                        true, null, ProjectService.IncrementalState.RUNNING)));
 
         return mvc.perform(get("/projects/1").with(user))
                 .andExpect(status().isOk())
@@ -192,9 +198,9 @@ class TablePreviewViewTest {
         String html = render();
 
         assertThat(html).doesNotContain("<th>Last synced value</th>");
-        // The progress table and the row-count modal both explain that this is changed
-        // rows, not the target's total.
-        assertThat(countOccurrences(html, ">Rows changed</th>")).isEqualTo(2);
+        // Cumulative changed rows moved out of the page entirely; exact counts live in the
+        // row-count modal's source/target/difference columns.
+        assertThat(countOccurrences(html, ">Rows changed</th>")).isZero();
     }
 
     private static int countOccurrences(String text, String needle) {
@@ -231,7 +237,7 @@ class TablePreviewViewTest {
     void theRowCountModalExplainsThatOnlyTablesWithSyncRecordsAreListed() throws Exception {
         String html = render();
 
-        assertThat(html).contains("Only tables that already have a sync record are listed");
+        assertThat(html).contains("All selected tables are listed");
         assertThat(html).doesNotContain("??rowcount.scopeHint");
     }
 

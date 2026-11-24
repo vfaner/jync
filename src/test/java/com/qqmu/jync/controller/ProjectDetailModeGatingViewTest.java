@@ -2,6 +2,7 @@ package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -86,8 +87,14 @@ class ProjectDetailModeGatingViewTest {
             progress.setObjectType(ObjectType.TABLE);
             progress.setObjectName("orders");
             when(projectService.findProgress(1L)).thenReturn(List.of(progress));
+            when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                    new ProjectService.TableSyncStatus("orders",
+                            ProjectService.SyncState.COMPLETED, 10L, null, null, null,
+                            "TIMESTAMP", "UPDATED_AT", true, null,
+                            ProjectService.IncrementalState.RUNNING)));
         } else {
             when(projectService.findProgress(1L)).thenReturn(List.of());
+            when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of());
         }
         return project;
     }
@@ -232,37 +239,29 @@ class ProjectDetailModeGatingViewTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
-    void theProgressCursorColumnIsHiddenForACdcProject() throws Exception {
-        // 游标列和策略一样只属于轮询/全量比对；CDC 不用游标列，留着会误导。
+    void theCombinedStrategyCursorColumnFollowsTheCaptureMode() throws Exception {
+        // 游标策略与游标列合并为一列，CDC 下整列隐藏：日志 CDC 不用游标列。
         stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
+        String cdc = renderDetail();
+        String cdcTh = enclosingTag(cdc, "data-role=\"progress-strategy\"", "<th");
+        assertThat(cdcTh).contains("is-hidden").contains("data-cdc-visibility=\"non-cdc\"");
 
-        String page = renderDetail();
-
-        String th = enclosingTag(page, "data-role=\"progress-cursor-column\"", "<th");
-        assertThat(th).contains("is-hidden").contains("data-cdc-visibility=\"non-cdc\"");
-    }
-
-    @Test
-    @WithMockUser(roles = "ADMIN")
-    void theProgressCursorColumnIsShownForAPollingProject() throws Exception {
         stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, true);
-
-        String page = renderDetail();
-
-        String th = enclosingTag(page, "data-role=\"progress-cursor-column\"", "<th");
-        assertThat(th).doesNotContain("is-hidden");
+        String polling = renderDetail();
+        String pollingTh = enclosingTag(polling, "data-role=\"progress-strategy\"", "<th");
+        assertThat(pollingTh).doesNotContain("is-hidden");
     }
 
     @Test
     @WithMockUser(roles = "ADMIN")
-    void theProgressTableShowsCumulativeSyncedRowsEvenInCdc() throws Exception {
+    void theProgressTableUsesFullAndIncrementalStatesInsteadOfLifetimeRows() throws Exception {
         stubProject(SyncTargetKind.JDBC, CaptureStrategy.LOGMINER_CDC, true);
 
         String page = renderDetail();
 
-        // 累计同步行数在 CDC 下也有意义，不随策略列隐藏。
-        String th = enclosingTag(page, "data-role=\"progress-synced-total\"", "<th");
-        assertThat(th).doesNotContain("is-hidden");
+        assertThat(page).contains(">Full-load state</th>");
+        assertThat(page).contains(">Incremental state</th>");
+        assertThat(page).doesNotContain(">Rows changed</th>");
     }
 
     @Test

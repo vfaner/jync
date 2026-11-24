@@ -53,7 +53,8 @@ public class ProjectTableStatusTool implements SupportTool {
         return "Per-table sync state of one project: COMPLETED (initial full load done), "
                 + "IN_PROGRESS (full load has checkpoints, loading or resumable), INCOMPLETE "
                 + "(progress exists but the initial load never finished), NOT_STARTED (selected "
-                + "but no progress yet), plus rows changed, last sync time and the current "
+                + "but no progress yet), incrementalState (RUNNING/PAUSED/ERROR/LIMITED/"
+                + "WAITING), plus rows changed, last sync time and the current "
                 + "full-load rows copied. Optional table (case-insensitive substring) and state "
                 + "filters. Cheap metadata read. projectId comes from list_projects.";
     }
@@ -176,6 +177,10 @@ public class ProjectTableStatusTool implements SupportTool {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("table", row.name());
         out.put("state", row.state().name());
+        out.put("incrementalState", row.incremental().name());
+        out.put("cursorStrategy", row.cursorStrategy());
+        out.put("cursorColumn", row.cursorColumn());
+        out.put("resumableLoad", row.resumableLoad());
         out.put("rowsChangedTotal", row.rowsSyncedTotal());
         out.put("lastSyncTime", row.lastSyncTime() == null
                 ? null : row.lastSyncTime().toString());

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* Progress summary lives in the card body, above the table: a header crowded with
+       two groups of counts reads as noise, while two tinted panels make "full load" and
+       "incremental" feel like the two different phases they are. The fragment takes its
+       values from the model so the 2-second polling copy can render the exact same markup. */-->
+<div class="progress-summary" th:fragment="panels">
+    <section class="progress-panel progress-panel-full">
+        <div class="progress-panel-head">
+            <span class="progress-panel-icon" aria-hidden="true">
+                <svg class="ico"><use href="#graph-up"/></svg>
+            </span>
+            <div class="progress-panel-title">
+                <strong th:text="#{tablesync.fullTitle}">Full load</strong>
+                <span class="small muted" th:text="#{tablesync.fullHint}">Initial / rebuild load</span>
+            </div>
+            <span class="badge badge-info" th:if="${tableStatusInProgress > 0}"
+                  th:text="#{tablesync.full.running}">In progress</span>
+            <span class="badge badge-mute" th:unless="${tableStatusInProgress > 0}"
+                  th:text="#{tablesync.full.idle}">Idle</span>
+        </div>
+        <div class="progress-counts">
+            <span class="progress-count is-ok">
+                <b th:text="${tableStatusCompleted}">0</b>
+                <span th:text="#{tablesync.full.completed}">Completed</span>
+            </span>
+            <span class="progress-count is-info">
+                <b th:text="${tableStatusInProgress}">0</b>
+                <span th:text="#{tablesync.full.inProgress}">In progress</span>
+            </span>
+            <span class="progress-count is-warn">
+                <b th:text="${tableStatusIncomplete}">0</b>
+                <span th:text="#{tablesync.full.incomplete}">Incomplete</span>
+            </span>
+            <span class="progress-count is-mute">
+                <b th:text="${tableStatusNotStarted}">0</b>
+                <span th:text="#{tablesync.full.notStarted}">Not started</span>
+            </span>
+        </div>
+        <div class="progress-live" th:if="${tableStatusInProgress > 0}">
+            <span th:if="${fullLoadCurrentTable != null}" class="progress-live-item">
+                <span class="small muted" th:text="#{fullload.currentLabel}">Current</span>
+                <b class="mono" th:text="${fullLoadCurrentTable}">table</b>
+            </span>
+            <span class="progress-live-item">
+                <span class="small muted" th:text="#{fullload.rowsLabel}">Rows</span>
+                <b th:text="${fullLoadRows}">0</b>
+            </span>
+            <span class="progress-live-item" th:if="${fullLoadUpdatedAt != null}">
+                <span class="small muted" th:text="#{fullload.updatedLabel}">Updated</span>
+                <span th:text="${#temporals.format(fullLoadUpdatedAt, 'MM-dd HH:mm:ss')}">—</span>
+            </span>
+            <span class="badge badge-warn" th:if="${fullLoadStale}"
+                  th:text="#{fullload.stale}">stale</span>
+        </div>
+        <p class="small muted progress-panel-foot" th:unless="${tableStatusInProgress > 0}"
+           th:text="#{fullload.noActive}">No full load is currently running.</p>
+    </section>
+
+    <section class="progress-panel progress-panel-inc">
+        <div class="progress-panel-head">
+            <span class="progress-panel-icon" aria-hidden="true">
+                <svg class="ico"><use href="#activity"/></svg>
+            </span>
+            <div class="progress-panel-title">
+                <strong th:text="#{tablesync.incTitle}">Incremental</strong>
+                <span class="small muted" th:text="#{tablesync.incHint}">Project state and cursor capability</span>
+            </div>
+            <span class="badge badge-ok" th:if="${tableStatusIncRunning > 0}"
+                  th:text="#{tablesync.inc.RUNNING}">Running</span>
+            <span class="badge badge-danger" th:if="${tableStatusIncRunning == 0 and tableStatusIncError > 0}"
+                  th:text="#{tablesync.inc.ERROR}">Error</span>
+        </div>
+        <div class="progress-counts">
+            <span class="progress-count is-ok">
+                <b th:text="${tableStatusIncRunning}">0</b>
+                <span th:text="#{tablesync.inc.RUNNING}">Running</span>
+            </span>
+            <span class="progress-count is-mute">
+                <b th:text="${tableStatusIncPaused}">0</b>
+                <span th:text="#{tablesync.inc.PAUSED}">Paused</span>
+            </span>
+            <span class="progress-count is-danger">
+                <b th:text="${tableStatusIncError}">0</b>
+                <span th:text="#{tablesync.inc.ERROR}">Error</span>
+            </span>
+            <span class="progress-count is-mute">
+                <b th:text="${tableStatusIncNotStarted}">0</b>
+                <span th:text="#{tablesync.inc.NOT_STARTED}">Not started</span>
+            </span>
+            <span class="progress-count is-warn" th:if="${tableStatusIncLimited > 0}">
+                <b th:text="${tableStatusIncLimited}">0</b>
+                <span th:text="#{tablesync.inc.LIMITED}">Limited</span>
+            </span>
+            <span class="progress-count is-info" th:if="${tableStatusIncWaiting > 0}">
+                <b th:text="${tableStatusIncWaiting}">0</b>
+                <span th:text="#{tablesync.inc.WAITING}">Waiting</span>
+            </span>
+        </div>
+        <p class="small muted progress-panel-foot"
+           th:text="#{tablesync.incFootnote}">Running means the project has no known error; CDC status is project-wide.</p>
+    </section>
+</div>
+</body>
+</html>

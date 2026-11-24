@@ -40,7 +40,9 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTargetKind;
+import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -1634,6 +1636,89 @@ class ProjectServiceTest {
         config.setSyncViews(false);
         config.setSyncProcedures(false);
         return config;
+    }
+
+    @Test
+    void tableStatusesCarryAnIncrementalStateFromProjectAndCursorCapability() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        SyncProgress done = new SyncProgress();
+        done.setObjectName("ORDERS");
+        done.setInitialLoadDone(true);
+        done.setCursorStrategy("TIMESTAMP");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(done));
+        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+
+        assertThat(service.findTableSyncStatuses(1L, config).get(0).incremental())
+                .isEqualTo(ProjectService.IncrementalState.RUNNING);
+
+        project.setEnabled(false);
+        assertThat(service.findTableSyncStatuses(1L, config).get(0).incremental())
+                .isEqualTo(ProjectService.IncrementalState.PAUSED);
+
+        project.setEnabled(true);
+        SyncTask failed = new SyncTask();
+        failed.setStatus(TaskStatus.ERROR);
+        when(taskStore.find(1L)).thenReturn(Optional.of(failed));
+        assertThat(service.findTableSyncStatuses(1L, config).get(0).incremental())
+                .isEqualTo(ProjectService.IncrementalState.ERROR);
+    }
+
+    @Test
+    void anIncompleteCdcBaselineWaitsAndAPollingCursorThatCannotDetectUpdatesIsLimited() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig cdc = new SyncConfig();
+        cdc.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        cdc.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        SyncProgress done = new SyncProgress();
+        done.setObjectName("ORDERS");
+        done.setInitialLoadDone(true);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(done));
+        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+        when(positionStore.find(1L)).thenReturn(Optional.empty());
+
+        assertThat(service.findTableSyncStatuses(1L, cdc).get(0).incremental())
+                .isEqualTo(ProjectService.IncrementalState.WAITING);
+
+        SyncConfig polling = new SyncConfig();
+        polling.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.POLLING);
+        polling.setTables(cdc.getTables());
+        done.setCursorStrategy("NONE");
+        assertThat(service.findTableSyncStatuses(1L, polling).get(0).incremental())
+                .isEqualTo(ProjectService.IncrementalState.LIMITED);
+    }
+
+    @Test
+    void checkpointsOnAStoppedProjectAreIncompleteNotStillRunning() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(false);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        SyncProgress partial = new SyncProgress();
+        partial.setObjectName("ORDERS");
+        partial.setInitialLoadDone(false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(partial));
+        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of(
+                new com.qqmu.jync.model.ChunkCheckpoint(1L, "ORDERS", 0, 0, "[10]", 10,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK)));
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
+
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.INCOMPLETE);
+        assertThat(status.incremental()).isEqualTo(ProjectService.IncrementalState.NOT_STARTED);
+        assertThat(status.rowsCopied()).isEqualTo(10L);
     }
 
     @Test

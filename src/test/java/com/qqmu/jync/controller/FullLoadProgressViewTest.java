@@ -99,15 +99,17 @@ class FullLoadProgressViewTest {
                 checkpoint(0, 1, ChunkCheckpoint.STATUS_CHUNK),
                 checkpoint(0, 2, ChunkCheckpoint.STATUS_CHUNK)))));
 
+                when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
+                        null, null, 300L, java.time.Instant.now())));
+
         String html = render();
 
-        assertThat(html).contains("Chunked full load in progress");
-        assertThat(html).contains("3 chunks committed");
-        assertThat(html).contains("300 rows written");
-        assertThat(html).contains("Full-load progress");
-        assertThat(html).contains("Current table");
+        assertThat(html).contains("Full load");
+        assertThat(html).contains("Current");
         assertThat(html).contains("ITEMS");
-        assertThat(html).contains("resumes from the last committed chunk");
+        assertThat(html).contains("300");
+        assertThat(html).contains("In progress");
     }
 
     @Test
@@ -118,10 +120,15 @@ class FullLoadProgressViewTest {
                 checkpoint(0, 2, ChunkCheckpoint.STATUS_RANGE_DONE),
                 checkpoint(1, 0, ChunkCheckpoint.STATUS_CHUNK)))));
 
+                when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
+                        null, null, 300L, java.time.Instant.now())));
+
         String html = render();
 
-        assertThat(html).contains("Parallel full load: 1 of 2 key ranges done");
-        assertThat(html).contains("3 chunks committed");
+        assertThat(html).contains("In progress");
+        assertThat(html).contains("ITEMS");
+        assertThat(html).contains("300");
     }
 
     @Test
@@ -130,14 +137,20 @@ class FullLoadProgressViewTest {
                 checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK),
                 checkpoint(0, 1, ChunkCheckpoint.STATUS_CHUNK)))));
 
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
+                        null, null, 200L, java.time.Instant.now())));
+
         String fragment = mvc.perform(get("/projects/1/full-load-card").with(asAdmin()))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(fragment).contains("id=\"full-load-card\"");
         assertThat(fragment).contains("data-refresh-url=\"/projects/1/full-load-card\"");
-        assertThat(fragment).contains("Current table");
-        assertThat(fragment).contains("200 rows written");
+        assertThat(fragment).contains("data-full-load-active=\"true\"");
+        assertThat(fragment).contains("id=\"progress-summary-data\"");
+        assertThat(fragment).contains("data-status-cell=\"fullProgress\"");
+        assertThat(fragment).contains("200");
     }
 
     @Test
@@ -149,7 +162,8 @@ class FullLoadProgressViewTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(fragment).contains("id=\"full-load-card\"");
-        assertThat(fragment).doesNotContain("Full-load progress");
+        assertThat(fragment).contains("data-full-load-active=\"false\"");
+        assertThat(fragment).contains("No full load is currently running");
     }
 
     @Test
@@ -175,13 +189,16 @@ class FullLoadProgressViewTest {
         completed.setObjectName("ITEMS");
         completed.setInitialLoadDone(true);
         when(projectService.findProgress(1L)).thenReturn(List.of(completed));
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.COMPLETED,
+                        null, null, null, null)));
 
         String fragment = mvc.perform(get("/projects/1/full-load-card").with(asAdmin()))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        assertThat(fragment).contains("Full-load progress");
-        assertThat(fragment).contains("Full load complete: 1/1 tables");
+        assertThat(fragment).contains("Full load");
+        assertThat(fragment).contains("Completed");
         assertThat(fragment).contains("No full load is currently running");
     }
 
@@ -196,8 +213,8 @@ class FullLoadProgressViewTest {
 
         String html = render();
 
-        assertThat(html).contains("Table status");
-        assertThat(html).contains("Full load complete");
+        assertThat(html).contains("Per-table progress");
+        assertThat(html).contains("Completed");
         assertThat(html).contains("Not started");
         assertThat(html).contains("TODO");
     }
@@ -220,8 +237,37 @@ class FullLoadProgressViewTest {
         assertThat(fragment).contains("id=\"table-status-data\"");
         assertThat(fragment).contains("data-table-status-name=\"DONE\"");
         assertThat(fragment).contains("data-table-status-name=\"TODO\"");
-        assertThat(fragment).contains("id=\"table-status-summary-data\"");
-        assertThat(fragment).contains("data-table-status-summary");
+        assertThat(fragment).contains("id=\"progress-summary-data\"");
+        assertThat(fragment).contains("data-status-cell=\"fullState\"");
+    }
+
+    @Test
+    void theMergedCardShowsBothStatesAndTheRowCountModalCoversUnstartedTables() throws Exception {
+        stubDetail(Map.of());
+        java.time.Instant now = java.time.Instant.now();
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("DONE", ProjectService.SyncState.COMPLETED,
+                        10L, now, null, null, "TIMESTAMP", "UPDATED_AT", true, null,
+                        ProjectService.IncrementalState.RUNNING),
+                new ProjectService.TableSyncStatus("PAUSED", ProjectService.SyncState.COMPLETED,
+                        5L, now, null, null, "TIMESTAMP", "UPDATED_AT", true, null,
+                        ProjectService.IncrementalState.PAUSED),
+                new ProjectService.TableSyncStatus("LIMITED", ProjectService.SyncState.COMPLETED,
+                        5L, now, null, null, "NONE", null, null, true,
+                        ProjectService.IncrementalState.LIMITED),
+                new ProjectService.TableSyncStatus("TODO", ProjectService.SyncState.NOT_STARTED,
+                        null, null, null, null, null, null, null, null,
+                        ProjectService.IncrementalState.NOT_STARTED)));
+
+        String html = render();
+
+        assertThat(html).contains("Full-load state");
+        assertThat(html).contains("Incremental state");
+        assertThat(html).contains("Running");
+        assertThat(html).contains("Paused");
+        assertThat(html).contains("Limited");
+        assertThat(html).contains("data-role=\"row-count-row\"");
+        assertThat(html).contains("data-object=\"TODO\"");
     }
 
     @Test
@@ -241,6 +287,10 @@ class FullLoadProgressViewTest {
         keyless.setObjectName("LOGS");
         keyless.setResumableLoad(false);
         when(projectService.findProgress(1L)).thenReturn(List.of(keyless));
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("LOGS", ProjectService.SyncState.COMPLETED,
+                        null, null, null, null, null, null, false, null,
+                        ProjectService.IncrementalState.RUNNING)));
 
         String html = render();
 

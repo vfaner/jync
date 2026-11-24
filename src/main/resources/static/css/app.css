@@ -440,6 +440,60 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 /* The full-load card lives inside a polling wrapper, so the sibling rule above cannot
    reach it; match the same gap without adding height when the wrapper is empty. */
 #full-load-card > .card { margin-top: 18px; }
+
+/* ─── 各表同步进度：全量 / 增量双面板 ─────────────────────── */
+.progress-summary-wrap { padding: 14px 20px 0; margin-bottom: 14px; }
+.progress-summary {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;
+}
+.progress-panel {
+  --panel-accent: var(--info);
+  position: relative; padding: 12px 14px 11px 17px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-accent) 5%, var(--bg));
+  overflow: hidden;
+}
+.progress-panel::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
+  background: var(--panel-accent); opacity: .75;
+}
+.progress-panel-inc { --panel-accent: var(--ok); }
+.progress-panel-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.progress-panel-icon {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 9px;
+  display: grid; place-items: center;
+  color: var(--panel-accent);
+  background: color-mix(in srgb, var(--panel-accent) 14%, var(--bg));
+}
+.progress-panel-icon .ico { width: 15px; height: 15px; }
+.progress-panel-title { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.progress-panel-title strong { font-size: 13.5px; }
+.progress-panel-head .badge { margin-left: auto; flex: 0 0 auto; }
+.progress-counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.progress-count {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  padding: 3px 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-accent) 8%, var(--bg-tint));
+  color: var(--ink-soft); font-size: 11.5px;
+}
+.progress-count b {
+  font-size: 14px; font-weight: 700; color: var(--ink);
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+.progress-count.is-ok b { color: var(--ok); }
+.progress-count.is-info b { color: var(--info); }
+.progress-count.is-warn b { color: var(--warn); }
+.progress-count.is-danger b { color: var(--danger); }
+.progress-count.is-mute b { color: var(--ink-mute); }
+.progress-live {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px;
+  margin-top: 9px; font-size: 12px;
+}
+.progress-live-item { display: inline-flex; align-items: baseline; gap: 5px; }
+.progress-panel-foot { margin: 8px 0 0; }
+@media (max-width: 900px) {
+  .progress-summary { grid-template-columns: 1fr; }
+}
 .card-head {
   padding: 15px 20px; border-bottom: 1px solid var(--line);
   display: flex; justify-content: space-between; align-items: center; gap: 12px;

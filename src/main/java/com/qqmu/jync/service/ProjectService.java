@@ -55,6 +55,7 @@ import com.qqmu.jync.model.RedisTarget;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.model.SyncTask;
+import com.qqmu.jync.model.TaskStatus;
 import com.qqmu.jync.repository.AlertStateRepository;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.ChunkCheckpointRepository;
@@ -2052,10 +2053,26 @@ public class ProjectService {
 
     /** A row of the detail page's all-table status panel. */
     public record TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
-                                  Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt) {
+                                  Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt,
+                                  String cursorStrategy, String cursorColumn,
+                                  Boolean resumableLoad, Boolean fullLoadWithoutCursor,
+                                  IncrementalState incremental) {
+        /** Compatibility constructor for callers/tests that only need the full-load state. */
+        public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
+                               Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt) {
+            this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
+                    null, null, null, null, IncrementalState.NOT_STARTED);
+        }
     }
 
     public enum SyncState { NOT_STARTED, IN_PROGRESS, COMPLETED, INCOMPLETE }
+
+    /**
+     * Per-table incremental health. It is deliberately coarse: the engines do not persist a
+     * per-table last-check time, so "RUNNING" means the project is running without a known
+     * error, not that this table was proven current on the last cycle.
+     */
+    public enum IncrementalState { NOT_STARTED, RUNNING, PAUSED, ERROR, LIMITED, WAITING }
 
     /**
      * Selected tables plus their last known state. Unlike {@link #findProgress(Long)}, this
@@ -2063,6 +2080,22 @@ public class ProjectService {
      * instead of only tables that already have a progress row.
      */
     public List<TableSyncStatus> findTableSyncStatuses(Long projectId, SyncConfig config) {
+        Project project = projectRepository.findById(projectId).orElse(null);
+        boolean enabled = project != null && Boolean.TRUE.equals(project.getEnabled());
+        SyncTask task = taskStore.find(projectId).orElse(null);
+        boolean taskError = task != null && task.getStatus() == TaskStatus.ERROR;
+        boolean leaseHeld = task != null && task.getLockOwner() != null
+                && (task.getLockExpiresAt() == null
+                || task.getLockExpiresAt().isAfter(Instant.now()));
+        boolean running = enabled || leaseHeld;
+        CaptureStrategy strategy = config.getCaptureStrategyOrDefault();
+        boolean cdc = strategy.isLogCdc();
+        boolean baselinePending = false;
+        if (cdc) {
+            CdcPosition position = positionStore.find(projectId).orElse(null);
+            baselinePending = position == null
+                    || !Boolean.TRUE.equals(position.isBaselineDone());
+        }
         Map<String, SyncProgress> progressByName = new LinkedHashMap<>();
         for (SyncProgress progress : progressRepository.findByProjectId(projectId)) {
             if (progress.getObjectName() != null) {
@@ -2088,7 +2121,10 @@ public class ProjectService {
             FullLoadProgress load = inFlight.get(name);
             SyncState state;
             if (load != null) {
-                state = SyncState.IN_PROGRESS;
+                // Checkpoints survive a stop; only call it "in progress" when the project is
+                // enabled or a round still holds a live lease. A stopped partial load is
+                // INCOMPLETE, not a phantom running load.
+                state = running ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
             } else if (progress != null && Boolean.TRUE.equals(progress.getInitialLoadDone())) {
                 state = SyncState.COMPLETED;
             } else if (progress != null) {
@@ -2096,11 +2132,33 @@ public class ProjectService {
             } else {
                 state = SyncState.NOT_STARTED;
             }
+            IncrementalState incremental;
+            if (state != SyncState.COMPLETED) {
+                incremental = IncrementalState.NOT_STARTED;
+            } else if (taskError) {
+                incremental = IncrementalState.ERROR;
+            } else if (!enabled) {
+                incremental = IncrementalState.PAUSED;
+            } else if (cdc && baselinePending) {
+                incremental = IncrementalState.WAITING;
+            } else if (!cdc && (progress != null
+                    && ("IDENTITY".equalsIgnoreCase(progress.getCursorStrategy())
+                    || "NONE".equalsIgnoreCase(progress.getCursorStrategy())
+                    || Boolean.TRUE.equals(progress.getFullLoadWithoutCursor())))) {
+                incremental = IncrementalState.LIMITED;
+            } else {
+                incremental = IncrementalState.RUNNING;
+            }
             result.add(new TableSyncStatus(name, state,
                     progress == null ? null : progress.getRowsSyncedTotal(),
                     progress == null ? null : progress.getLastSyncTime(),
                     load == null ? null : load.getRowsCopied(),
-                    load == null ? null : load.getLastUpdatedAt()));
+                    load == null ? null : load.getLastUpdatedAt(),
+                    progress == null ? null : progress.getCursorStrategy(),
+                    progress == null ? null : progress.getCursorColumn(),
+                    progress == null ? null : progress.getResumableLoad(),
+                    progress == null ? null : progress.getFullLoadWithoutCursor(),
+                    incremental));
         }
         return result;
     }

@@ -3474,7 +3474,6 @@
   function bindFullLoadRefresh() {
     var card = document.getElementById('full-load-card');
     if (!card) return;
-    var progressCard = document.getElementById('progress-card');
     var refreshUrl = card.getAttribute('data-refresh-url')
       || (window.location.pathname + '/full-load-card');
     var timer = null;
@@ -3495,40 +3494,32 @@
       timer = setInterval(refresh, FULL_LOAD_REFRESH_INTERVAL);
     }
 
-    function updateBadges(fresh) {
-      if (!progressCard) return;
-      var rows = {};
-      progressCard.querySelectorAll('tr[data-progress-table]').forEach(function (row) {
-        rows[row.getAttribute('data-progress-table')] = row;
-      });
-      fresh.querySelectorAll('[data-full-load-badge-table]').forEach(function (entry) {
-        var row = rows[entry.getAttribute('data-full-load-badge-table')];
-        var target = row && row.querySelector('[data-role="full-load-badge"]');
-        if (target) {
-          target.innerHTML = entry.innerHTML;
-        }
-      });
-    }
-
+    /**
+     * Refresh only the four read-only cells and the two summary panels. Replacing the whole
+     * row would wipe a cursor input the operator is typing into; replacing the whole card
+     * would also drop the preview buttons' state.
+     */
     function updateTableStatus(fresh) {
-      var visible = document.querySelectorAll('#table-status-card tr[data-table-status-row]');
-      if (!visible.length) return;
+      var visible = document.querySelectorAll('#progress-card tr[data-progress-table]');
       var byName = {};
       visible.forEach(function (row) {
-        byName[row.getAttribute('data-table-status-name')] = row;
+        byName[row.getAttribute('data-progress-table')] = row;
       });
       fresh.querySelectorAll('#table-status-data tr[data-table-status-row]').forEach(function (entry) {
         var row = byName[entry.getAttribute('data-table-status-name')];
-        if (row) {
-          row.innerHTML = entry.innerHTML;
-        }
+        if (!row) return;
+        entry.querySelectorAll('[data-status-cell]').forEach(function (cell) {
+          var target = row.querySelector(
+            '[data-status-cell="' + cell.getAttribute('data-status-cell') + '"]');
+          if (target) {
+            target.innerHTML = cell.innerHTML;
+          }
+        });
       });
-      // Counts in the summary badge shift as tables start/finish; the row update alone
-      // would leave a stale "0 running" next to a visibly running table.
-      var summary = document.querySelector('#table-status-card [data-table-status-summary]');
-      var freshSummary = fresh.querySelector('#table-status-summary-data [data-table-status-summary]');
+      var summary = document.getElementById('progress-summary');
+      var freshSummary = fresh.getElementById('progress-summary-data');
       if (summary && freshSummary) {
-        summary.textContent = freshSummary.textContent;
+        summary.innerHTML = freshSummary.innerHTML;
       }
     }
 
@@ -3549,7 +3540,6 @@
             window.location.reload();
             return;
           }
-          updateBadges(fresh);
           updateTableStatus(fresh);
           card.innerHTML = freshCard.innerHTML;
           active = freshCard.getAttribute('data-full-load-active') === 'true';

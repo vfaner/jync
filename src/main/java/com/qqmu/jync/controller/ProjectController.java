@@ -613,7 +613,7 @@ public class ProjectController {
         List<SyncProgress> progress = projectService.findProgress(id);
         model.addAttribute("progressList", progress);
         addFullLoadProgress(id, progress, model);
-        return "project-detail/full-load-progress :: card";
+        return "project-detail/full-load-progress :: data";
     }
 
     /**
@@ -636,6 +636,24 @@ public class ProjectController {
                 .filter(status -> status.state() == ProjectService.SyncState.INCOMPLETE).count());
         model.addAttribute("tableStatusNotStarted", tableStatuses.stream()
                 .filter(status -> status.state() == ProjectService.SyncState.NOT_STARTED).count());
+        model.addAttribute("tableStatusIncRunning", tableStatuses.stream()
+                .filter(status -> status.incremental()
+                        == ProjectService.IncrementalState.RUNNING).count());
+        model.addAttribute("tableStatusIncPaused", tableStatuses.stream()
+                .filter(status -> status.incremental()
+                        == ProjectService.IncrementalState.PAUSED).count());
+        model.addAttribute("tableStatusIncError", tableStatuses.stream()
+                .filter(status -> status.incremental()
+                        == ProjectService.IncrementalState.ERROR).count());
+        model.addAttribute("tableStatusIncNotStarted", tableStatuses.stream()
+                .filter(status -> status.incremental()
+                        == ProjectService.IncrementalState.NOT_STARTED).count());
+        model.addAttribute("tableStatusIncLimited", tableStatuses.stream()
+                .filter(status -> status.incremental()
+                        == ProjectService.IncrementalState.LIMITED).count());
+        model.addAttribute("tableStatusIncWaiting", tableStatuses.stream()
+                .filter(status -> status.incremental()
+                        == ProjectService.IncrementalState.WAITING).count());
     }
 
     /**

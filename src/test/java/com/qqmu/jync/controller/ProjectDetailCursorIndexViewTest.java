@@ -1,6 +1,7 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
@@ -114,6 +115,10 @@ class ProjectDetailCursorIndexViewTest {
         stubProject();
         when(projectService.findProgress(1L))
                 .thenReturn(List.of(cursor("EVENTS", "NONE")));
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("EVENTS", ProjectService.SyncState.COMPLETED,
+                        1L, null, null, null, "NONE", "UPDATED", true, null,
+                        ProjectService.IncrementalState.LIMITED)));
 
         String page = render("zh-CN");
 
@@ -152,6 +157,13 @@ class ProjectDetailCursorIndexViewTest {
         when(projectService.findTask(1L)).thenReturn(Optional.empty());
         when(projectService.findProgress(1L))
                 .thenReturn(List.of(cursor("EVENTS"), cursor("LOGS")));
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("EVENTS", ProjectService.SyncState.COMPLETED,
+                        1L, null, null, null, "TIMESTAMP", "UPDATED", true, null,
+                        ProjectService.IncrementalState.PAUSED),
+                new ProjectService.TableSyncStatus("LOGS", ProjectService.SyncState.COMPLETED,
+                        1L, null, null, null, "TIMESTAMP", "UPDATED", true, null,
+                        ProjectService.IncrementalState.PAUSED)));
         when(projectService.isScheduled(1L)).thenReturn(false);
         when(projectService.listSourceObjects(1L)).thenReturn(new ProjectService.SourceObjects());
     }
