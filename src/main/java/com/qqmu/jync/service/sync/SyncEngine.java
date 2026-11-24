@@ -11,6 +11,10 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.function.BooleanSupplier;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -1025,7 +1029,7 @@ public class SyncEngine {
         Set<String> knownTargetTables = null;
         try {
             try {
-                knownTargetTables = new HashSet<>();
+                knownTargetTables = java.util.concurrent.ConcurrentHashMap.newKeySet();
                 for (String name : ctx.getTargetReader()
                         .listTableNames(target, ctx.getTargetSchema())) {
                     knownTargetTables.add(name.toUpperCase());
@@ -1036,6 +1040,12 @@ public class SyncEngine {
                 knownTargetTables = null;
             }
 
+            int concurrentTables = effectiveTableConcurrency(ctx);
+            if (concurrentTables > 1) {
+                syncTablesConcurrently(sourceMeta.getTables(), ctx, result, blockedTables,
+                        knownTargetTables, auditBudget, concurrentTables);
+                return;
+            }
             // Parent-first order is derived from the source foreign-key dictionary; a data-only
             // cycle reads that dictionary only when the target loads with its constraints
             // enforced (see readSourceMetadata). Otherwise every table has zero foreign keys
@@ -1124,6 +1134,109 @@ public class SyncEngine {
                 }
             }
         }
+    }
+
+    /**
+     * Opt-in table-level concurrency. The global setting is a ceiling, further reduced by
+     * the connection pool and the per-table full-load worker count; a configuration that
+     * cannot fit two tables safely stays sequential instead of racing for pool seats.
+     */
+    private int effectiveTableConcurrency(SyncContext ctx) {
+        int configured = Math.min(8, Math.max(1, properties.getMaxConcurrentTables()));
+        if (configured <= 1 || ctx.getConnectionProvider() == null) {
+            return 1;
+        }
+        int tableParallelism = ctx.getConfig().getFullLoadParallelism() == null
+                ? properties.getFullLoadParallelism()
+                : ctx.getConfig().getFullLoadParallelism();
+        int perTable = 1 + Math.max(1, tableParallelism);
+        int maxPool = Math.max(2, properties.getMaxPoolSize());
+        boolean shared = ctx.getSourceConfig() != null && ctx.getTargetConfig() != null
+                && ctx.getSourceConfig().getId() != null
+                && ctx.getSourceConfig().getId().equals(ctx.getTargetConfig().getId());
+        // Distinct endpoints have one pool per side; a shared config has both sides plus
+        // both sides of every worker in the same pool.
+        int byPool = shared
+                ? Math.max(0, (maxPool - 2) / (2 * perTable))
+                : Math.max(0, (maxPool - 1) / perTable);
+        return Math.max(1, Math.min(configured, byPool));
+    }
+
+    private void syncTablesConcurrently(List<TableMeta> allTables, SyncContext ctx,
+                                        SyncResult result, Set<String> blockedTables,
+                                        Set<String> knownTargetTables,
+                                        ContentAuditService.CycleBudget auditBudget,
+                                        int concurrency) throws SQLException {
+        List<TableMeta> selected = allTables.stream()
+                .filter(table -> ctx.getConfig().includesTable(table.getName()))
+                .toList();
+        List<List<TableMeta>> levels = structureSync.dependencyLevels(selected);
+        log.info("Project '{}': data phase runs up to {} tables concurrently across {}"
+                + " dependency waves", ctx.projectName(), concurrency, levels.size());
+        ExecutorService pool = Executors.newFixedThreadPool(concurrency, runnable -> {
+            Thread thread = new Thread(runnable, "table-sync-" + ctx.projectId());
+            thread.setDaemon(true);
+            return thread;
+        });
+        try {
+            for (List<TableMeta> level : levels) {
+                List<Future<TableOutcome>> futures = new ArrayList<>(level.size());
+                for (TableMeta table : level) {
+                    futures.add(pool.submit(() -> syncTableTask(table, ctx, blockedTables,
+                            knownTargetTables, auditBudget)));
+                }
+                for (Future<TableOutcome> future : futures) {
+                    TableOutcome outcome;
+                    try {
+                        outcome = future.get();
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new StopRequestedException(
+                                "Concurrent table sync interrupted for project " + ctx.projectId());
+                    } catch (ExecutionException e) {
+                        Throwable cause = e.getCause();
+                        if (cause instanceof RuntimeException runtime) {
+                            throw runtime;
+                        }
+                        throw new IllegalStateException("Concurrent table sync failed", cause);
+                    }
+                    result.mergeFrom(outcome.result());
+                    if (outcome.fatal() != null) {
+                        throw outcome.fatal();
+                    }
+                }
+            }
+        } finally {
+            DataSyncService.stopWorkers(pool);
+        }
+    }
+
+    /** One table on its own pair of pooled connections; safe to run beside another table. */
+    private TableOutcome syncTableTask(TableMeta table, SyncContext ctx,
+                                       Set<String> blockedTables, Set<String> knownTargetTables,
+                                       ContentAuditService.CycleBudget auditBudget) {
+        SyncResult local = new SyncResult();
+        try (Connection source = ctx.getConnectionProvider().openWaiting(ctx.getSourceConfig());
+             Connection target = ctx.getConnectionProvider().openWaiting(ctx.getTargetConfig())) {
+            ctx.requireLease();
+            syncOneTable(table, source, target, ctx, local, blockedTables, knownTargetTables,
+                    auditBudget);
+            return new TableOutcome(local, null);
+        } catch (StopRequestedException | LockLostException | PoolContentionException e) {
+            return new TableOutcome(local, e);
+        } catch (SQLException | RuntimeException e) {
+            String msg = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            log.error("Data sync failed for table '{}' in project '{}': {}",
+                    table.getName(), ctx.projectName(), msg, e);
+            local.addError(table.getName() + ": " + msg);
+            stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
+                    ChangeType.ERROR, msg, false, 0);
+            forgetVerifiedShape(ctx, table);
+            return new TableOutcome(local, null);
+        }
+    }
+
+    private record TableOutcome(SyncResult result, RuntimeException fatal) {
     }
 
     /**

@@ -17,6 +17,7 @@ table=orders thread=full-load-orders rows=10000000 changed=10000000 elapsed=40.0
 | `sync.full-load-batch-size` | `2000` | 1000–5000 | 每批行数；越大提交越少，回滚与内存成本越高 |
 | `sync.full-load-fetch-size` | `2000` | 1000–5000 | 源端结果集批量；大字段表调小 |
 | `sync.full-load-parallelism` | `2` | 1–4 | 单表并行 worker，受连接池约束；1→2 收益最大 |
+| `sync.max-concurrent-tables` | `1` | 1；池足够再调大 | 多表并发装载，按外键波次执行并受连接池约束 |
 | `sync.chunk-size` | `100000` | 5 万–20 万 | 每块行数上限，也是崩溃后最多重读的行数 |
 | `sync.adaptive-chunk-size` | `true` | 大字段表保留 | 按声明的列宽自动缩小宽表/LOB 表的块行数 |
 | `sync.chunk-target-bytes` | `67108864` | 32–128 MiB | 每个分块的估算字节上限 |

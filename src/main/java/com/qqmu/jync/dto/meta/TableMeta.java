@@ -74,5 +74,9 @@ public class TableMeta {
     public static class ForeignKeyMeta {
         private String name;
         private String columnName;
+        /** Referenced parent table, as reported by the JDBC imported-key result. */
+        private String referencedTable;
+        /** Referenced parent column. */
+        private String referencedColumn;
     }
 }

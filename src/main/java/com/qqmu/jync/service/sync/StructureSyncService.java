@@ -863,12 +863,80 @@ public class StructureSyncService {
     public List<TableMeta> sortByDependency(List<TableMeta> tables) {
         List<TableMeta> sorted = new ArrayList<>(tables);
         // Tables with no outgoing foreign keys first, then by number of dependencies. A full
-        // topological sort is unnecessary because CREATE TABLE here never emits FK clauses;
-        // this ordering only improves the odds for targets that infer constraints.
+        // topological sort is unnecessary for CREATE ordering because this path does not emit
+        // FK clauses; this ordering only improves the odds for targets that infer constraints.
         sorted.sort((a, b) -> Integer.compare(
                 a.getForeignKeys() == null ? 0 : a.getForeignKeys().size(),
                 b.getForeignKeys() == null ? 0 : b.getForeignKeys().size()));
         return sorted;
+    }
+
+    /**
+     * Foreign-key waves for the opt-in concurrent data phase. Every table in a wave may run
+     * at the same time; a child is held until all of its selected parents have finished.
+     *
+     * <p>A missing/blank referenced table (older drivers, a parent outside the project) is
+     * treated as no dependency. A cycle — which a valid schema cannot have, but a catalog
+     * with partial metadata can look like — falls back to one table per wave so the data
+     * phase degrades to sequential rather than starting a child early.
+     */
+    public List<List<TableMeta>> dependencyLevels(List<TableMeta> tables) {
+        Map<String, TableMeta> byName = new java.util.LinkedHashMap<>();
+        for (TableMeta table : tables) {
+            byName.put(table.getName().toUpperCase(java.util.Locale.ROOT), table);
+        }
+        Map<String, Integer> indegree = new java.util.HashMap<>();
+        Map<String, List<TableMeta>> children = new java.util.HashMap<>();
+        for (TableMeta table : tables) {
+            indegree.put(table.getName().toUpperCase(java.util.Locale.ROOT), 0);
+        }
+        for (TableMeta table : tables) {
+            if (table.getForeignKeys() == null) {
+                continue;
+            }
+            for (TableMeta.ForeignKeyMeta fk : table.getForeignKeys()) {
+                String parent = fk.getReferencedTable() == null
+                        ? null : fk.getReferencedTable().toUpperCase(java.util.Locale.ROOT);
+                String child = table.getName().toUpperCase(java.util.Locale.ROOT);
+                if (parent == null || parent.equals(child) || !byName.containsKey(parent)) {
+                    continue;
+                }
+                indegree.merge(child, 1, Integer::sum);
+                children.computeIfAbsent(parent, ignored -> new ArrayList<>()).add(table);
+            }
+        }
+        List<List<TableMeta>> levels = new ArrayList<>();
+        java.util.Set<String> placed = new java.util.HashSet<>();
+        List<TableMeta> current = new ArrayList<>();
+        for (TableMeta table : tables) {
+            if (indegree.get(table.getName().toUpperCase(java.util.Locale.ROOT)) == 0) {
+                current.add(table);
+            }
+        }
+        while (!current.isEmpty()) {
+            levels.add(List.copyOf(current));
+            List<TableMeta> next = new ArrayList<>();
+            for (TableMeta table : current) {
+                String name = table.getName().toUpperCase(java.util.Locale.ROOT);
+                placed.add(name);
+                for (TableMeta child : children.getOrDefault(name, List.of())) {
+                    String childName = child.getName().toUpperCase(java.util.Locale.ROOT);
+                    int left = indegree.merge(childName, -1, Integer::sum);
+                    if (left == 0) {
+                        next.add(child);
+                    }
+                }
+            }
+            current = next;
+        }
+        // Cycle fallback: no valid FK graph should get here, but never run a child before its
+        // parent just because the metadata was incomplete.
+        for (TableMeta table : tables) {
+            if (!placed.contains(table.getName().toUpperCase(java.util.Locale.ROOT))) {
+                levels.add(List.of(table));
+            }
+        }
+        return levels;
     }
 
     /** Maps object type to the change-log entry type, folding FUNCTION into PROCEDURE. */

@@ -115,6 +115,17 @@ public class SyncProperties {
     private int fullLoadParallelism = 2;
 
     /**
+     * Maximum number of tables the data phase may process concurrently.
+     *
+     * <p>Default 1 preserves the historical table-by-table order. Values above 1 are
+     * deliberately opt-in: they multiply source/target load and are bounded by the shared
+     * connection pools. Tables are grouped into foreign-key waves first, so a child table
+     * never starts before the parent table it references has finished. The per-table
+     * {@link #fullLoadParallelism} still applies inside each table.
+     */
+    private int maxConcurrentTables = 1;
+
+    /**
      * Whether a newly created table's non-unique secondary indexes wait until its initial
      * full load has committed before they are built.
      *

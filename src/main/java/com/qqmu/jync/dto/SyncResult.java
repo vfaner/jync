@@ -76,6 +76,28 @@ public class SyncResult {
         this.skippedTables.add(new SkippedTable(table, reason));
     }
 
+    /**
+     * Folds a worker's per-table result into the cycle summary. The data phase may run
+     * independent tables in parallel (opt-in); the aggregate stays single-threaded at the
+     * coordinator, so counters and error lists need no concurrent collection.
+     */
+    public synchronized void mergeFrom(SyncResult other) {
+        if (other == null) {
+            return;
+        }
+        structureChanges += other.structureChanges;
+        rowsInserted += other.rowsInserted;
+        rowsUpdated += other.rowsUpdated;
+        rowsDeleted += other.rowsDeleted;
+        tablesProcessed += other.tablesProcessed;
+        errors.addAll(other.errors);
+        skippedTables.addAll(other.skippedTables);
+        success = success && other.success;
+        stopped = stopped || other.stopped;
+        deferred = deferred || other.deferred;
+        lockLost = lockLost || other.lockLost;
+    }
+
     public long totalRows() {
         return rowsInserted + rowsUpdated + rowsDeleted;
     }

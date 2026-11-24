@@ -489,6 +489,8 @@ public class GenericMetadataReader implements MetadataReader {
                 TableMeta.ForeignKeyMeta fk = new TableMeta.ForeignKeyMeta();
                 fk.setName(rs.getString("FK_NAME"));
                 fk.setColumnName(rs.getString("FKCOLUMN_NAME"));
+                fk.setReferencedTable(rs.getString("PKTABLE_NAME"));
+                fk.setReferencedColumn(rs.getString("PKCOLUMN_NAME"));
                 fks.add(fk);
             }
         } catch (SQLException e) {
