@@ -1955,6 +1955,10 @@
 
   /* ─── 行数核对 ──────────────────────────────────────────── */
 
+  /** Exact COUNT(*) over an arbitrary number of tables would scan for hours; per-row recheck
+      remains available for specific tables. */
+  var ROW_COUNT_EXACT_MAX = 50;
+
   /**
    * 「核对行数」：逐表串行请求源/目标 COUNT(*)，结果填进弹窗。
    *
@@ -2244,6 +2248,11 @@
       startBtn.addEventListener('click', function () {
         var all = rows();
         if (!all.length) { return; }
+        if (!estimateMode() && all.length > ROW_COUNT_EXACT_MAX) {
+          JyncDialog.alert(t('rowcount.exactTooMany')
+              .replace('{0}', String(ROW_COUNT_EXACT_MAX)), 'warn');
+          return;
+        }
         var template;
         if (estimateMode()) {
           template = btn.dataset.running === 'true'

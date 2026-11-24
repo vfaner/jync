@@ -229,11 +229,12 @@ public class SyncProperties {
     private long rowCountAuditIntervalMs = 60_000L;
 
     /**
-     * Per-side timeout for the user-triggered exact row-count background job. Five hundred
-     * million rows can exceed the old 15-second browser budget by minutes; 0 is rejected
-     * because an unbounded COUNT(*) would occupy a job thread indefinitely.
+     * Total timeout shared by both sides of one exact row-count background job. Five hundred
+     * million rows can exceed the old 15-second browser budget by minutes; a single budget
+     * prevents a slow source plus a slow target from doubling the wait. 0 is rejected because
+     * an unbounded COUNT(*) would occupy a job thread indefinitely.
      */
-    private int rowCountJobTimeoutSeconds = 300;
+    private int rowCountJobTimeoutSeconds = 600;
 
     /**
      * Shortest gap between two content audits of the same table; {@code 0} disables the audit.

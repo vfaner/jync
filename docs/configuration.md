@@ -110,7 +110,7 @@ MySQL 源连接由程序自动追加 `netTimeoutForStreamingResults=0`（URL 或
 | `sync.chunk-size` | `100000` | 全量每块行数；`0` 关闭分块 |
 | `sync.max-pool-size` | `5` | 每个数据库连接池上限 |
 | `sync.max-concurrent-tables` | `1` | 多表并发装载上限；受连接池与单表并行度约束 |
-| `sync.row-count-job-timeout-seconds` | `300` | 精确行数后台任务单侧超时；大表可调大 |
+| `sync.row-count-job-timeout-seconds` | `600` | 精确行数后台任务的总预算（源 + 目标共享）；大表可调大 |
 | `sync.crypto-password` / `crypto-salt` | 留空自动生成 | 连接密码与告警地址的加密密钥 |
 | `sync.ai.enabled` | `true` | 置 `false` 则 AI 菜单与接口一并下线；这是部署级硬关，「系统管理 → 系统配置 → AI 辅助」的页面开关置灰且无法覆盖。留空/`true` 时由页面开关决定（默认开） |
 | `app.update-check.enabled` | `true` | 新版本检查；关闭后不发起外网请求。也可在「系统配置 → 更新检查」关闭；此处显式设置时页面开关变为只读 |

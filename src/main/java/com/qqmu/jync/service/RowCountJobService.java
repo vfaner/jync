@@ -72,7 +72,8 @@ public class RowCountJobService {
         }
         try {
             int timeout = Math.max(1, properties.getRowCountJobTimeoutSeconds());
-            TableRowCount result = preview.rowCount(job.projectId, job.table, true, timeout);
+            TableRowCount result = preview.rowCount(job.projectId, job.table, true, timeout,
+                    job.control);
             job.finish(result, null);
         } catch (RuntimeException e) {
             if (job.isCancelled()) {
@@ -107,6 +108,7 @@ public class RowCountJobService {
         private final Long projectId;
         private final String table;
         private final Instant createdAt = Instant.now();
+        private final RowCountControl control = new RowCountControl();
         private volatile Status status = Status.RUNNING;
         private volatile TableRowCount rowCount;
         private volatile String error;
@@ -123,6 +125,9 @@ public class RowCountJobService {
                 return false;
             }
             status = Status.CANCELLED;
+            // The statement cancel is what actually stops a server-side scan; the thread
+            // interrupt alone is advisory and JDBC drivers may ignore it.
+            control.cancel();
             Future<?> running = future;
             if (running != null) {
                 running.cancel(true);

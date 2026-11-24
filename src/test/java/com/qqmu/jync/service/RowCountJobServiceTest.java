@@ -1,6 +1,8 @@
 package com.qqmu.jync.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -20,7 +22,8 @@ class RowCountJobServiceTest {
                 new TableRowCount.SideCount(TableRowCount.Status.OK, 3_000_000L, 10L),
                 new TableRowCount.SideCount(TableRowCount.Status.OK, 2_999_000L, 11L),
                 21L);
-        when(preview.rowCount(1L, "orders", true, 300)).thenReturn(counts);
+        when(preview.rowCount(eq(1L), eq("orders"), eq(true), eq(600),
+                any(RowCountControl.class))).thenReturn(counts);
         RowCountJobService service = new RowCountJobService(preview, new SyncProperties());
 
         String id = service.submit(1L, "orders");
@@ -29,6 +32,34 @@ class RowCountJobServiceTest {
         assertThat(done).isPresent();
         assertThat(done.get().status()).isEqualTo(RowCountJobService.Status.DONE);
         assertThat(done.get().rowCount().source().count()).isEqualTo(3_000_000L);
+    }
+
+    @Test
+    void cancellingAJobStopsItsControlAndLeavesTheResultUnused() throws Exception {
+        TablePreviewService preview = mock(TablePreviewService.class);
+        java.util.concurrent.CountDownLatch started = new java.util.concurrent.CountDownLatch(1);
+        when(preview.rowCount(eq(1L), eq("orders"), eq(true), eq(600),
+                any(RowCountControl.class))).thenAnswer(inv -> {
+                    RowCountControl control = inv.getArgument(4);
+                    started.countDown();
+                    while (!control.isCancelled()) {
+                        Thread.sleep(10);
+                    }
+                    return new TableRowCount("orders",
+                            new TableRowCount.SideCount(TableRowCount.Status.OK, 1L, 1L),
+                            new TableRowCount.SideCount(TableRowCount.Status.OK, 1L, 1L),
+                            2L);
+                });
+        RowCountJobService service = new RowCountJobService(preview, new SyncProperties());
+
+        String id = service.submit(1L, "orders");
+        assertThat(started.await(2, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+        assertThat(service.cancel(1L, id)).isTrue();
+
+        Optional<RowCountJobService.JobView> cancelled = waitFor(service, id);
+        assertThat(cancelled).isPresent();
+        assertThat(cancelled.get().status()).isEqualTo(RowCountJobService.Status.CANCELLED);
+        assertThat(cancelled.get().rowCount()).isNull();
     }
 
     @Test

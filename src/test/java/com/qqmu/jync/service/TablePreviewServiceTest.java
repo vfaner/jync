@@ -396,6 +396,17 @@ class TablePreviewServiceTest {
     }
 
     @Test
+    void anAlreadyCancelledRowCountJobDoesNotOpenEitherConnection() {
+        RowCountControl control = new RowCountControl();
+        control.cancel();
+
+        TableRowCount counts = service.rowCount(1L, "orders", true, 60, control);
+
+        assertThat(counts.source().status()).isEqualTo(TableRowCount.Status.ERROR);
+        assertThat(counts.target().status()).isEqualTo(TableRowCount.Status.ERROR);
+    }
+
+    @Test
     void rowCountMapsAStatementTimeoutToTheTimeoutStatus() throws SQLException {
         createOrders(1);
         Connection slow = mock(Connection.class);

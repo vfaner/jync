@@ -8,6 +8,7 @@ import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.stereotype.Service;
 
@@ -132,24 +133,36 @@ public class TablePreviewService {
     }
 
     /**
-     * Same as {@link #rowCount(Long, String, boolean)}, with an explicit per-side timeout.
-     * The background exact-count job uses a much larger budget than the browser request;
-     * keeping it here means the SQL, status mapping and side isolation stay one path.
+     * Same as {@link #rowCount(Long, String, boolean)}, with an explicit total timeout.
+     * The budget is shared by both sides; the background exact-count job passes the
+     * administrator-configured total, so one slow side cannot silently double the wait.
      */
     public TableRowCount rowCount(Long projectId, String table, boolean exact,
                                   int timeoutSeconds) {
+        return rowCount(projectId, table, exact, timeoutSeconds, new RowCountControl());
+    }
+
+    /** As above, with a control that lets a cancellation job stop the live statements. */
+    public TableRowCount rowCount(Long projectId, String table, boolean exact,
+                                  int timeoutSeconds, RowCountControl control) {
         long started = System.currentTimeMillis();
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        RowCountControl handle = control == null ? new RowCountControl() : control;
         int timeout = Math.max(1, timeoutSeconds);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeout);
         return new TableRowCount(table,
-                countSide(project, table, Side.SOURCE, exact, timeout),
-                countSide(project, table, Side.TARGET, exact, timeout),
+                countSide(project, table, Side.SOURCE, exact, deadline, handle),
+                countSide(project, table, Side.TARGET, exact, deadline, handle),
                 System.currentTimeMillis() - started);
     }
 
     private TableRowCount.SideCount countSide(Project project, String table, Side side,
-                                              boolean exact, int timeoutSeconds) {
+                                              boolean exact, long deadlineNanos,
+                                              RowCountControl control) {
+        if (control.isCancelled()) {
+            return failed(TableRowCount.Status.ERROR, System.currentTimeMillis());
+        }
         long started = System.currentTimeMillis();
         Long databaseId = side == Side.SOURCE ? project.getSourceDbId() : project.getTargetDbId();
         if (databaseId == null) {
@@ -162,6 +175,9 @@ public class TablePreviewService {
         MetadataReader reader = readerFactory.forType(config.getType(), config.resolvedFamily());
         SqlDialect dialect = dialectFactory.forType(config.getType(), null, config.resolvedFamily());
         try (Connection conn = dataSourceManager.getConnection(config)) {
+            if (control.isCancelled()) {
+                return failed(TableRowCount.Status.ERROR, started);
+            }
             String schema = resolveSchema(config, reader, conn);
             String requested = side == Side.TARGET
                     ? parseConfig(project).targetTableName(table) : table;
@@ -171,13 +187,26 @@ public class TablePreviewService {
                 return new TableRowCount.SideCount(TableRowCount.Status.OK, count,
                         System.currentTimeMillis() - started, true);
             }
+            long remainingSeconds = remainingSeconds(deadlineNanos);
+            if (remainingSeconds <= 0) {
+                return failed(TableRowCount.Status.TIMEOUT, started);
+            }
             String sql = "SELECT COUNT(*) FROM " + dialect.qualify(schema, actualTable);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                JdbcUtil.applyQueryTimeout(ps, timeoutSeconds);
-                try (ResultSet rs = ps.executeQuery()) {
-                    long count = rs.next() ? rs.getLong(1) : 0L;
-                    return new TableRowCount.SideCount(TableRowCount.Status.OK, count,
-                            System.currentTimeMillis() - started, false);
+                control.register(ps);
+                try {
+                    if (control.isCancelled()) {
+                        return failed(TableRowCount.Status.ERROR, started);
+                    }
+                    JdbcUtil.applyQueryTimeout(ps, (int) Math.min(Integer.MAX_VALUE,
+                            remainingSeconds));
+                    try (ResultSet rs = ps.executeQuery()) {
+                        long count = rs.next() ? rs.getLong(1) : 0L;
+                        return new TableRowCount.SideCount(TableRowCount.Status.OK, count,
+                                System.currentTimeMillis() - started, false);
+                    }
+                } finally {
+                    control.unregister(ps);
                 }
             }
         } catch (SQLException e) {
@@ -193,6 +222,11 @@ public class TablePreviewService {
                     ? TableRowCount.Status.MISSING_TABLE : TableRowCount.Status.ERROR;
             return failed(status, started);
         }
+    }
+
+    private long remainingSeconds(long deadlineNanos) {
+        long remaining = deadlineNanos - System.nanoTime();
+        return remaining <= 0 ? 0 : Math.max(1, TimeUnit.NANOSECONDS.toSeconds(remaining));
     }
 
     private TableRowCount.SideCount failed(TableRowCount.Status status, long started) {

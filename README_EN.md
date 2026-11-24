@@ -190,7 +190,7 @@ com.qqmu.jync
 - **Verification matrix**: [docs/verification-matrix.md](docs/verification-matrix.md)
 - **Release notes**: [docs/release-notes/](docs/release-notes/)
 
-`mvn test` runs 6788 unit tests (6784 pass; 3 TLS certificate cases depend on the local certificate setup and 1 Linux-only case is skipped on macOS) covering dialect and SQL rewriting, full loads and resume, the
+`mvn test` runs 6793 unit tests (6789 pass; 3 TLS certificate cases depend on the local certificate setup and 1 Linux-only case is skipped on macOS) covering dialect and SQL rewriting, full loads and resume, the
 six CDC engines, Redis projection, dedicated migration, ETL, alerts, ownership, the AI assistant
 and security. Real-database `*IT` suites need Docker; commands are in the verification matrix.
 

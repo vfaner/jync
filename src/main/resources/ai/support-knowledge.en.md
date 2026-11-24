@@ -188,7 +188,11 @@ executes once when a worker becomes free.
 
 ## Row counts and content audit
 
-- Task detail → Check row count compares COUNT(*) on both sides on demand.
+- Task detail → Check row count defaults to a fast estimate from catalog statistics (marked
+  approximate). Exact checks run in a background job; the source and target share one total
+  budget, `sync.row-count-job-timeout-seconds` (default 600 s), and a slow side is marked
+  TIMEOUT independently. Stop cancels the live COUNT(*) statement. One exact batch is limited
+  to 50 tables; use the estimate or re-check individual tables for more.
 - Content audit samples 50 rows every 15 minutes by default; it only reports differences and never
   repairs the target, and requires a primary key, an incremental strategy and a finished full load.
 - Settings: sync.content-audit-interval-ms (900000), sample-size (50), max-rows (2000000),
