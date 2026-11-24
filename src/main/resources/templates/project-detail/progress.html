@@ -3,8 +3,7 @@
 <body>
 <th:block th:fragment="block" th:remove="tag">
 <!-- 各表进度与游标策略 -->
-<div class="card" id="progress-card"
-     th:attr="data-badge-refresh-url=@{/projects/{id}/progress-badges(id=${project.id})}">
+<div class="card" id="progress-card">
     <div class="card-head">
         <h2><svg class="ico"><use href="#graph-up"/></svg> <span th:text="#{project.progress}">Progress</span></h2>
         <div class="card-head-tools">

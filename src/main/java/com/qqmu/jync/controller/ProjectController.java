@@ -606,7 +606,9 @@ public class ProjectController {
     @GetMapping("/{id}/full-load-card")
     public String fullLoadCardFragment(@PathVariable Long id, Model model) {
         projectService.findById(id).ifPresent(project -> model.addAttribute("project", project));
-        addFullLoadProgress(id, projectService.findProgress(id), model);
+        List<SyncProgress> progress = projectService.findProgress(id);
+        model.addAttribute("progressList", progress);
+        addFullLoadProgress(id, progress, model);
         return "project-detail/full-load-progress :: card";
     }
 

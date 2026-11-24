@@ -44,6 +44,14 @@
                th:text="#{fullload.noActive}">No full load is currently running.</p>
         </div>
     </div>
+    <!--/* One polling request carries the per-table badge fragments too, so the progress
+           table does not need a second request every two seconds. */-->
+    <div id="full-load-badge-data" hidden th:if="${progressList != null}">
+        <div th:each="p : ${progressList}"
+             th:attr="data-full-load-badge-table=${p.objectName}">
+            <th:block th:replace="~{project-detail/progress-badges :: badge(${p})}"/>
+        </div>
+    </div>
 </div>
 </body>
 </html>

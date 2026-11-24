@@ -3474,6 +3474,7 @@
   function bindFullLoadRefresh() {
     var card = document.getElementById('full-load-card');
     if (!card) return;
+    var progressCard = document.getElementById('progress-card');
     var refreshUrl = card.getAttribute('data-refresh-url')
       || (window.location.pathname + '/full-load-card');
     var timer = null;
@@ -3494,6 +3495,21 @@
       timer = setInterval(refresh, FULL_LOAD_REFRESH_INTERVAL);
     }
 
+    function updateBadges(fresh) {
+      if (!progressCard) return;
+      var rows = {};
+      progressCard.querySelectorAll('tr[data-progress-table]').forEach(function (row) {
+        rows[row.getAttribute('data-progress-table')] = row;
+      });
+      fresh.querySelectorAll('[data-full-load-badge-table]').forEach(function (entry) {
+        var row = rows[entry.getAttribute('data-full-load-badge-table')];
+        var target = row && row.querySelector('[data-role="full-load-badge"]');
+        if (target) {
+          target.innerHTML = entry.innerHTML;
+        }
+      });
+    }
+
     function refresh() {
       if (inFlight) return;
       inFlight = true;
@@ -3511,6 +3527,7 @@
             window.location.reload();
             return;
           }
+          updateBadges(fresh);
           card.innerHTML = freshCard.innerHTML;
           active = freshCard.getAttribute('data-full-load-active') === 'true';
           if (active) {
@@ -3542,94 +3559,6 @@
     });
 
     // 开始/立即同步/重建基线点击时先踢一脚，覆盖“页面先渲染、全量随后开始”的竞态。
-    document.addEventListener('jync:full-load-poll', function () {
-      if (document.hidden) return;
-      seenActive = false;
-      watchUntil = Date.now() + 60000;
-      startTimer();
-      refresh();
-    });
-
-    refresh();
-  }
-
-  /**
-   * 各表进度里的“全量进行中”徽章。只替换每行的徽章容器，不替换整行，
-   * 因此不会打断正在输入的游标列、行数核对弹窗或滚动位置。轮询只在有活动
-   * 全量时开启，最后一块完成后立即停止。
-   */
-  function bindProgressBadgeRefresh() {
-    var card = document.getElementById('progress-card');
-    if (!card) return;
-    var refreshUrl = card.getAttribute('data-badge-refresh-url');
-    if (!refreshUrl) return;
-    var timer = null;
-    var inFlight = false;
-    var active = false;
-    var seenActive = false;
-    var watchUntil = 0;
-
-    function stopTimer() {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-    }
-
-    function startTimer() {
-      if (timer || document.hidden || (!active && Date.now() >= watchUntil)) return;
-      timer = setInterval(refresh, FULL_LOAD_REFRESH_INTERVAL);
-    }
-
-    function refresh() {
-      if (inFlight) return;
-      inFlight = true;
-      fetch(refreshUrl, { cache: 'no-store' })
-        .then(function (response) {
-          if (!response.ok) throw new Error('HTTP ' + response.status);
-          return response.text();
-        })
-        .then(function (html) {
-          var fresh = new DOMParser().parseFromString(html, 'text/html');
-          var state = fresh.querySelector('[data-full-load-active]');
-          var rows = {};
-          card.querySelectorAll('tr[data-progress-table]').forEach(function (row) {
-            rows[row.getAttribute('data-progress-table')] = row;
-          });
-          fresh.querySelectorAll('[data-full-load-badge-table]').forEach(function (entry) {
-            var row = rows[entry.getAttribute('data-full-load-badge-table')];
-            var target = row && row.querySelector('[data-role="full-load-badge"]');
-            if (target) {
-              target.innerHTML = entry.innerHTML;
-            }
-          });
-          active = !!state && state.getAttribute('data-full-load-active') === 'true';
-          if (active) {
-            seenActive = true;
-            watchUntil = 0;
-            startTimer();
-          } else if (seenActive || Date.now() >= watchUntil) {
-            stopTimer();
-          } else {
-            startTimer();
-          }
-        })
-        .catch(function () {
-          // 网络抖动保留当前徽章，下一轮再试；观察窗口结束后不能无限重试。
-          if (!active && Date.now() >= watchUntil) stopTimer();
-        })
-        .then(function () { inFlight = false; });
-    }
-
-    document.addEventListener('visibilitychange', function () {
-      if (document.hidden) {
-        stopTimer();
-      } else if (active || Date.now() < watchUntil) {
-        refresh();
-        startTimer();
-      }
-    });
-
     document.addEventListener('jync:full-load-poll', function () {
       if (document.hidden) return;
       seenActive = false;
@@ -5371,7 +5300,6 @@
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
     bindFullLoadRefresh();
-    bindProgressBadgeRefresh();
     bindResourceRefresh();
     bindGaugeTopProcesses();
     bindLiveStats();
