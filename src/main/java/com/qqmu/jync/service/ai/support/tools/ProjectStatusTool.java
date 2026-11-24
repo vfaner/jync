@@ -8,11 +8,14 @@ import java.util.Set;
 
 import org.springframework.stereotype.Component;
 
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
+import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
@@ -30,13 +33,16 @@ public class ProjectStatusTool implements SupportTool {
     private final SyncProgressRepository progressRows;
     private final ChangeLogRepository changes;
     private final MetricsQueryService metrics;
+    private final DatabaseConfigService databases;
 
     public ProjectStatusTool(ProjectService projects, SyncProgressRepository progressRows,
-                             ChangeLogRepository changes, MetricsQueryService metrics) {
+                             ChangeLogRepository changes, MetricsQueryService metrics,
+                             DatabaseConfigService databases) {
         this.projects = projects;
         this.progressRows = progressRows;
         this.changes = changes;
         this.metrics = metrics;
+        this.databases = databases;
     }
 
     public String name() {
@@ -44,8 +50,11 @@ public class ProjectStatusTool implements SupportTool {
     }
 
     public String description() {
-        return "Read one project's running state, activity cycle, progress rows, last failure "
-                + "and 1h throughput/lag. projectId comes from list_projects.";
+        return "Read one project's details and running state: source/target connection "
+                + "names and types, capture strategy, selected-table count, sync switches, "
+                + "next scheduled run, activity cycle, progress rows, last failure and 1h "
+                + "throughput/lag. For one table's state use project_table_status. "
+                + "projectId comes from list_projects.";
     }
 
     public Map<String, Object> parameters() {
@@ -67,6 +76,32 @@ public class ProjectStatusTool implements SupportTool {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("name", project.getName());
         out.put("running", projects.isRunning(project));
+        out.put("enabled", Boolean.TRUE.equals(project.getEnabled()));
+        out.put("owner", project.getOwnerUsername());
+        out.put("targetKind", project.getTargetKindOrDefault().name());
+        out.put("source", connection(project.getSourceDbId()));
+        out.put("target", connection(project.getTargetDbId()));
+
+        // The task's "detail" is partly configuration, which lives in a JSON column: a corrupt
+        // or mid-migration row must not turn a status question into a 500. The state, cycle
+        // and failures above are still valid evidence, so report the gap and keep going.
+        try {
+            SyncConfig config = projects.loadConfig(project);
+            out.put("captureStrategy", config.getCaptureStrategyOrDefault().name());
+            out.put("selectedTables",
+                    config.getTables() == null ? 0 : config.getTables().size());
+            out.put("syncData", config.isSyncData());
+            out.put("syncStructure", config.isSyncStructure());
+            out.put("syncDeletes", config.isSyncDeletes());
+        } catch (RuntimeException e) {
+            out.put("configUnavailable", true);
+        }
+        try {
+            java.time.LocalDateTime next = projects.nextFireTime(projectId);
+            out.put("nextFireAt", next == null ? null : next.toString());
+        } catch (RuntimeException e) {
+            out.put("nextFireAt", null);
+        }
 
         ProjectService.CycleView cycle;
         try {
@@ -119,6 +154,21 @@ public class ProjectStatusTool implements SupportTool {
         // 只取最新三个数字，不构建曲线/变更聚合（诊断高频调用，省两条 change_log 全扫描）。
         Map<String, Double> current = metrics.projectCurrent(projectId);
         out.put("metrics", Map.of("window", "1h", "current", current));
+        return out;
+    }
+
+    /** Connection name and product only — never host, URL, user or password. */
+    private Map<String, Object> connection(Long id) {
+        if (id == null) {
+            return null;
+        }
+        DatabaseConfig config = databases.findById(id).orElse(null);
+        if (config == null) {
+            return null;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("name", config.getName());
+        out.put("type", config.effectiveType().name());
         return out;
     }
 }

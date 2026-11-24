@@ -232,7 +232,8 @@ class SupportToolsTest {
         when(metrics.projectCurrent(7L))
                 .thenReturn(Map.of("rowsTotal", 100.0, "lag", 12.0, "failures", 0.0));
 
-        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
+        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
+                mock(DatabaseConfigService.class));
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
         String json = mapper.writeValueAsString(tool.execute(args, ctx));
@@ -262,7 +263,8 @@ class SupportToolsTest {
                 .thenReturn(Optional.empty());
         when(metrics.projectCurrent(7L)).thenReturn(Map.of());
 
-        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
+        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
+                mock(DatabaseConfigService.class));
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
 
@@ -292,7 +294,8 @@ class SupportToolsTest {
                 .thenReturn(Optional.of(failure));
         when(metrics.projectCurrent(7L)).thenReturn(Map.of());
 
-        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
+        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
+                mock(DatabaseConfigService.class));
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
 
@@ -316,7 +319,8 @@ class SupportToolsTest {
                 .thenReturn(Optional.empty());
         when(metrics.projectCurrent(7L)).thenReturn(Map.of());
 
-        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics);
+        var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
+                mock(DatabaseConfigService.class));
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
 

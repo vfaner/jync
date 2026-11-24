@@ -262,6 +262,7 @@ class SupportAssistantServiceTest {
         verify(chat).converseStream(any(), any(), system.capture(), any(), any(), anyInt(), any(), anyLong());
         assertThat(system.getValue())
                 .contains("project_status")
+                .contains("project_table_status")
                 .contains("database_metrics")
                 .contains("project_row_count")
                 .contains("search_docs")

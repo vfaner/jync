@@ -680,6 +680,10 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 
 - The floating assistant is for administrators and operators; it reads project state, progress rows,
   the last failure, and 1-hour throughput and lag.
+- It reads one task's details (project_status): both connection names and types, capture strategy,
+  selected-table count, sync data/structure/delete switches and next scheduled run.
+- It reads per-table sync state inside a task (project_table_status), including tables that never
+  started; see "Task and table status questions" below.
 - Answers follow "conclusion → evidence → recommendations → executable items"; a runtime action
   becomes a confirmation card, one per option, effective only after Confirm. Actions it cannot
   perform (editing configuration, dropping a table, rerunning an external report job) are written
@@ -743,6 +747,26 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   cap the assistant says so and points to the page or a new conversation.
 - Every number must come from a tool result and is never made up; when a tool fails, explain why
   instead of retrying the same call.
+
+## Task and table status questions
+
+- "Show me this task's details" is project_status: both connection names and types, capture
+  strategy, selected-table count, sync data/structure/delete switches, next scheduled run, running
+  state, current cycle, last failure and 1-hour metrics.
+- "Has table X finished?" is project_table_status. States: COMPLETED (initial full load done,
+  incremental sync continues), IN_PROGRESS (full-load checkpoints exist; loading or resumable),
+  INCOMPLETE (progress exists but the initial load never finished), NOT_STARTED (selected, no
+  progress yet). Each row carries cumulative changed rows, last sync time, rows copied by the
+  current full load and the checkpoint update time.
+- Filter by table-name substring (case-insensitive) or by state; large projects return per-state
+  counts first, and a capped list is marked truncated — report the total, do not present the
+  sample as complete.
+- A running task does not mean every table finished. Never-started tables have no progress row,
+  so table state cannot be inferred from project_status progress or from the task's running flag.
+- selectionKnown=false marks a legacy config with no explicit table list: the summary is based on
+  existing progress rows only, so never-started tables cannot be listed — say so.
+- These are metadata snapshots taken at query time, not live counters; when answering, quote the
+  time or minute count from the result.
 
 ## ClickHouse as a source
 

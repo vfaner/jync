@@ -91,6 +91,7 @@ class SupportWidgetViewTest {
                 // 切页面后用来重接正在进行的回答。
                 .contains("data-run-url=\"/api/support/runs\"")
                 .contains("data-tool-project_status=")
+                .contains("data-tool-project_table_status=")
                 .contains("data-tool-recent_failures=")
                 .contains("data-tool-diagnose_project=")
                 .contains("data-label-step-queued=\"Queued:\"")
