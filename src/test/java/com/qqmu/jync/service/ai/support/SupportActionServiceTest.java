@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -20,6 +21,7 @@ import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.settings.SystemTuningService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.cdc.CdcNotHolderException;
@@ -42,12 +44,14 @@ class SupportActionServiceTest {
     private final MigrationTaskService migrationTasks = mock(MigrationTaskService.class);
     private final CdcOperationsService cdcOperations = mock(CdcOperationsService.class);
     private final DatabaseConfigService databases = mock(DatabaseConfigService.class);
+    private final SystemTuningService tuning = mock(SystemTuningService.class);
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AccessGuard ops = AccessGuard.of("ops1", UserRole.OPS);
+    private final AccessGuard admin = AccessGuard.of("admin", UserRole.ADMIN);
 
     private SupportActionService service() {
         return new SupportActionService(store, projects, etlTasks, migrationTasks,
-                cdcOperations, databases, audit);
+                cdcOperations, databases, tuning, audit);
     }
 
     private String token(String username, SupportActionStore.Kind kind, long id,
@@ -183,6 +187,35 @@ class SupportActionServiceTest {
         assertThat(result.messageKey()).isEqualTo("support.action.connection.done");
         verify(databases).updateExtraParams(3L, Map.of("connectTimeout", "5000"),
                 List.of("useSSL"), ops);
+    }
+
+    @Test
+    void aSystemTuningCardAppliesOnlyForAnAdministrator() {
+        String token = store.put("admin", SupportActionStore.Kind.SYSTEM, 0L,
+                SupportActionStore.Action.UPDATE_PARAMS, "system",
+                Map.of("set", Map.of("sync.batch-size", "1000"),
+                        "reset", List.of("sync.chunk-size")));
+
+        var result = service().execute(token, admin);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        assertThat(result.messageKey()).isEqualTo("support.action.system.done");
+        verify(tuning).apply(Map.of("sync.batch-size", "1000"),
+                List.of("sync.chunk-size"), admin);
+        verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
+                contains("audit.detail.supportSystem"), eq("admin"));
+    }
+
+    @Test
+    void aSystemTuningTokenPresentedByAnOperatorIsDenied() {
+        String token = store.put("ops1", SupportActionStore.Kind.SYSTEM, 0L,
+                SupportActionStore.Action.UPDATE_PARAMS, "system",
+                Map.of("set", Map.of("sync.batch-size", "1000")));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.DENIED);
+        verify(tuning, never()).apply(any(), any(), any());
     }
 
     @Test

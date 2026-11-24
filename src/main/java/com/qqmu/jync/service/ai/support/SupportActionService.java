@@ -19,6 +19,7 @@ import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcRestartFailedException;
 import com.qqmu.jync.service.etl.EtlTaskService;
 import com.qqmu.jync.service.migration.MigrationTaskService;
+import com.qqmu.jync.service.settings.SystemTuningService;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -53,18 +54,20 @@ public class SupportActionService {
     private final MigrationTaskService migrationTasks;
     private final CdcOperationsService cdcOperations;
     private final DatabaseConfigService databases;
+    private final SystemTuningService tuning;
     private final AdminAuditService audit;
 
     public SupportActionService(SupportActionStore store, ProjectService projects,
                                 EtlTaskService etlTasks, MigrationTaskService migrationTasks,
                                 CdcOperationsService cdcOperations, DatabaseConfigService databases,
-                                AdminAuditService audit) {
+                                SystemTuningService tuning, AdminAuditService audit) {
         this.store = store;
         this.projects = projects;
         this.etlTasks = etlTasks;
         this.migrationTasks = migrationTasks;
         this.cdcOperations = cdcOperations;
         this.databases = databases;
+        this.tuning = tuning;
         this.audit = audit;
     }
 
@@ -83,7 +86,7 @@ public class SupportActionService {
             audit(pending, actor, true);
             // A config save is not visible on the page until a refresh, and it only takes
             // effect on the next start; saying "done" alone invites "so it is faster now?".
-            return new Result(Outcome.OK, doneKey(pending.action()));
+            return new Result(Outcome.OK, doneKey(pending.kind(), pending.action()));
         } catch (AccessDeniedException e) {
             // Ownership was checked here as well as when the card was prepared, but the row
             // may have changed hands between the two.
@@ -123,6 +126,7 @@ public class SupportActionService {
             case ETL_TASK -> runEtlTask(pending, actor);
             case MIGRATION_TASK -> runMigrationTask(pending, actor);
             case CONNECTION -> runConnection(pending, actor);
+            case SYSTEM -> runSystem(pending, actor);
         }
     }
 
@@ -156,6 +160,21 @@ public class SupportActionService {
             case UPDATE_PARAMS -> databases.updateExtraParams(pending.resourceId(),
                     stringMap(pending.payload().get("set")),
                     stringList(pending.payload().get("remove")), actor);
+            default -> throw new IllegalStateException("support.action.failed");
+        }
+    }
+
+    private void runSystem(SupportActionStore.Pending pending, AccessGuard actor) {
+        switch (pending.action()) {
+            case UPDATE_PARAMS -> {
+                // The service re-checks this too; a card prepared before a role change must
+                // still fail at the click.
+                if (!actor.isAdmin()) {
+                    throw new AccessDeniedException(AccessGuard.DENIED_KEY);
+                }
+                tuning.apply(stringMap(pending.payload().get("set")),
+                        stringList(pending.payload().get("reset")), actor);
+            }
             default -> throw new IllegalStateException("support.action.failed");
         }
     }
@@ -197,12 +216,13 @@ public class SupportActionService {
         }
     }
 
-    private String doneKey(SupportActionStore.Action action) {
+    private String doneKey(SupportActionStore.Kind kind, SupportActionStore.Action action) {
         return switch (action) {
             case UPDATE_CONFIG -> "support.action.config.done";
             case UPDATE_CURSOR -> "support.action.cursor.done";
             case UPDATE_SCHEDULE -> "support.action.schedule.done";
-            case UPDATE_PARAMS -> "support.action.connection.done";
+            case UPDATE_PARAMS -> kind == SupportActionStore.Kind.SYSTEM
+                    ? "support.action.system.done" : "support.action.connection.done";
             default -> "support.action.done";
         };
     }
@@ -256,6 +276,12 @@ public class SupportActionService {
     private void audit(SupportActionStore.Pending pending, AccessGuard actor, boolean success) {
         String outcome = "@msg:" + (success ? "audit.support.outcome.ok"
                 : "audit.support.outcome.failed");
+        if (pending.kind() == SupportActionStore.Kind.SYSTEM) {
+            audit.record(AuditAction.AI_SUPPORT_ACTION, AuditDetail.of(
+                            "audit.detail.supportSystem", changes(pending.payload()), outcome),
+                    actor.username());
+            return;
+        }
         if (pending.action() == SupportActionStore.Action.UPDATE_CONFIG
                 || pending.action() == SupportActionStore.Action.UPDATE_CURSOR
                 || pending.action() == SupportActionStore.Action.UPDATE_SCHEDULE

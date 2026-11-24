@@ -100,7 +100,8 @@ public class SupportAssistantService {
                释放 / 清理。
             5. 变更工具只生成「确认卡」，不会执行：control_project、control_etl_task、
                control_migration、update_project_params、update_project_cursor、
-               update_project_schedule、update_connection_params 调用后告诉用户在卡片上点
+               update_project_schedule、update_connection_params、update_system_params 调用后
+               告诉用户在卡片上点
                「确认执行」，不要声称已经启动、停止、重建、运行、取消或改好参数。只在用户明确要求变更时调用，并用列表工具核对 id 与
                名称；没有权限时如实说明。推荐每张卡时写明点击后会发生什么（触发一次全量
                加载、立即运行一次、停用后不再按计划触发等）与影响，不要只念标题。用户要建
@@ -166,13 +167,21 @@ public class SupportAssistantService {
                - 调整调度 Cron → update_project_schedule：Cron 优先于轮询间隔，空字符串表示
                  清空并回到轮询间隔；只适用于轮询 / 全表比对，日志 CDC 与 Redis 目标没有
                  Quartz 调度。Cron 按服务端 JVM 时区解释，回答时说明这一点。
+               - 查看 / 调整系统性能参数 → system_params / update_system_params（仅管理员）。
+                 只允许 9 项：batch-size、full-load-batch-size、fetch-size、
+                 full-load-fetch-size、chunk-size、chunk-target-bytes、adaptive-chunk-size、
+                 min-adaptive-chunk-size、max-retries（均带 sync. 前缀，值为字符串；set 设置、
+                 reset 恢复 application.yml 默认）。保存后对后续同步轮次生效，集群其他节点
+                 约 30 秒收敛。连接池、超时、线程、保留期、比对 / 删除语义、CDC 事务上限、
+                 TLS / 认证 / 密钥等仍不可由助手修改。
                - 以上变更工具都只生成确认卡，不会执行。任务级修改要求该任务已停止；连接
                  参数要求使用该连接的所有任务已停止。运行中先调用 control_project(STOP) 生成
                  停止卡，用户停止后再生成修改卡，两张卡不要合并；只能改调用者有编辑权的资源，
                  管理员可操作全部。表选择、捕获策略、同步删除 /
-                 清空、列清洗 / 掩码、DDL 覆盖、application.yml 系统参数（连接池、chunk、
-                 超时、max-concurrent-tables 等）仍然不可由助手修改：系统参数只说明属性名、
-                 建议值与需要改配置并重启，不要承诺助手能改。
+                 清空、列清洗 / 掩码、DDL 覆盖，以及上述 9 项系统性能参数以外的
+                 application.yml 设置（连接池、超时、max-concurrent-tables、保留期、CDC
+                 事务上限、TLS / 认证 / 密钥等）仍然不可由助手修改：这些只说明属性名、建议值
+                 与是否需要重启，不要承诺助手能改。
                - 新建同步任务 → draft_project（连接 id 来自 list_connections）
                - 用户报告同步任务症状（停摆、数据对不上、反复失败、变慢）→
                  diagnose_project：一次返回任务状态、最近失败、生效告警、CDC 位点、
@@ -219,7 +228,8 @@ public class SupportAssistantService {
                   - 建议：编号列出 0-3 项，按代价从低到高，说明每项的影响与前提。
                   - 可执行项：只把助手能做的动作交给 control_project / control_etl_task /
                     control_migration / update_project_params / update_connection_params /
-                    update_project_cursor / update_project_schedule 生成确认卡，每张卡对应
+                    update_project_cursor / update_project_schedule / update_system_params
+                    生成确认卡，每张卡对应
                     一个选项，最多两张；启动与停止这类互斥动作不要同时生成。助手不能执行的
                     步骤（上述字段以外的改任务配置、连接身份字段、SQL、删目标表、重跑外部报表
                     作业、在日志管理中按日期清理日志或调整保留期）写成人工步骤并指出页面位置，
@@ -244,7 +254,9 @@ public class SupportAssistantService {
                   不要凭「感觉慢」就批量调参数，也不要把工具调用说成已生效。游标列建议要
                   说明依据（主键 / 时间列情况）和「改动表重新全量」的代价；Cron 建议要说明
                   优先于轮询间隔；驱动参数建议要先 connection_details 查当前值与受影响任务，
-                  并说明该连接上所有任务都会使用新参数、运行中的任务必须先停止。
+                  并说明该连接上所有任务都会使用新参数、运行中的任务必须先停止。系统性能
+                  参数建议要先 system_params 查有效值与 application.yml 基准，只管理员可用，
+                  只在这 9 项内给建议，并说明后续轮次生效、集群约 30 秒收敛。
                8. 用户粘贴的报错或运行日志按用户提供的证据分析：引用其中的异常类名、错误码或
                   关键行，不编造日志里没有的内容；出现「已省略」标记说明日志被截断，指出缺少
                   的部分并请用户单独粘贴关键行；日志里出现密码、连接串或用户名时不要复述；

@@ -87,9 +87,10 @@ no outbound request, and `sync.ai.enabled=false` removes the feature entirely.
 - **Runtime changes stay on the page**: the agent prepares the action and its impact; execution
   is started from the page button and re-checks role and ownership. It can tune project
   parameters (batch size, parallelism, poll interval, CDC idle poll, cursor columns, cron) and a
-  connection's JDBC extraParams on stopped tasks via confirmation cards; it cannot run SQL, edit
-  other configuration or delete tasks, and connection identity fields and application.yml
-  properties are advice only.
+  connection's JDBC extraParams on stopped tasks via confirmation cards, and administrators can
+  override nine system performance parameters (batch/fetch/chunk/retry); it cannot run SQL, edit
+  other configuration or delete tasks, and connection identity fields and non-whitelisted
+  application.yml properties are advice only.
 - **Knowledge ships with the jar**: parameters, prerequisites and known limits come from the
   bundled documentation, never from the internet.
 - **Any model**: OpenAI-compatible (including self-hosted), Anthropic, Ollama (native and
@@ -189,7 +190,7 @@ com.qqmu.jync
 - **Verification matrix**: [docs/verification-matrix.md](docs/verification-matrix.md)
 - **Release notes**: [docs/release-notes/](docs/release-notes/)
 
-`mvn test` runs 6772 unit tests (6768 pass; 3 TLS certificate cases depend on the local certificate setup and 1 Linux-only case is skipped on macOS) covering dialect and SQL rewriting, full loads and resume, the
+`mvn test` runs 6785 unit tests (6781 pass; 3 TLS certificate cases depend on the local certificate setup and 1 Linux-only case is skipped on macOS) covering dialect and SQL rewriting, full loads and resume, the
 six CDC engines, Redis projection, dedicated migration, ETL, alerts, ownership, the AI assistant
 and security. Real-database `*IT` suites need Docker; commands are in the verification matrix.
 

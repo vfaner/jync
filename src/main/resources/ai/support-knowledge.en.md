@@ -741,6 +741,13 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   prepared for tasks the caller may edit (administrators may edit anything). Each card lists the
   old and new values; nothing is written until Confirm, the change takes effect on the next start,
   and the audit row carries the field names and new values.
+- Administrators can read and override nine system performance parameters
+  (system_params / update_system_params): batch, fetch, chunk sizing and retry count, all with
+  the sync. prefix, as strings; set overrides, reset restores the application.yml base. The change
+  applies to subsequent sync rounds and converges across nodes in about 30 seconds; administrator
+  only. Reset restores each node's own application.yml value, so keep those bases consistent
+  across a cluster. Pool sizes, timeouts, threads, retention, comparison/delete semantics, CDC transaction
+  limits and TLS/authentication/keys remain closed.
 - Actions have a boundary: deletes, configuration changes beyond the fields above, connection
   identity fields, system settings, external authentication, alerts, AI settings, users and audit
   are outside the assistant's reach, and it cannot run SQL. Table selection, capture strategy,

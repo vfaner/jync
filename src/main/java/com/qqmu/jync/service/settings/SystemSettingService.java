@@ -37,6 +37,12 @@ public class SystemSettingService {
         return find(key).flatMap(SystemSettingService::parseBoolean);
     }
 
+    /** Raw value for settings whose key is not part of the boolean enum (system tuning). */
+    public Optional<String> findValue(String key) {
+        return key == null ? Optional.empty()
+                : repository.findById(key).map(SystemSetting::getValue);
+    }
+
     /**
      * A hand-edited database row must not break the application: an unrecognised value reads
      * as absent, and the caller's fallback applies.
@@ -64,6 +70,37 @@ public class SystemSettingService {
         repository.save(row);
         revision.incrementAndGet();
         return previous;
+    }
+
+    /**
+     * Stores a raw value and returns the value it replaced. The key set is still closed at
+     * the caller (see the tuning whitelist); this method only owns persistence and revision.
+     */
+    @Transactional
+    public Optional<String> putValue(String key, String value) {
+        if (key == null || key.isBlank() || key.length() > 64) {
+            throw new IllegalArgumentException("error.systemConfig.setting.invalid");
+        }
+        SystemSetting row = repository.findById(key).orElseGet(() -> {
+            SystemSetting created = new SystemSetting();
+            created.setKey(key);
+            return created;
+        });
+        Optional<String> previous = Optional.ofNullable(row.getValue());
+        row.setValue(value);
+        row.setUpdatedAt(Instant.now());
+        repository.save(row);
+        revision.incrementAndGet();
+        return previous;
+    }
+
+    /** Removes an override so the resolver falls back to application.yml. */
+    @Transactional
+    public void removeValue(String key) {
+        if (key != null && repository.existsById(key)) {
+            repository.deleteById(key);
+            revision.incrementAndGet();
+        }
     }
 
     /** Monotonic; changes whenever this node writes a setting. */

@@ -90,6 +90,19 @@ class SystemSettingServiceTest {
     }
 
     @Test
+    void rawValuesSupportTheSystemTuningWhitelist() {
+        String key = "sync.batch-size";
+        assertThat(service.putValue(key, "1000")).isEmpty();
+        assertThat(service.findValue(key)).contains("1000");
+        assertThat(service.putValue(key, "2000")).contains("1000");
+
+        long before = service.revision();
+        service.removeValue(key);
+        assertThat(service.findValue(key)).isEmpty();
+        assertThat(service.revision()).isGreaterThan(before);
+    }
+
+    @Test
     void everyWriteBumpsTheRevisionSoCachesCanInvalidateImmediately() {
         long before = service.revision();
 

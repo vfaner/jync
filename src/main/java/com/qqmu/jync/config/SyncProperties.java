@@ -16,11 +16,11 @@ public class SyncProperties {
     /** Default polling interval in milliseconds. */
     private long pollInterval = 2000L;
 
-    private int maxRetries = 3;
+    private volatile int maxRetries = 3;
 
-    private int batchSize = 500;
+    private volatile int batchSize = 500;
 
-    private int fetchSize = 1000;
+    private volatile int fetchSize = 1000;
 
     /**
      * Socket read timeout (milliseconds) added to MySQL/MariaDB, PostgreSQL and Oracle JDBC
@@ -38,10 +38,10 @@ public class SyncProperties {
      * window or a replay in front of a busy application does not — the two budgets are
      * therefore deliberately separate knobs.
      */
-    private int fullLoadBatchSize = 2000;
+    private volatile int fullLoadBatchSize = 2000;
 
     /** Cursor fetch size for the initial/full load only; incremental reads keep {@link #fetchSize}. */
-    private int fullLoadFetchSize = 2000;
+    private volatile int fullLoadFetchSize = 2000;
 
     /**
      * Whether an initial full load into an <em>empty</em> target writes plain {@code INSERT}
@@ -82,7 +82,7 @@ public class SyncProperties {
      * re-read work instead of the whole table. Only tables with a primary key can be chunked;
      * keyless tables always keep the single streamed read.
      */
-    private int chunkSize = 100_000;
+    private volatile int chunkSize = 100_000;
 
     /**
      * When every selected table has a reliable row estimate, process smaller tables first
@@ -99,13 +99,13 @@ public class SyncProperties {
      * so one chunk cannot become a multi-gigabyte stream that outlives the driver/socket
      * timeouts. The configured {@code chunk-size} remains the maximum; this only reduces it.
      */
-    private long chunkTargetBytes = 64L * 1024 * 1024;
+    private volatile long chunkTargetBytes = 64L * 1024 * 1024;
 
     /** Floor for the adaptive chunk size so metadata estimates cannot create tiny pages. */
-    private int minAdaptiveChunkSize = 1000;
+    private volatile int minAdaptiveChunkSize = 1000;
 
     /** Set false to use {@link #chunkSize} verbatim for every table. */
-    private boolean adaptiveChunkSize = true;
+    private volatile boolean adaptiveChunkSize = true;
 
     /**
      * Worker threads for one chunked initial full load; 1 keeps the load fully sequential.

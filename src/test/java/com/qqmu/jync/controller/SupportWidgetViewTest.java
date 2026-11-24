@@ -97,6 +97,8 @@ class SupportWidgetViewTest {
                 .contains("data-tool-update_project_schedule=")
                 .contains("data-tool-update_connection_params=")
                 .contains("data-tool-connection_details=")
+                .contains("data-tool-system_params=")
+                .contains("data-tool-update_system_params=")
                 .contains("data-tool-recent_failures=")
                 .contains("data-tool-diagnose_project=")
                 .contains("data-label-step-queued=\"Queued:\"")

@@ -26,7 +26,7 @@ import org.springframework.stereotype.Component;
 public class SupportActionStore {
 
     public enum Kind {
-        PROJECT, ETL_TASK, MIGRATION_TASK, CONNECTION
+        PROJECT, ETL_TASK, MIGRATION_TASK, CONNECTION, SYSTEM
     }
 
     public enum Action {
