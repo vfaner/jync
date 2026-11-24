@@ -44,6 +44,7 @@ import com.qqmu.jync.service.lob.LobReadPolicy;
 import com.qqmu.jync.service.lob.LobSpillSession;
 import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.lob.LobValues;
+import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.monitor.CursorStrategy;
 import com.qqmu.jync.util.CollectionUtil;
 import com.qqmu.jync.util.TargetTableVerifier;
@@ -136,6 +137,14 @@ public class DataSyncService {
      */
     private final Map<String, Map<String, String>> targetColumnSpellings =
             new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** Cached schema-wide table sizes, used only to size a full-load chunk. */
+    private final Map<String, CachedTableStats> tableStats =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long TABLE_STATS_TTL_MS = 5 * 60_000L;
+
+    private record CachedTableStats(Map<String, MetadataReader.TableStat> stats, long at) {
+    }
 
     public DataSyncService(SyncProperties properties) {
         this(properties, null);
@@ -1810,12 +1819,26 @@ public class DataSyncService {
      * the very first load, while column widths are already in the metadata snapshot.
      */
     int chunkSizeFor(TableMeta table) {
-        int configured = properties.getChunkSize();
-        if (configured <= 0 || !properties.isAdaptiveChunkSize()) {
-            return configured;
+        return chunkSizeFor(table, estimatedRowBytes(table));
+    }
+
+    /**
+     * Uses the source's schema-wide table statistics when available: actual bytes / rows is
+     * far more reliable than declared column widths for deciding whether 100k rows is a
+     * 10MB chunk or a 10GB one. One statistics query is cached per project/schema for five
+     * minutes, so a 700-table first load does not run 700 catalog queries.
+     */
+    private int chunkSizeFor(TableMeta table, Connection sourceConn, SyncContext ctx) {
+        if (!properties.isAdaptiveChunkSize() || properties.getChunkSize() <= 0) {
+            return properties.getChunkSize();
         }
-        long rowBytes = estimatedRowBytes(table);
-        if (rowBytes <= 0) {
+        long rowBytes = actualRowBytes(table, sourceConn, ctx);
+        return chunkSizeFor(table, rowBytes > 0 ? rowBytes : estimatedRowBytes(table));
+    }
+
+    private int chunkSizeFor(TableMeta table, long rowBytes) {
+        int configured = properties.getChunkSize();
+        if (configured <= 0 || !properties.isAdaptiveChunkSize() || rowBytes <= 0) {
             return configured;
         }
         long target = properties.getChunkTargetBytes();
@@ -1828,6 +1851,34 @@ public class DataSyncService {
         }
         int floor = Math.min(configured, Math.max(1, properties.getMinAdaptiveChunkSize()));
         return (int) Math.max(floor, bySize);
+    }
+
+    private long actualRowBytes(TableMeta table, Connection sourceConn, SyncContext ctx) {
+        MetadataReader reader = ctx.getSourceReader();
+        if (reader == null || sourceConn == null || !reader.reportsTableStats()) {
+            return -1;
+        }
+        String key = ctx.projectId() + "|" + ctx.getSourceSchema();
+        long now = System.currentTimeMillis();
+        CachedTableStats cached = tableStats.get(key);
+        if (cached == null || now - cached.at > TABLE_STATS_TTL_MS) {
+            Map<String, MetadataReader.TableStat> stats =
+                    reader.estimateTableStats(sourceConn, ctx.getSourceSchema());
+            cached = new CachedTableStats(stats == null ? Map.of() : stats, now);
+            tableStats.put(key, cached);
+        }
+        MetadataReader.TableStat stat = null;
+        for (Map.Entry<String, MetadataReader.TableStat> entry : cached.stats.entrySet()) {
+            if (entry.getKey().equalsIgnoreCase(table.getName())) {
+                stat = entry.getValue();
+                break;
+            }
+        }
+        if (stat == null || stat.rows() == null || stat.bytes() == null
+                || stat.rows() <= 0 || stat.bytes() <= 0) {
+            return -1;
+        }
+        return Math.max(1L, stat.bytes() / stat.rows());
     }
 
     /** Conservative width estimate used only to size an initial-load chunk. */
@@ -2838,7 +2889,7 @@ public class DataSyncService {
         }
         if (route == FullLoadRoute.STREAMING_FALLBACK) {
             if (keylessChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                    watermark, upperBound, ctx, result)) {
+                    watermark, upperBound, ctx, chunkSizeFor(table, sourceConn, ctx), result)) {
                 return true;
             }
             // No key to chunk on and the OFFSET walk does not apply: the classic streamed read
@@ -2856,11 +2907,13 @@ public class DataSyncService {
         // was empty at this point is a safe INSERT target for every worker as well.
         boolean insertFirst = useInsertFirst(targetConn, ctx, targetTable,
                 table.getPrimaryKeys());
+        int chunkSize = chunkSizeFor(table, sourceConn, ctx);
         boolean done = parallelism > 1
                 ? parallelChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                        watermark, upperBound, ctx, result, saved, parallelism, insertFirst)
+                        watermark, upperBound, ctx, chunkSize, result, saved, parallelism,
+                        insertFirst)
                 : sequentialChunkedLoad(sourceConn, targetConn, table, targetTable, strategy,
-                        watermark, upperBound, ctx, result, saved, insertFirst);
+                        watermark, upperBound, ctx, chunkSize, result, saved, insertFirst);
         if (done) {
             result.resumableLoad = true;
         }
@@ -2874,7 +2927,7 @@ public class DataSyncService {
     private boolean sequentialChunkedLoad(Connection sourceConn, Connection targetConn,
                                           TableMeta table, String targetTable,
                                           CursorStrategy strategy, String watermark,
-                                          Object upperBound, SyncContext ctx,
+                                          Object upperBound, SyncContext ctx, int chunkSize,
                                           TableSyncResult result, List<ChunkCheckpoint> saved,
                                           boolean insertFirst)
             throws SQLException {
@@ -2895,7 +2948,6 @@ public class DataSyncService {
             saved = List.of();
         }
         List<String> pk = table.getPrimaryKeys();
-        int chunkSize = chunkSizeFor(table);
         // A production context can borrow a fresh pair per chunk. That keeps a connection
         // that a previous chunk retired from poisoning every later attempt; hand-built test
         // contexts without a provider keep using the cycle's connections.
@@ -2988,7 +3040,7 @@ public class DataSyncService {
     private boolean keylessChunkedLoad(Connection sourceConn, Connection targetConn,
                                        TableMeta table, String targetTable,
                                        CursorStrategy strategy, String watermark,
-                                       Object upperBound, SyncContext ctx,
+                                       Object upperBound, SyncContext ctx, int chunkSize,
                                        TableSyncResult result) throws SQLException {
         if (!ctx.getSourceDialect().supportsOffsetPaging()) {
             log.info("Keyless full load of {} keeps the streamed read: the source dialect cannot"
@@ -3047,7 +3099,6 @@ public class DataSyncService {
         for (ChunkCheckpoint checkpoint : saved) {
             chunkIndex = Math.max(chunkIndex, checkpoint.getChunkIndex() + 1);
         }
-        int chunkSize = chunkSizeFor(table);
         Connection chunkSource = ctx.getConnectionProvider() == null ? sourceConn : null;
         Connection chunkTarget = ctx.getConnectionProvider() == null ? targetConn : null;
         List<String> columns = new ArrayList<>(table.getColumns().size());
@@ -3262,7 +3313,7 @@ public class DataSyncService {
     private boolean parallelChunkedLoad(Connection sourceConn, Connection targetConn,
                                         TableMeta table, String targetTable,
                                         CursorStrategy strategy, String watermark,
-                                        Object upperBound, SyncContext ctx,
+                                        Object upperBound, SyncContext ctx, int chunkSize,
                                         TableSyncResult result, List<ChunkCheckpoint> saved,
                                         int parallelism, boolean insertFirst) throws SQLException {
         List<KeyRange> ranges;
@@ -3287,7 +3338,8 @@ public class DataSyncService {
                     // Key span too wide to split without overflow; sequential chunking handles
                     // any span.
                     return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
-                            strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+                            strategy, watermark, upperBound, ctx, chunkSize, result, saved,
+                            insertFirst);
                 }
                 ranges = new ArrayList<>(splitRanges.size());
                 for (long[] r : splitRanges) {
@@ -3310,7 +3362,8 @@ public class DataSyncService {
                 if (boundaries == null) {
                     // The product rejected the sampling query (no window functions).
                     return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
-                            strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+                            strategy, watermark, upperBound, ctx, chunkSize, result, saved,
+                            insertFirst);
                 }
                 if (boundaries.isEmpty()) {
                     return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
@@ -3319,7 +3372,8 @@ public class DataSyncService {
                 if (ranges.size() <= 1) {
                     // One row, or every sampled row landing in the same slice: nothing to split.
                     return sequentialChunkedLoad(sourceConn, targetConn, table, targetTable,
-                            strategy, watermark, upperBound, ctx, result, saved, insertFirst);
+                            strategy, watermark, upperBound, ctx, chunkSize, result, saved,
+                            insertFirst);
                 }
                 usable = validRangeCheckpoints(saved, ranges, table, ctx);
                 split = "sampled " + boundaries.size() + " key buckets";
@@ -3356,7 +3410,7 @@ public class DataSyncService {
                     Thread.currentThread().setName(
                             "full-load-" + table.getName() + "-" + (rangeIndex + 1));
                     return copyRange(table, targetTable, strategy, watermark, upperBound, ctx,
-                            range, rangeIndex, resumePoint(usable, rangeIndex, table),
+                            chunkSize, range, rangeIndex, resumePoint(usable, rangeIndex, table),
                             insertFirst);
                 }));
             }
@@ -3488,7 +3542,7 @@ public class DataSyncService {
     /** One parallel worker: walks its own {@code (lower, upper]} key slice, per-chunk checkpoints. */
     private WriteStats copyRange(TableMeta table, String targetTable, CursorStrategy strategy,
                                  String watermark, Object upperBound, SyncContext ctx,
-                                 KeyRange range, int rangeIndex, RangeResume resume,
+                                 int chunkSize, KeyRange range, int rangeIndex, RangeResume resume,
                                  boolean insertFirst) throws SQLException {
         WriteStats totals = new WriteStats();
         if (resume.done) {
@@ -3498,7 +3552,6 @@ public class DataSyncService {
         // value would otherwise be cut across chunks and the "leading > last" resume would
         // skip the rest of that value's rows. The range bounds stay on the leading column.
         List<String> pkColumns = table.getPrimaryKeys();
-        int chunkSize = chunkSizeFor(table);
         // A resumed chunk continues after a full key tuple; a fresh range starts at its own
         // lower edge, which may be a single leading-column value (numeric split) or null
         // (the sampled split's first range is unbounded below).
