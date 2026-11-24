@@ -57,12 +57,10 @@
                     <th th:text="#{dashboard.lastSync}">Last sync</th>
                     <th class="num" data-role="progress-full"
                         th:text="#{tablesync.fullLoad}">Full-load progress</th>
-                    <th class="num icon-col"
+                    <th class="cursor-col"
                         th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
-                        th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null,
-                                 title=#{cursor.set}, aria-label=#{cursor.set}">
-                        <svg class="ico" aria-hidden="true"><use href="#pencil"/></svg>
-                    </th>
+                        th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null"
+                        th:text="#{cursor.set}">Set cursor</th>
                     <th class="num" th:text="#{preview.title}">Preview</th>
                 </tr>
                 </thead>
@@ -111,15 +109,16 @@
                     <th:block th:replace="~{project-detail/table-status :: incState(${s})}"/>
                     <th:block th:replace="~{project-detail/table-status :: lastSync(${s})}"/>
                     <th:block th:replace="~{project-detail/table-status :: fullProgress(${s})}"/>
-                    <td class="num icon-col"
+                    <td class="cursor-col"
                         th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
                         th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null">
-                        <button type="button" class="btn-icon" data-role="cursor-open"
+                        <button type="button" class="btn btn-ghost btn-xs" data-role="cursor-open"
                                 th:attr="data-table=${s.name},
                                          data-current=${config.cursorColumnFor(s.name)},
                                          data-action=@{/api/projects/{id}/cursor-candidates(id=${project.id})},
                                          title=#{cursor.set}, aria-label=#{cursor.set}">
                             <svg class="ico"><use href="#pencil"/></svg>
+                            <span th:text="#{cursor.set}">Set cursor</span>
                         </button>
                     </td>
                     <td class="num nowrap">

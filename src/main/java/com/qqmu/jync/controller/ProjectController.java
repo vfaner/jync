@@ -654,6 +654,12 @@ public class ProjectController {
         model.addAttribute("tableStatusIncWaiting", tableStatuses.stream()
                 .filter(status -> status.incremental()
                         == ProjectService.IncrementalState.WAITING).count());
+        // Before the first chunk checkpoint there is no full-load row to point at; the
+        // progress row created when the table's work started is the best current-table hint.
+        model.addAttribute("tableStatusInProgressName", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.IN_PROGRESS)
+                .map(ProjectService.TableSyncStatus::name)
+                .findFirst().orElse(null));
     }
 
     /**

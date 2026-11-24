@@ -2088,6 +2088,10 @@ public class ProjectService {
                 && (task.getLockExpiresAt() == null
                 || task.getLockExpiresAt().isAfter(Instant.now()));
         boolean running = enabled || leaseHeld;
+        // A progress row is created when a table's work starts, before the first chunk
+        // checkpoint. While the project is live that row means "loading now", not
+        // "interrupted"; calling it INCOMPLETE hid the first minutes of every large full load.
+        boolean working = running && !taskError;
         CaptureStrategy strategy = config.getCaptureStrategyOrDefault();
         boolean cdc = strategy.isLogCdc();
         boolean baselinePending = false;
@@ -2124,11 +2128,11 @@ public class ProjectService {
                 // Checkpoints survive a stop; only call it "in progress" when the project is
                 // enabled or a round still holds a live lease. A stopped partial load is
                 // INCOMPLETE, not a phantom running load.
-                state = running ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
+                state = working ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
             } else if (progress != null && Boolean.TRUE.equals(progress.getInitialLoadDone())) {
                 state = SyncState.COMPLETED;
             } else if (progress != null) {
-                state = SyncState.INCOMPLETE;
+                state = working ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
             } else {
                 state = SyncState.NOT_STARTED;
             }

@@ -43,10 +43,17 @@
                 <span class="small muted" th:text="#{fullload.currentLabel}">Current</span>
                 <b class="mono" th:text="${fullLoadCurrentTable}">table</b>
             </span>
-            <span class="progress-live-item">
+            <span th:if="${fullLoadCurrentTable == null and tableStatusInProgressName != null}"
+                  class="progress-live-item">
+                <span class="small muted" th:text="#{fullload.currentLabel}">Current</span>
+                <b class="mono" th:text="${tableStatusInProgressName}">table</b>
+            </span>
+            <span class="progress-live-item" th:if="${fullLoadTableCount > 0}">
                 <span class="small muted" th:text="#{fullload.rowsLabel}">Rows</span>
                 <b th:text="${fullLoadRows}">0</b>
             </span>
+            <span class="small muted" th:if="${fullLoadTableCount == 0}"
+                  th:text="#{fullload.waitingFirstCheckpoint}">Loading; waiting for the first checkpoint</span>
             <span class="progress-live-item" th:if="${fullLoadUpdatedAt != null}">
                 <span class="small muted" th:text="#{fullload.updatedLabel}">Updated</span>
                 <span th:text="${#temporals.format(fullLoadUpdatedAt, 'MM-dd HH:mm:ss')}">—</span>

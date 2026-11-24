@@ -148,6 +148,7 @@ class FullLoadProgressViewTest {
         assertThat(fragment).contains("id=\"full-load-card\"");
         assertThat(fragment).contains("data-refresh-url=\"/projects/1/full-load-card\"");
         assertThat(fragment).contains("data-full-load-active=\"true\"");
+        assertThat(fragment).contains("data-project-active=\"true\"");
         assertThat(fragment).contains("id=\"progress-summary-data\"");
         assertThat(fragment).contains("data-status-cell=\"fullProgress\"");
         assertThat(fragment).contains("200");
@@ -272,6 +273,20 @@ class FullLoadProgressViewTest {
         assertThat(html).contains("data-role=\"cursor-open\"");
         assertThat(html).contains("id=\"cursor-picker-modal\"");
         assertThat(html).doesNotContain("data-role=\"cursor-form\"");
+    }
+
+    @Test
+    void theFirstChunkWindowShowsLoadingAndTheCurrentTableWithoutACheckpoint() throws Exception {
+        stubDetail(Map.of());
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("COURSE", ProjectService.SyncState.IN_PROGRESS,
+                        null, null, null, null)));
+
+        String html = render();
+
+        assertThat(html).contains("COURSE");
+        assertThat(html).contains("Loading");
+        assertThat(html).contains("waiting for the first checkpoint");
     }
 
     @Test

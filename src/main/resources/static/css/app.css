@@ -442,8 +442,9 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 #full-load-card > .card { margin-top: 18px; }
 
 /* ─── 各表同步进度：紧凑的游标动作与对齐 ─────────────────── */
-table.tbl th.icon-col, table.tbl td.icon-col { width: 44px; text-align: center; }
-.icon-col .btn-icon { margin: 0 auto; }
+table.tbl th.cursor-col, table.tbl td.cursor-col {
+  width: 112px; text-align: center; white-space: nowrap;
+}
 .strategy-inline { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 table.tbl th[data-role="progress-strategy"],
 table.tbl td[data-role="progress-strategy"] { white-space: nowrap; min-width: 180px; }

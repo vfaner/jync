@@ -3574,6 +3574,8 @@
    * 手动刷新。外层 #full-load-card 始终在页面上，空片段就是「当前没有全量」。
    */
   var FULL_LOAD_REFRESH_INTERVAL = 2000;
+  /** An enabled project keeps its status cells fresh even between full loads. */
+  var STATUS_REFRESH_INTERVAL = 5000;
 
   function bindFullLoadRefresh() {
     var card = document.getElementById('full-load-card');
@@ -3581,9 +3583,10 @@
     var refreshUrl = card.getAttribute('data-refresh-url')
       || (window.location.pathname + '/full-load-card');
     var timer = null;
+    var timerDelay = 0;
     var inFlight = false;
     var active = false;
-    var seenActive = false;
+    var projectActive = card.getAttribute('data-project-active') === 'true';
     var watchUntil = 0;
 
     function stopTimer() {
@@ -3591,11 +3594,19 @@
         clearInterval(timer);
         timer = null;
       }
+      timerDelay = 0;
     }
 
     function startTimer() {
-      if (timer || document.hidden || (!active && Date.now() >= watchUntil)) return;
-      timer = setInterval(refresh, FULL_LOAD_REFRESH_INTERVAL);
+      if (document.hidden
+          || (!active && !projectActive && Date.now() >= watchUntil)) {
+        return;
+      }
+      var delay = active ? FULL_LOAD_REFRESH_INTERVAL : STATUS_REFRESH_INTERVAL;
+      if (timer && timerDelay === delay) return;
+      stopTimer();
+      timer = setInterval(refresh, delay);
+      timerDelay = delay;
     }
 
     /**
@@ -3647,21 +3658,22 @@
           updateTableStatus(fresh);
           card.innerHTML = freshCard.innerHTML;
           active = freshCard.getAttribute('data-full-load-active') === 'true';
+          projectActive = freshCard.getAttribute('data-project-active') === 'true';
           if (active) {
-            seenActive = true;
             watchUntil = 0;
+          }
+          if (active || projectActive || Date.now() < watchUntil) {
+            // Full loads refresh at 2s; a merely running project at 5s so incremental
+            // states, last-sync times and a just-started first chunk appear without a
+            // manual page refresh. Completed/stopped projects stop polling.
             startTimer();
-          } else if (seenActive || Date.now() >= watchUntil) {
-            // 完成后停止轮询：完成态卡片留在页面上，但不再每 2 秒打服务端。
-            stopTimer();
           } else {
-            // 刚点了开始/立即同步，后端可能还没写出第一个检查点；在短窗口内继续看。
-            startTimer();
+            stopTimer();
           }
         })
         .catch(function () {
           // 网络抖动保留当前内容，下一轮再试；但观察窗口结束后不能无限重试。
-          if (!active && Date.now() >= watchUntil) stopTimer();
+          if (!active && !projectActive && Date.now() >= watchUntil) stopTimer();
         })
         .then(function () { inFlight = false; });
     }
@@ -3669,7 +3681,7 @@
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
         stopTimer();
-      } else if (active || Date.now() < watchUntil) {
+      } else if (active || projectActive || Date.now() < watchUntil) {
         refresh();
         startTimer();
       }
@@ -3678,7 +3690,6 @@
     // 开始/立即同步/重建基线点击时先踢一脚，覆盖“页面先渲染、全量随后开始”的竞态。
     document.addEventListener('jync:full-load-poll', function () {
       if (document.hidden) return;
-      seenActive = false;
       watchUntil = Date.now() + 60000;
       startTimer();
       refresh();

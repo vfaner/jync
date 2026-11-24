@@ -6,7 +6,8 @@
        cells into the visible row, leaving cursor inputs and action buttons untouched. */-->
 <div id="full-load-card" th:fragment="data"
      th:attr="data-refresh-url=@{/projects/{id}/full-load-card(id=${project.id})},
-              data-full-load-active=${tableStatusInProgress > 0}">
+              data-full-load-active=${tableStatusInProgress > 0},
+              data-project-active=${project.enabled}">
     <div id="progress-summary-data" hidden>
         <th:block th:replace="~{project-detail/table-progress-summary :: panels}"/>
     </div>

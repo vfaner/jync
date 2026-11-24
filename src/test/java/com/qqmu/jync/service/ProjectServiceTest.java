@@ -1698,6 +1698,28 @@ class ProjectServiceTest {
     }
 
     @Test
+    void aProgressRowBeforeTheFirstCheckpointIsInProgressWhileTheProjectRuns() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("COURSE")));
+        SyncProgress started = new SyncProgress();
+        started.setObjectName("COURSE");
+        started.setInitialLoadDone(false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(started));
+        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
+
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
+        assertThat(status.incremental()).isEqualTo(ProjectService.IncrementalState.NOT_STARTED);
+        assertThat(status.rowsCopied()).isNull();
+    }
+
+    @Test
     void checkpointsOnAStoppedProjectAreIncompleteNotStillRunning() {
         Project project = project(1L);
         project.setOwnerUsername("admin");

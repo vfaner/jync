@@ -35,8 +35,10 @@
         <span class="small muted" th:if="${s.lastUpdatedAt != null}"
               th:text="${#temporals.format(s.lastUpdatedAt, 'MM-dd HH:mm:ss')}">time</span>
     </th:block>
-    <span th:if="${s.rowsCopied == null}" class="muted"
-          th:text="#{tablesync.noActive}">—</span>
+    <span th:if="${s.rowsCopied == null and s.state.name() == 'IN_PROGRESS'}"
+          class="small muted" th:text="#{tablesync.loading}">Loading…</span>
+    <span th:if="${s.rowsCopied == null and s.state.name() != 'IN_PROGRESS'}"
+          class="muted" th:text="#{tablesync.noActive}">—</span>
 </td>
 </body>
 </html>
