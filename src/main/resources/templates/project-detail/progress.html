@@ -55,11 +55,14 @@
                     <th th:text="#{tablesync.fullState}">Full-load state</th>
                     <th th:text="#{tablesync.incState}">Incremental state</th>
                     <th th:text="#{dashboard.lastSync}">Last sync</th>
-                    <th class="num" th:text="#{tablesync.fullLoad}">Full-load progress</th>
-                    <th class="num"
+                    <th class="num" data-role="progress-full"
+                        th:text="#{tablesync.fullLoad}">Full-load progress</th>
+                    <th class="num icon-col"
                         th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
-                        th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null"
-                        th:text="#{cursor.set}">Set cursor</th>
+                        th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null,
+                                 title=#{cursor.set}, aria-label=#{cursor.set}">
+                        <svg class="ico" aria-hidden="true"><use href="#pencil"/></svg>
+                    </th>
                     <th class="num" th:text="#{preview.title}">Preview</th>
                 </tr>
                 </thead>
@@ -76,8 +79,8 @@
                     </td>
                     <td data-role="progress-strategy" data-cdc-visibility="non-cdc"
                         th:classappend="${cdcActive} ? 'is-hidden' : ''">
-                        <th:block th:if="${s.cursorStrategy != null}"
-                                  th:with="strat=${s.cursorStrategy}">
+                        <div class="strategy-inline" th:if="${s.cursorStrategy != null}"
+                             th:with="strat=${s.cursorStrategy}">
                             <span class="badge"
                                   th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
                                                 : (${strat == 'IDENTITY'} ? 'badge-info'
@@ -91,18 +94,16 @@
                                            data-tip=#{project.strategyWarn}">
                                 <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
                             </span>
-                            <div class="mono small" style="margin-top:2px">
-                                <span th:text="${s.cursorColumn ?: '—'}">col</span>
-                                <span class="tip-icon tip-warn" tabindex="0" role="img"
-                                      th:if="${unindexedCursorTables != null
-                                               and s.cursorColumn != null
-                                               and unindexedCursorTables.contains(s.name)}"
-                                      th:attr="aria-label=#{project.cursorIndexHint},
-                                               data-tip=#{project.cursorIndexHint}">
-                                    <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
-                                </span>
-                            </div>
-                        </th:block>
+                            <span class="mono small" th:text="${s.cursorColumn ?: '—'}">col</span>
+                            <span class="tip-icon tip-warn" tabindex="0" role="img"
+                                  th:if="${unindexedCursorTables != null
+                                           and s.cursorColumn != null
+                                           and unindexedCursorTables.contains(s.name)}"
+                                  th:attr="aria-label=#{project.cursorIndexHint},
+                                           data-tip=#{project.cursorIndexHint}">
+                                <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+                            </span>
+                        </div>
                         <span class="muted" th:if="${s.cursorStrategy == null}"
                               th:text="#{tablesync.noActive}">—</span>
                     </td>
@@ -110,23 +111,16 @@
                     <th:block th:replace="~{project-detail/table-status :: incState(${s})}"/>
                     <th:block th:replace="~{project-detail/table-status :: lastSync(${s})}"/>
                     <th:block th:replace="~{project-detail/table-status :: fullProgress(${s})}"/>
-                    <td th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
+                    <td class="num icon-col"
+                        th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
                         th:attr="data-role=${access.canEdit(project.ownerUsername)} ? 'polling-only' : null">
-                        <form method="post" class="input-group" style="justify-content:flex-end"
-                              th:action="@{/projects/{id}/cursor(id=${project.id})}"
-                              data-role="cursor-form">
-                            <input type="hidden" name="tableName" th:value="${s.name}">
-                            <input type="text" class="input mono" style="max-width:145px" name="cursorColumn"
-                                   th:value="${config.cursorColumnFor(s.name)}"
-                                   th:placeholder="#{cursor.auto}"
-                                   th:attr="list='datalist-cursor-' + ${s.name},
-                                            data-table=${s.name},
-                                            data-action=@{/api/projects/{id}/cursor-candidates(id=${project.id})}">
-                            <datalist th:id="'datalist-cursor-' + ${s.name}"></datalist>
-                            <button type="submit" class="btn-icon" th:title="#{common.apply}">
-                                <svg class="ico"><use href="#check-lg"/></svg>
-                            </button>
-                        </form>
+                        <button type="button" class="btn-icon" data-role="cursor-open"
+                                th:attr="data-table=${s.name},
+                                         data-current=${config.cursorColumnFor(s.name)},
+                                         data-action=@{/api/projects/{id}/cursor-candidates(id=${project.id})},
+                                         title=#{cursor.set}, aria-label=#{cursor.set}">
+                            <svg class="ico"><use href="#pencil"/></svg>
+                        </button>
                     </td>
                     <td class="num nowrap">
                         <button type="button" class="btn btn-ghost btn-xs" data-role="preview"
@@ -172,6 +166,41 @@
         <svg class="ico"><use href="#clock-history"/></svg>
         <span th:text="#{project.viewAllLogs}">Full change log</span>
     </a>
+</div>
+
+<!--/* 单表游标选择器：列表只显示一个图标，点击后按候选列选择。
+       保存仍走原来的表单 POST，页面刷新后策略/游标列立即更新。 */-->
+<form id="cursor-save-form" method="post" style="display:none"
+      th:action="@{/projects/{id}/cursor(id=${project.id})}"
+      th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !cdcActive}">
+    <input type="hidden" name="tableName" id="cursor-save-table">
+    <input type="hidden" name="cursorColumn" id="cursor-save-column">
+</form>
+
+<div class="modal" id="cursor-picker-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !cdcActive}"
+     th:attr="aria-label=#{cursor.picker.title}">
+    <div class="modal-mask" data-close-modal="cursor-picker-modal"></div>
+    <div class="modal-dialog">
+        <button type="button" class="modal-close" data-close-modal="cursor-picker-modal"
+                th:attr="aria-label=#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{cursor.picker.title}">Select cursor column</h3>
+            <p id="cursor-picker-subject" class="mono small"></p>
+            <p class="small muted" th:text="#{cursor.picker.hint}">Hint</p>
+        </div>
+        <div id="cursor-picker-options" class="cursor-picker-options"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-close-modal="cursor-picker-modal"
+                    th:text="#{common.cancel}">Cancel</button>
+            <button type="button" class="btn btn-primary btn-sm"
+                    data-role="cursor-picker-save" disabled
+                    th:text="#{common.save}">Save</button>
+        </div>
+    </div>
 </div>
 
 <!-- 只读预览弹窗：页面只渲染空壳，内容由 app.js 按按钮上的 data-* 拉取填充。 -->

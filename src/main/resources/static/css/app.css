@@ -441,6 +441,24 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
    reach it; match the same gap without adding height when the wrapper is empty. */
 #full-load-card > .card { margin-top: 18px; }
 
+/* ─── 各表同步进度：紧凑的游标动作与对齐 ─────────────────── */
+table.tbl th.icon-col, table.tbl td.icon-col { width: 44px; text-align: center; }
+.icon-col .btn-icon { margin: 0 auto; }
+.strategy-inline { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+table.tbl th[data-role="progress-strategy"],
+table.tbl td[data-role="progress-strategy"] { white-space: nowrap; min-width: 180px; }
+table.tbl th[data-role="progress-full"],
+table.tbl td[data-status-cell="fullProgress"] { white-space: nowrap; width: 118px; }
+.cursor-picker-options { display: grid; gap: 8px; max-height: 52vh; overflow: auto; padding: 2px 0 8px; }
+.cursor-option {
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--bg);
+}
+.cursor-option:hover { background: var(--bg-tint); }
+.cursor-option.is-current { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, var(--bg)); }
+.cursor-option input { accent-color: var(--brand); margin: 0; }
+
 /* ─── 各表同步进度：全量 / 增量双面板 ─────────────────────── */
 .progress-summary-wrap { padding: 14px 20px 0; margin-bottom: 14px; }
 .progress-summary {

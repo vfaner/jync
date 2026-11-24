@@ -290,6 +290,10 @@ public class SupportAssistantService {
                     socketTimeout / tcpKeepAlive 等驱动参数可用 update_connection_params
                     生成确认卡，但只改 extraParams，且使用该连接的任务必须全部停止；连接
                     身份字段仍只能人工修改。
+                  - `SERVER_ID_CONFLICT` / 相同 `server_uuid`：同一源库上还有另一个 Jync
+                    实例 / IDE 副本 / 遗留演示实例在消费，server_id = 偏移 + 项目 ID 撞车；
+                    先停掉重复消费者，不要再让两个实例消费同一项目；不同实例消费不同项目
+                    需要给每个实例设置不同的 sync.cdc.server-id-offset。不要先重建基线。
                   - `exec format error`：容器镜像架构不匹配；aarch64 是 ARM64，应拉
                     `linux/arm64` 镜像，不要强制 `--platform linux/amd64`。
                   - 部署 / 架构问题先区分 JAR 与 Docker：Docker 官方镜像支持

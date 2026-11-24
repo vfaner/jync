@@ -268,6 +268,10 @@ class FullLoadProgressViewTest {
         assertThat(html).contains("Limited");
         assertThat(html).contains("data-role=\"row-count-row\"");
         assertThat(html).contains("data-object=\"TODO\"");
+        // Cursor overrides are a one-icon action now; the wide input form is gone.
+        assertThat(html).contains("data-role=\"cursor-open\"");
+        assertThat(html).contains("id=\"cursor-picker-modal\"");
+        assertThat(html).doesNotContain("data-role=\"cursor-form\"");
     }
 
     @Test

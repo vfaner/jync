@@ -1533,6 +1533,101 @@
   /* ─── 游标列候选提示 ──────────────────────────────────────
      项目详情页的游标列输入框：聚焦时拉取该表可用的游标列（时间 + 整数类型），
      填到 <datalist> 里给出原生下拉建议。加载过一次就缓存，避免反复请求。 */
+  /* ─── 单表游标选择器 ──────────────────────────────────────
+     列表里的输入框 + 保存按钮太宽，把策略/游标列挤到换行。现在每行只留一个
+     铅笔图标，点击后按源表真实候选列列出选项；保存仍走原来的表单 POST。 */
+  function bindCursorPicker(btn) {
+    btn.addEventListener('click', function () {
+      var modal = document.getElementById('cursor-picker-modal');
+      var options = document.getElementById('cursor-picker-options');
+      var subject = document.getElementById('cursor-picker-subject');
+      var save = modal && modal.querySelector('[data-role="cursor-picker-save"]');
+      if (!modal || !options || !subject || !save || !btn.dataset.action) { return; }
+      var table = btn.dataset.table || '';
+      var current = btn.dataset.current || '';
+      modal.dataset.table = table;
+      subject.textContent = table;
+      options.innerHTML = '';
+      options.appendChild(textBlock(t('cursor.picker.loading'), 'small muted'));
+      save.disabled = true;
+      setModalOpen('cursor-picker-modal', true);
+
+      function addOption(value, label, checked) {
+        var row = document.createElement('label');
+        row.className = 'cursor-option' + (checked ? ' is-current' : '');
+        var radio = document.createElement('input');
+        radio.type = 'radio';
+        radio.name = 'cursorColumn';
+        radio.value = value;
+        radio.checked = checked;
+        var text = document.createElement('span');
+        text.className = value ? 'mono' : '';
+        text.textContent = label;
+        row.appendChild(radio);
+        row.appendChild(text);
+        options.appendChild(row);
+      }
+
+      getJson(btn.dataset.action + '?table=' + encodeURIComponent(table))
+        .then(function (data) {
+          options.innerHTML = '';
+          var columns = data && data.success && Array.isArray(data.columns)
+            ? data.columns : [];
+          addOption('', t('cursor.picker.auto'), !current);
+          var present = false;
+          columns.forEach(function (col) {
+            if (col === current) { present = true; }
+            addOption(col, col, col === current);
+          });
+          if (current && !present) {
+            addOption(current, current + ' · ' + t('cursor.picker.current'), true);
+          }
+          if (!columns.length && !current) {
+            options.appendChild(textBlock(t('cursor.picker.empty'), 'small muted'));
+          }
+          if (data && !data.success) {
+            options.appendChild(textBlock(t('cursor.picker.failed'), 'alert alert-danger'));
+          }
+          save.disabled = false;
+        })
+        .catch(function () {
+          options.innerHTML = '';
+          addOption('', t('cursor.picker.auto'), !current);
+          if (current) {
+            addOption(current, current + ' · ' + t('cursor.picker.current'), true);
+          }
+          options.appendChild(textBlock(t('cursor.picker.failed'), 'alert alert-danger'));
+          save.disabled = false;
+        });
+    });
+  }
+
+  function bindCursorPickerSave() {
+    var save = document.querySelector('[data-role="cursor-picker-save"]');
+    var modal = document.getElementById('cursor-picker-modal');
+    var form = document.getElementById('cursor-save-form');
+    if (!save || !modal || !form || save.dataset.bound) { return; }
+    save.dataset.bound = '1';
+    save.addEventListener('click', function () {
+      var selected = modal.querySelector('input[name=cursorColumn]:checked');
+      if (!selected) { return; }
+      document.getElementById('cursor-save-table').value = modal.dataset.table || '';
+      document.getElementById('cursor-save-column').value = selected.value;
+      form.submit();
+    });
+  }
+
+  /** Known CDC error signatures get a Chinese/English explanation; raw text stays in title. */
+  function bindTaskResultTranslation() {
+    document.querySelectorAll('[data-role="task-result"]').forEach(function (el) {
+      var raw = el.textContent || '';
+      if (/SERVER_ID_CONFLICT|same server_uuid\/server_id/i.test(raw)) {
+        el.title = raw;
+        el.textContent = t('cdc.error.serverIdConflict');
+      }
+    });
+  }
+
   function bindCursorInput(input) {
     var loaded = false;
     function load() {
@@ -5301,6 +5396,9 @@
     document.querySelectorAll('[data-role="toggle-password"]').forEach(bindPasswordToggle);
     document.querySelectorAll('[data-role="cursor-form"] input[name=cursorColumn]')
       .forEach(bindCursorInput);
+    document.querySelectorAll('[data-role="cursor-open"]').forEach(bindCursorPicker);
+    bindCursorPickerSave();
+    bindTaskResultTranslation();
     document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
     document.querySelectorAll('[data-role="column-rule-table"]').forEach(bindColumnRuleFilter);
     document.querySelectorAll('[data-role="cursor-priority-open"]').forEach(bindCursorPriority);

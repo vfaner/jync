@@ -26,7 +26,8 @@
                          : #{common.never}">Never</dd>
             <th:block th:if="${task != null and task.lastSyncResult != null}">
                 <dt th:text="#{common.details}">Result</dt>
-                <dd><span class="chip" th:text="${task.lastSyncResult}">result</span></dd>
+                <dd><span class="chip" data-role="task-result"
+                          th:text="${task.lastSyncResult}">result</span></dd>
             </th:block>
             <!--/* 下次自动运行：调度是否真的就绪必须在触发前可见。项目未启动时 Quartz
                    里根本没有这个 job，光看页面和运行中的项目毫无区别，只能等过了时间
