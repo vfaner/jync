@@ -47,6 +47,7 @@ class DatabaseConfigRoleBackfillDataTest {
     @BeforeEach
     void setUp() {
         service = new DatabaseConfigService(repository, projectRepository,
+                mock(com.qqmu.jync.service.task.SyncTaskStore.class),
                 mock(DataSourceManager.class), mock(ConnectionTestService.class), mock(CryptoUtil.class),
                 mock(AdminAuditService.class), mock(com.qqmu.jync.repository.DbMetricSampleRepository.class));
     }

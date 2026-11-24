@@ -302,10 +302,27 @@ public class SupportApiController {
         }
 
         public void action(ActionView action) {
-            send("action", Map.of("token", action.token(),
-                    "titleKey", action.titleKey(),
-                    "resourceKindKey", action.resourceKindKey(),
-                    "resourceName", action.resourceName()));
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("token", action.token());
+            body.put("titleKey", action.titleKey());
+            body.put("resourceKindKey", action.resourceKindKey());
+            body.put("resourceName", action.resourceName());
+            if (action.fields() != null && !action.fields().isEmpty()) {
+                body.put("fields", action.fields().stream().map(field -> Map.of(
+                        "field", field.field(),
+                        "labelKey", field.labelKey(),
+                        "before", field.before() == null ? "" : field.before(),
+                        "beforeIsDefault", field.beforeIsDefault(),
+                        "after", field.after() == null ? "" : field.after(),
+                        "afterIsDefault", field.afterIsDefault())).toList());
+            }
+            if (action.noteKey() != null) {
+                body.put("noteKey", action.noteKey());
+            }
+            if (action.affectedProjects() != null && !action.affectedProjects().isEmpty()) {
+                body.put("affectedProjects", action.affectedProjects());
+            }
+            send("action", body);
         }
 
         public void error(String messageKey) {

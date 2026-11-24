@@ -231,16 +231,22 @@ class SupportToolsTest {
                 .thenReturn(Optional.empty());
         when(metrics.projectCurrent(7L))
                 .thenReturn(Map.of("rowsTotal", 100.0, "lag", 12.0, "failures", 0.0));
+        var config = new com.qqmu.jync.dto.SyncConfig();
+        config.setBatchSize(1000);
+        when(projects.loadConfig(any())).thenReturn(config);
 
         var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
-                mock(DatabaseConfigService.class));
+                mock(DatabaseConfigService.class), new com.qqmu.jync.config.SyncProperties());
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
         String json = mapper.writeValueAsString(tool.execute(args, ctx));
 
         assertThat(json).contains("\"running\":true")
                 .contains("\"minutesSinceProgress\":3")
-                .contains("\"progress\"");
+                .contains("\"progress\"")
+                .contains("\"tuning\"")
+                .contains("\"batchSize\":1000")
+                .contains("\"batchSizeDefault\":500");
     }
 
     /**
@@ -264,7 +270,7 @@ class SupportToolsTest {
         when(metrics.projectCurrent(7L)).thenReturn(Map.of());
 
         var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
-                mock(DatabaseConfigService.class));
+                mock(DatabaseConfigService.class), new com.qqmu.jync.config.SyncProperties());
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
 
@@ -295,7 +301,7 @@ class SupportToolsTest {
         when(metrics.projectCurrent(7L)).thenReturn(Map.of());
 
         var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
-                mock(DatabaseConfigService.class));
+                mock(DatabaseConfigService.class), new com.qqmu.jync.config.SyncProperties());
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
 
@@ -320,7 +326,7 @@ class SupportToolsTest {
         when(metrics.projectCurrent(7L)).thenReturn(Map.of());
 
         var tool = new ProjectStatusTool(projects, progressRows, changes, metrics,
-                mock(DatabaseConfigService.class));
+                mock(DatabaseConfigService.class), new com.qqmu.jync.config.SyncProperties());
         var args = mapper.createObjectNode();
         args.put("projectId", 7);
 

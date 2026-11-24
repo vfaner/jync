@@ -41,8 +41,23 @@ public interface SupportSink {
     record DraftView(String token, String title, String summary, List<Field> fields) {
     }
 
+    /**
+     * @param fields per-field old/new values for a parameter card; empty for a plain action
+     * @param noteKey optional i18n key explaining when the change takes effect
+     */
     record ActionView(String token, String titleKey, String resourceKindKey,
-                      String resourceName) {
+                      String resourceName, List<ActionField> fields, String noteKey,
+                      List<String> affectedProjects) {
+    }
+
+    /**
+     * One row on a parameter card. Labels are i18n keys (a table or driver-parameter name is
+     * passed through as its own key and rendered verbatim by the lookup fallback); values are
+     * display strings or numbers. {@code beforeIsDefault}/{@code afterIsDefault} mean "not
+     * set", so the card can show the localized default instead of an empty cell.
+     */
+    record ActionField(String field, String labelKey, Object before, Object after,
+                       boolean beforeIsDefault, boolean afterIsDefault) {
     }
 
     record Field(String labelKey, String value) {

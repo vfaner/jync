@@ -34,6 +34,7 @@ class DatabaseConfigServiceNativeMongoTest {
 
     @Mock private DatabaseConfigRepository repository;
     @Mock private ProjectRepository projectRepository;
+    @Mock private com.qqmu.jync.service.task.SyncTaskStore taskStore;
     @Mock private DataSourceManager dataSourceManager;
     @Mock private ConnectionTestService connectionTestService;
     @Mock private CryptoUtil cryptoUtil;
@@ -45,7 +46,7 @@ class DatabaseConfigServiceNativeMongoTest {
     @BeforeEach
     void setUp() {
         service = new DatabaseConfigService(repository, projectRepository,
-                dataSourceManager, connectionTestService, cryptoUtil, auditService, dbMetricSampleRepository);
+                taskStore, dataSourceManager, connectionTestService, cryptoUtil, auditService, dbMetricSampleRepository);
     }
 
     private static DatabaseConfig nativeMongo(ConnectionRole role) {

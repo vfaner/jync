@@ -1,8 +1,10 @@
 package com.qqmu.jync.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -22,6 +24,7 @@ import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.ConnectionTestService;
@@ -39,6 +42,7 @@ class DatabaseConfigServiceRunningEditTest {
 
     @Mock private DatabaseConfigRepository repository;
     @Mock private ProjectRepository projectRepository;
+    @Mock private com.qqmu.jync.service.task.SyncTaskStore taskStore;
     @Mock private DataSourceManager dataSourceManager;
     @Mock private ConnectionTestService connectionTestService;
     @Mock private CryptoUtil cryptoUtil;
@@ -49,8 +53,9 @@ class DatabaseConfigServiceRunningEditTest {
 
     @BeforeEach
     void setUp() {
+        lenient().when(taskStore.find(any())).thenReturn(Optional.empty());
         service = new DatabaseConfigService(repository, projectRepository,
-                dataSourceManager, connectionTestService, cryptoUtil, auditService, dbMetricSampleRepository);
+                taskStore, dataSourceManager, connectionTestService, cryptoUtil, auditService, dbMetricSampleRepository);
     }
 
     private DatabaseConfig incoming(long id) {
@@ -83,6 +88,80 @@ class DatabaseConfigServiceRunningEditTest {
                 .hasMessage("error.connection.edit.running:orders-sync");
         verify(repository, never()).save(any());
         verify(dataSourceManager, never()).evict(any());
+    }
+
+    @Test
+    void changingOnlyExtraParamsStillRefusesARunningDependentProject() {
+        DatabaseConfig existing = incoming(5L);
+        when(repository.findById(5L)).thenReturn(Optional.of(existing));
+        when(projectRepository.findBySourceDbIdOrTargetDbId(5L, 5L))
+                .thenReturn(List.of(project("orders-sync", true)));
+
+        assertThatThrownBy(() -> service.updateExtraParams(5L,
+                java.util.Map.of("connectTimeout", "5000"), java.util.List.of(),
+                AccessGuard.system()))
+                .isInstanceOf(IllegalStateException.class)
+                // No ":project" suffix: this key is rendered as an assistant card result.
+                .hasMessage("error.connection.edit.running");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void anOperatorCannotChangeAParameterUnderAnotherAccountsTask() {
+        DatabaseConfig existing = incoming(5L);
+        existing.setOwnerUsername("ops1");
+        Project foreign = project("alice-sync", false);
+        foreign.setOwnerUsername("alice");
+        when(repository.findById(5L)).thenReturn(Optional.of(existing));
+        when(projectRepository.findBySourceDbIdOrTargetDbId(5L, 5L))
+                .thenReturn(List.of(foreign));
+
+        assertThatThrownBy(() -> service.updateExtraParams(5L,
+                java.util.Map.of("connectTimeout", "5000"), java.util.List.of(),
+                AccessGuard.of("ops1", com.qqmu.jync.model.UserRole.OPS)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.connection.sharedByOthers");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void aStoppedProjectStillFinishingItsRoundAlsoBlocksTheEdit() {
+        DatabaseConfig existing = incoming(5L);
+        existing.setOwnerUsername("ops1");
+        Project stopped = project("orders-sync", false);
+        stopped.setId(9L);
+        stopped.setOwnerUsername("ops1");
+        SyncTask task = new SyncTask();
+        task.setProjectId(9L);
+        task.setLockOwner("node-a");
+        task.setLockExpiresAt(java.time.Instant.now().plusSeconds(60));
+        when(repository.findById(5L)).thenReturn(Optional.of(existing));
+        when(projectRepository.findBySourceDbIdOrTargetDbId(5L, 5L))
+                .thenReturn(List.of(stopped));
+        when(taskStore.find(9L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -> service.updateExtraParams(5L,
+                java.util.Map.of("connectTimeout", "5000"), java.util.List.of(),
+                AccessGuard.of("ops1", com.qqmu.jync.model.UserRole.OPS)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.connection.edit.running");
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    void extraParamsAreMergedAgainstTheFreshRowAndThePoolIsEvicted() {
+        DatabaseConfig existing = incoming(5L);
+        existing.setExtraParams("useSSL=false");
+        when(repository.findById(5L)).thenReturn(Optional.of(existing));
+        when(projectRepository.findBySourceDbIdOrTargetDbId(5L, 5L))
+                .thenReturn(List.of(project("orders-sync", false)));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateExtraParams(5L, java.util.Map.of("connectTimeout", "5000"),
+                java.util.List.of(), AccessGuard.system());
+
+        assertThat(existing.getExtraParams()).isEqualTo("useSSL=false&connectTimeout=5000");
+        verify(dataSourceManager).evict(5L);
     }
 
     @Test

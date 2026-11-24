@@ -99,8 +99,9 @@ public class SupportAssistantService {
                在「日志管理」按日期删除）或建议走系统运维，不要生成确认卡，也不要说已经
                释放 / 清理。
             5. 变更工具只生成「确认卡」，不会执行：control_project、control_etl_task、
-               control_migration 调用后告诉用户在卡片上点「确认执行」，不要声称已经启动、
-               停止、重建、运行或取消。只在用户明确要求变更时调用，并用列表工具核对 id 与
+               control_migration、update_project_params、update_project_cursor、
+               update_project_schedule、update_connection_params 调用后告诉用户在卡片上点
+               「确认执行」，不要声称已经启动、停止、重建、运行、取消或改好参数。只在用户明确要求变更时调用，并用列表工具核对 id 与
                名称；没有权限时如实说明。推荐每张卡时写明点击后会发生什么（触发一次全量
                加载、立即运行一次、停用后不再按计划触发等）与影响，不要只念标题。用户要建
                任务时调用 draft_project 生成草稿，由用户打开表单确认后保存。
@@ -149,8 +150,29 @@ public class SupportAssistantService {
                  点了会被拒绝并提示改用重建基线：用户要求同步 CDC 任务时直接说明，改给
                  REBASELINE 或排查建议，不要生成 SYNC_NOW 卡片
                - 启用 / 停用 / 立即运行 ETL 任务 → control_etl_task
-               - 启用 / 停用 / 立即运行 / 取消专属迁移 → control_migration（action 为
-                 START、STOP、RUN_NOW、CANCEL）
+               - 调整任务级性能 / 时间参数（批量大小、全量并行度、轮询间隔、CDC 空闲
+                 轮询）→ update_project_params。只允许这四项，候选值必须在工具说明的范围；
+                 任务必须已停止。
+               - 查连接驱动参数 → connection_details；调整连接驱动参数 → update_connection_params。
+                 只能改 extraParams（如 connectTimeout、socketTimeout、批处理开关、keepalive）：
+                 set 对象设置键值，remove 数组删除参数，两者合计最多 20 项。不能改主机、端口、
+                 库名、账号、密码、自定义 URL、驱动 jar 或连接类型。连接可能被多个任务共用：
+                 调用者必须能编辑该连接，且使用它的任务都已停止；连接若被其他账号的任务
+                 使用，只有管理员可通过助手修改。卡片会列出受影响任务，回答要说明影响面。
+               - 批量调整游标列 / 游标列优先级 → update_project_cursor：columns 是表名→字段
+                 （空字符串=恢复自动识别），priority 是有序列表（最多 20），单张卡最多 20 项
+                 改动，更多请拆成多张卡。只适用于增量轮询任务，日志 CDC / 全表比对 / Redis
+                 目标会被拒绝；改动过的表下次同步会重新全量。
+               - 调整调度 Cron → update_project_schedule：Cron 优先于轮询间隔，空字符串表示
+                 清空并回到轮询间隔；只适用于轮询 / 全表比对，日志 CDC 与 Redis 目标没有
+                 Quartz 调度。Cron 按服务端 JVM 时区解释，回答时说明这一点。
+               - 以上变更工具都只生成确认卡，不会执行。任务级修改要求该任务已停止；连接
+                 参数要求使用该连接的所有任务已停止。运行中先调用 control_project(STOP) 生成
+                 停止卡，用户停止后再生成修改卡，两张卡不要合并；只能改调用者有编辑权的资源，
+                 管理员可操作全部。表选择、捕获策略、同步删除 /
+                 清空、列清洗 / 掩码、DDL 覆盖、application.yml 系统参数（连接池、chunk、
+                 超时、max-concurrent-tables 等）仍然不可由助手修改：系统参数只说明属性名、
+                 建议值与需要改配置并重启，不要承诺助手能改。
                - 新建同步任务 → draft_project（连接 id 来自 list_connections）
                - 用户报告同步任务症状（停摆、数据对不上、反复失败、变慢）→
                  diagnose_project：一次返回任务状态、最近失败、生效告警、CDC 位点、
@@ -196,10 +218,12 @@ public class SupportAssistantService {
                   - 依据：引用工具里的时间、错误摘要、运行状态与关键开关，不要贴原始 JSON。
                   - 建议：编号列出 0-3 项，按代价从低到高，说明每项的影响与前提。
                   - 可执行项：只把助手能做的动作交给 control_project / control_etl_task /
-                    control_migration 生成确认卡，每张卡对应一个选项，最多两张；启动与停止
-                    这类互斥动作不要同时生成。助手不能执行的步骤（改任务配置或 SQL、删目标
-                    表、重跑外部报表作业、在日志管理中按日期清理日志或调整保留期）写成人工
-                    步骤并指出页面位置，不要伪装成确认卡。
+                    control_migration / update_project_params / update_connection_params /
+                    update_project_cursor / update_project_schedule 生成确认卡，每张卡对应
+                    一个选项，最多两张；启动与停止这类互斥动作不要同时生成。助手不能执行的
+                    步骤（上述字段以外的改任务配置、连接身份字段、SQL、删目标表、重跑外部报表
+                    作业、在日志管理中按日期清理日志或调整保留期）写成人工步骤并指出页面位置，
+                    不要伪装成确认卡。
                4. 数据对不上时按顺序检查：syncDeletes 是否为 false（源端删除不会同步）、
                   truncateBeforeInitialLoad 是否符合预期、表是否超过 fullCompareMaxRows 或
                   deleteCompareMaxRows 为 0 导致删除比对关闭、目标表或报表是否由其他作业生成。
@@ -213,7 +237,15 @@ public class SupportAssistantService {
                   state=NOT_STARTED 过滤，问「某张表」用 table 子串，不要逐个猜表名。
                   用户问的是任务详情时，project_status 已含两端连接、捕获策略、选中表数
                   与下次计划时间，按这些字段组织回答，不要编造连接主机或账号。
-               7. 用户粘贴的报错或运行日志按用户提供的证据分析：引用其中的异常类名、错误码或
+               7. 参数调整建议必须先有证据：从 project_status 的 tuning（configured 为 null
+                  表示使用默认值）与失败记录 / 指标确定瓶颈，再给出 1 项、至多 2 项改动；
+                  说明改动解决什么、代价是什么（并行度更高占用更多源/目标连接，批次更大
+                  提交更稀、失败重试代价更高），以及「停止状态下保存、下次启动生效」。
+                  不要凭「感觉慢」就批量调参数，也不要把工具调用说成已生效。游标列建议要
+                  说明依据（主键 / 时间列情况）和「改动表重新全量」的代价；Cron 建议要说明
+                  优先于轮询间隔；驱动参数建议要先 connection_details 查当前值与受影响任务，
+                  并说明该连接上所有任务都会使用新参数、运行中的任务必须先停止。
+               8. 用户粘贴的报错或运行日志按用户提供的证据分析：引用其中的异常类名、错误码或
                   关键行，不编造日志里没有的内容；出现「已省略」标记说明日志被截断，指出缺少
                   的部分并请用户单独粘贴关键行；日志里出现密码、连接串或用户名时不要复述；
                   日志点名的任务再用对应诊断工具核对一次。用户可以直接粘贴完整日志，不必先
@@ -235,6 +267,14 @@ public class SupportAssistantService {
                     没读到主键；后者升级 2.4.5 后重启，真正无主键的表只能基线播种。
                   - 源 `DATETIME` 目标 `DATETIME(6)`：MySQL→MySQL 同族精度问题；2.4.5 起新建
                     目标保留源精度，已有目标列不会自动改。
+                  - 连接超时 / `Communications link failure` / `Broken pipe` /
+                    `getCancelTimer`：先分清是建立连接超时、读流超时、目标写入太慢还是网络
+                    中断。Jync 已对 MySQL 流式读取关闭 netTimeoutForStreamingResults 并追加
+                    socketTimeout；若目标写入慢导致源端读停顿，优先建议降低
+                    fullLoadParallelism 或 batchSize（可用参数卡）；connectTimeout /
+                    socketTimeout / tcpKeepAlive 等驱动参数可用 update_connection_params
+                    生成确认卡，但只改 extraParams，且使用该连接的任务必须全部停止；连接
+                    身份字段仍只能人工修改。
                   - `exec format error`：容器镜像架构不匹配；aarch64 是 ARM64，应拉
                     `linux/arm64` 镜像，不要强制 `--platform linux/amd64`。
                   - 部署 / 架构问题先区分 JAR 与 Docker：Docker 官方镜像支持
@@ -477,8 +517,9 @@ public class SupportAssistantService {
                     if ("draft_project".equals(call.name())) {
                         drafted = true;
                         draftResult = output;
-                    } else if (call.name().startsWith("control_")) {
-                        // The tool prepared a confirmation token; the card is emitted once the
+                    } else if (isPreparedAction(output)) {
+                        // Any tool that returns a single-use token prepared a write — control_*
+                        // and the update_* tuning tools alike. The card is emitted once the
                         // model has finished its sentence.
                         actionResults.add(output);
                     }
@@ -751,6 +792,24 @@ public class SupportAssistantService {
                 root.path("title").asString(""), root.path("summary").asString(""), fields));
     }
 
+    private boolean isPreparedAction(String output) {
+        try {
+            JsonNode root = mapper.readTree(output);
+            return root.path("ok").asBoolean(false)
+                    && !root.path("token").asString("").isEmpty();
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /** A card value is either a number (tuning) or text (cron, column, driver parameter). */
+    private static Object value(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        return node.isIntegralNumber() ? node.asLong() : node.asString("");
+    }
+
     private void emitAction(String resultJson, SupportSink sink) {
         JsonNode root;
         try {
@@ -765,8 +824,26 @@ public class SupportAssistantService {
         if (token.isEmpty()) {
             return;
         }
+        List<SupportSink.ActionField> fields = new ArrayList<>();
+        for (JsonNode field : root.path("fields")) {
+            fields.add(new SupportSink.ActionField(
+                    field.path("field").asString(""),
+                    field.path("labelKey").asString(""),
+                    value(field.path("before")),
+                    value(field.path("after")),
+                    field.path("beforeIsDefault").asBoolean(false),
+                    field.path("afterIsDefault").asBoolean(false)));
+        }
+        String noteKey = root.path("noteKey").asString("");
+        List<String> affected = new ArrayList<>();
+        for (JsonNode name : root.path("affectedProjects")) {
+            if (name.isTextual()) {
+                affected.add(name.asString(""));
+            }
+        }
         sink.action(new SupportSink.ActionView(token, root.path("titleKey").asString(""),
                 root.path("resourceKindKey").asString(""),
-                root.path("resourceName").asString("")));
+                root.path("resourceName").asString(), fields,
+                noteKey.isEmpty() ? null : noteKey, affected));
     }
 }

@@ -26,19 +26,27 @@ import org.springframework.stereotype.Component;
 public class SupportActionStore {
 
     public enum Kind {
-        PROJECT, ETL_TASK, MIGRATION_TASK
+        PROJECT, ETL_TASK, MIGRATION_TASK, CONNECTION
     }
 
     public enum Action {
         START, STOP, SYNC_NOW, RUN_NOW,
         /** CDC recovery: reset the position and let the next start run a full load. */
         REBASELINE,
+        /** Change the closed set of project performance/timing parameters. */
+        UPDATE_CONFIG,
+        /** Batch table cursor-column overrides plus the optional priority list. */
+        UPDATE_CURSOR,
+        /** Set or clear the project's cron expression. */
+        UPDATE_SCHEDULE,
+        /** Change a connection's free-form JDBC extra parameters. */
+        UPDATE_PARAMS,
         /** Stop a dedicated-migration run that is in flight. */
         CANCEL
     }
 
     public record Pending(String username, Kind kind, Long resourceId, Action action,
-                          String resourceName, Instant expiresAt) {
+                          String resourceName, Map<String, Object> payload, Instant expiresAt) {
     }
 
     static final long TTL_MILLIS = 5 * 60 * 1000L;
@@ -48,6 +56,15 @@ public class SupportActionStore {
 
     public String put(String username, Kind kind, Long resourceId, Action action,
                       String resourceName) {
+        return put(username, kind, resourceId, action, resourceName, Map.of());
+    }
+
+    /**
+     * @param payload action-specific data (for UPDATE_CONFIG: field name to new value). It is
+     *     snapshotted; the click re-validates it against the fresh config.
+     */
+    public String put(String username, Kind kind, Long resourceId, Action action,
+                      String resourceName, Map<String, Object> payload) {
         Instant now = Instant.now();
         pending.values().removeIf(item -> item.expiresAt().isBefore(now));
 
@@ -55,7 +72,7 @@ public class SupportActionStore {
         random.nextBytes(bytes);
         String token = HexFormat.of().formatHex(bytes);
         pending.put(token, new Pending(username, kind, resourceId, action, resourceName,
-                now.plusMillis(TTL_MILLIS)));
+                Map.copyOf(payload), now.plusMillis(TTL_MILLIS)));
         return token;
     }
 
@@ -87,7 +104,8 @@ public class SupportActionStore {
         Pending item = pending.get(token);
         if (item != null) {
             pending.put(token, new Pending(item.username(), item.kind(), item.resourceId(),
-                    item.action(), item.resourceName(), Instant.now().minusSeconds(1)));
+                    item.action(), item.resourceName(), item.payload(),
+                    Instant.now().minusSeconds(1)));
         }
     }
 }

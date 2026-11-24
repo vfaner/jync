@@ -8,6 +8,7 @@ import java.util.Set;
 
 import org.springframework.stereotype.Component;
 
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -17,6 +18,7 @@ import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.SyncProgressRepository;
 import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
+import com.qqmu.jync.service.ProjectTuning;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
 import com.qqmu.jync.service.ai.support.ToolContext;
@@ -28,21 +30,24 @@ import tools.jackson.databind.JsonNode;
 public class ProjectStatusTool implements SupportTool {
 
     private static final int MAX_PROGRESS_ROWS = 10;
+    private static final int MAX_CURSOR_COLUMNS = 50;
 
     private final ProjectService projects;
     private final SyncProgressRepository progressRows;
     private final ChangeLogRepository changes;
     private final MetricsQueryService metrics;
     private final DatabaseConfigService databases;
+    private final SyncProperties properties;
 
     public ProjectStatusTool(ProjectService projects, SyncProgressRepository progressRows,
                              ChangeLogRepository changes, MetricsQueryService metrics,
-                             DatabaseConfigService databases) {
+                             DatabaseConfigService databases, SyncProperties properties) {
         this.projects = projects;
         this.progressRows = progressRows;
         this.changes = changes;
         this.metrics = metrics;
         this.databases = databases;
+        this.properties = properties;
     }
 
     public String name() {
@@ -52,9 +57,10 @@ public class ProjectStatusTool implements SupportTool {
     public String description() {
         return "Read one project's details and running state: source/target connection "
                 + "names and types, capture strategy, selected-table count, sync switches, "
-                + "next scheduled run, activity cycle, progress rows, last failure and 1h "
-                + "throughput/lag. For one table's state use project_table_status. "
-                + "projectId comes from list_projects.";
+                + "next scheduled run, activity cycle, progress rows, last failure, 1h "
+                + "throughput/lag, and the current tuning values with their defaults. For "
+                + "one table's state use project_table_status. projectId comes from "
+                + "list_projects.";
     }
 
     public Map<String, Object> parameters() {
@@ -93,6 +99,32 @@ public class ProjectStatusTool implements SupportTool {
             out.put("syncData", config.isSyncData());
             out.put("syncStructure", config.isSyncStructure());
             out.put("syncDeletes", config.isSyncDeletes());
+            // A 700-table project can carry 700 overrides; the registry would cut the whole
+            // JSON at 8 KB and lose the rest of the answer. Cap the sample and say so.
+            Map<String, String> columns = config.getCursorColumns();
+            if (columns != null && columns.size() > MAX_CURSOR_COLUMNS) {
+                Map<String, String> sample = new LinkedHashMap<>();
+                for (Map.Entry<String, String> entry : columns.entrySet()) {
+                    if (sample.size() >= MAX_CURSOR_COLUMNS) {
+                        break;
+                    }
+                    sample.put(entry.getKey(), entry.getValue());
+                }
+                out.put("cursorColumns", sample);
+                out.put("cursorColumnsTruncated", true);
+            } else {
+                out.put("cursorColumns", columns);
+            }
+            out.put("cursorColumnPriority", config.getCursorColumnPriority());
+            out.put("cronExpression", config.getCronExpression());
+            // Current tuning plus the global defaults the engine falls back to: the model
+            // needs both before recommending a change, and null configured values mean
+            // "default", not "unset and broken".
+            Map<String, Object> tuning = ProjectTuning.view(config);
+            tuning.put("batchSizeDefault", properties.getBatchSize());
+            tuning.put("fullLoadParallelismDefault", properties.getFullLoadParallelism());
+            tuning.put("pollIntervalDefaultMs", properties.getPollInterval());
+            out.put("tuning", tuning);
         } catch (RuntimeException e) {
             out.put("configUnavailable", true);
         }

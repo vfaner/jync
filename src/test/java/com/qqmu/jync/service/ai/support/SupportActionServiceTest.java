@@ -10,12 +10,16 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
+import java.util.Map;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.security.access.AccessDeniedException;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.cdc.CdcNotHolderException;
@@ -37,12 +41,13 @@ class SupportActionServiceTest {
     private final EtlTaskService etlTasks = mock(EtlTaskService.class);
     private final MigrationTaskService migrationTasks = mock(MigrationTaskService.class);
     private final CdcOperationsService cdcOperations = mock(CdcOperationsService.class);
+    private final DatabaseConfigService databases = mock(DatabaseConfigService.class);
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AccessGuard ops = AccessGuard.of("ops1", UserRole.OPS);
 
     private SupportActionService service() {
         return new SupportActionService(store, projects, etlTasks, migrationTasks,
-                cdcOperations, audit);
+                cdcOperations, databases, audit);
     }
 
     private String token(String username, SupportActionStore.Kind kind, long id,
@@ -106,6 +111,78 @@ class SupportActionServiceTest {
 
         assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.FAILED);
         assertThat(result.messageKey()).isEqualTo("error.project.cdc.use.rebaseline");
+    }
+
+    @Test
+    void aConfirmedTuningCardAppliesOnlyItsStoredPayload() {
+        String token = store.put("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.UPDATE_CONFIG, "订单同步", Map.of("batchSize", 1000L));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        assertThat(result.messageKey()).isEqualTo("support.action.config.done");
+        verify(projects).updateTunables(7L, Map.of("batchSize", 1000L), ops);
+        verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
+                contains("audit.detail.supportConfig"), eq("ops1"));
+    }
+
+    @Test
+    void aTuningCardRefusedBecauseTheProjectStartedMeanwhileKeepsTheRunningKey() {
+        String token = store.put("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.UPDATE_CONFIG, "订单同步", Map.of("batchSize", 1000L));
+        when(projects.updateTunables(eq(7L), any(), eq(ops)))
+                .thenThrow(new IllegalStateException("error.project.config.running"));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.FAILED);
+        assertThat(result.messageKey()).isEqualTo("error.project.config.running");
+    }
+
+    @Test
+    void aCursorCardCallsTheBatchCursorServiceWithItsStoredPayload() {
+        String token = store.put("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.UPDATE_CURSOR, "订单同步",
+                Map.of("columns", Map.of("ORDERS", "UPDATED_AT"),
+                        "priority", List.of("UPDATE_TIME", "ID")));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        assertThat(result.messageKey()).isEqualTo("support.action.cursor.done");
+        verify(projects).saveCursorSettings(7L, Map.of("ORDERS", "UPDATED_AT"),
+                List.of("UPDATE_TIME", "ID"), ops);
+        verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
+                contains("audit.detail.supportConfig"), eq("ops1"));
+    }
+
+    @Test
+    void aScheduleCardCallsTheScheduleService() {
+        String token = store.put("ops1", SupportActionStore.Kind.PROJECT, 7L,
+                SupportActionStore.Action.UPDATE_SCHEDULE, "订单同步",
+                Map.of("cronExpression", "0 0/5 * * * ?"));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        assertThat(result.messageKey()).isEqualTo("support.action.schedule.done");
+        verify(projects).updateSchedule(7L, "0 0/5 * * * ?", ops);
+    }
+
+    @Test
+    void aConnectionCardCallsTheExtraParameterService() {
+        String token = store.put("ops1", SupportActionStore.Kind.CONNECTION, 3L,
+                SupportActionStore.Action.UPDATE_PARAMS, "prod-mysql",
+                Map.of("set", Map.of("connectTimeout", "5000"),
+                        "remove", List.of("useSSL")));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        assertThat(result.messageKey()).isEqualTo("support.action.connection.done");
+        verify(databases).updateExtraParams(3L, Map.of("connectTimeout", "5000"),
+                List.of("useSSL"), ops);
     }
 
     @Test

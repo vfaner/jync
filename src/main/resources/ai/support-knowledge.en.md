@@ -734,10 +734,39 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   instances, must run on the node holding the consumer lease. Preconditions are checked before a
   card is shown: a migration task without a usable cron cannot be enabled, one already running
   cannot be started again, and a task with no run in flight cannot be cancelled.
-- Actions have a boundary: deletes, configuration changes, connection edits, system settings,
-  external authentication, alerts, AI settings, users and audit are outside the assistant's reach,
-  and it cannot run SQL. A change-log (CDC) project cannot "sync now"; it can only rebuild its
+- Runtime tuning it can prepare (update_project_params): batch size (1-20000), full-load
+  parallelism (1-8), poll interval (at least 200 ms; polling / full-compare only) and CDC idle
+  poll (at least 50 ms; LogMiner, PostgreSQL logical, SQL Server CDC or YStream only). The task
+  must be stopped; while it is running the assistant prepares a Stop card first. Cards are only
+  prepared for tasks the caller may edit (administrators may edit anything). Each card lists the
+  old and new values; nothing is written until Confirm, the change takes effect on the next start,
+  and the audit row carries the field names and new values.
+- Actions have a boundary: deletes, configuration changes beyond the fields above, connection
+  identity fields, system settings, external authentication, alerts, AI settings, users and audit
+  are outside the assistant's reach, and it cannot run SQL. Table selection, capture strategy,
+  sync deletes/truncate, column cleansing/masking, DDL overrides and application.yml properties
+  (pool, chunk, timeouts, max-concurrent-tables) still cannot be changed through the assistant;
+  those are advice plus the property name and a restart requirement. A change-log (CDC) project cannot "sync now"; it can only rebuild its
   baseline, and the assistant says so instead of offering a card that is bound to be refused.
+
+## Task, schedule and connection tuning
+
+- Batch cursor columns and priority (update_project_cursor): columns maps table to cursor column
+  (blank returns to auto-detection); priority is an ordered list, at most 20. Polling projects
+  only — log CDC, full compare and Redis targets do not use cursor columns. A table whose effective
+  cursor changes is re-loaded on the next cycle, and the task must be stopped. One card carries
+  at most 20 changes; split a larger batch.
+- Cron (update_project_schedule): a cron takes precedence over the poll interval; an empty value
+  clears it and returns to interval scheduling. Polling / full-compare only — log CDC and Redis
+  targets have no Quartz schedule. Cron is interpreted in the server JVM's time zone.
+- Connection driver parameters (update_connection_params): inspect current values and dependent
+  tasks with connection_details first. Only extraParams can be changed (connectTimeout,
+  socketTimeout, batching and keep-alive flags, etc.; set adds/updates, remove deletes, at most
+  20 changes in total); host, port, database, account, password, custom URL, driver jar and
+  connection type stay on the page. A connection may be shared: the caller must be able to edit
+  it and every task using it must be stopped; if another account's task also uses it, only an
+  administrator may change it through the assistant. The card lists old and new values plus
+  affected tasks.
 
 ## Assistant limits and data boundary
 

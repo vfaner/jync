@@ -48,7 +48,7 @@ project-level cursor-column priority, plus fixes for Vastbase, Dameng CDC and My
   case-insensitively and with fallback; per-table overrides still win.
 - **Performance you can see**: dashboard rings, per-task performance pages and Prometheus metrics
   for throughput, lag, row counts, connections and database QPS.
-- **Optional AI agent**: ask about task state, performance and alerts in natural language,
+- **Optional AI agent**: ask about task state, per-table progress, performance and alerts in natural language,
   self-check a stalled CDC stream, **paste an error log for analysis**, or draft a task from a description.
 
 ## Screenshots
@@ -80,13 +80,16 @@ no outbound request, and `sync.ai.enabled=false` removes the feature entirely.
   </tr>
 </table>
 
-- **Ask instead of clicking**: task state, progress and throughput, row counts, database metrics,
-  active alerts and the latest ETL result all have read-only tools.
+- **Ask instead of clicking**: task details, per-table progress, throughput, row counts,
+  database metrics, active alerts and the latest ETL result all have read-only tools.
 - **Structured troubleshooting**: for a stalled CDC stream it checks every prerequisite
   (connection, privileges, position, skip counters) and answers evidence-first.
 - **Runtime changes stay on the page**: the agent prepares the action and its impact; execution
-  is started from the page button and re-checks role and ownership. It cannot run SQL, edit
-  configuration or delete tasks.
+  is started from the page button and re-checks role and ownership. It can tune project
+  parameters (batch size, parallelism, poll interval, CDC idle poll, cursor columns, cron) and a
+  connection's JDBC extraParams on stopped tasks via confirmation cards; it cannot run SQL, edit
+  other configuration or delete tasks, and connection identity fields and application.yml
+  properties are advice only.
 - **Knowledge ships with the jar**: parameters, prerequisites and known limits come from the
   bundled documentation, never from the internet.
 - **Any model**: OpenAI-compatible (including self-hosted), Anthropic, Ollama (native and
@@ -186,7 +189,7 @@ com.qqmu.jync
 - **Verification matrix**: [docs/verification-matrix.md](docs/verification-matrix.md)
 - **Release notes**: [docs/release-notes/](docs/release-notes/)
 
-`mvn test` runs 6686 unit tests (6685 pass; 1 Linux-only case is skipped on macOS) covering dialect and SQL rewriting, full loads and resume, the
+`mvn test` runs 6772 unit tests (6768 pass; 3 TLS certificate cases depend on the local certificate setup and 1 Linux-only case is skipped on macOS) covering dialect and SQL rewriting, full loads and resume, the
 six CDC engines, Redis projection, dedicated migration, ETL, alerts, ownership, the AI assistant
 and security. Real-database `*IT` suites need Docker; commands are in the verification matrix.
 

@@ -377,6 +377,44 @@
     row.appendChild(value);
     card.appendChild(row);
 
+    // 参数调整卡：逐项显示 原值 → 新值。标签与"默认"文案都走 i18n，值只当文本。
+    if (Array.isArray(data.fields)) {
+      data.fields.forEach(function (field) {
+        var frow = document.createElement('div');
+        frow.className = 'support-draft-field';
+        var flabel = document.createElement('span');
+        flabel.className = 'support-draft-label';
+        flabel.textContent = t(field.labelKey);
+        var fvalue = document.createElement('span');
+        var emptyLabel = field.field === 'cronExpression'
+          ? t('support.action.config.interval')
+          : t('support.action.config.default');
+        var before = field.beforeIsDefault ? emptyLabel : String(field.before);
+        var after = field.afterIsDefault ? emptyLabel : String(field.after);
+        fvalue.textContent = before + ' → ' + after;
+        frow.appendChild(flabel);
+        frow.appendChild(fvalue);
+        card.appendChild(frow);
+      });
+    }
+    if (Array.isArray(data.affectedProjects) && data.affectedProjects.length) {
+      var arow = document.createElement('div');
+      arow.className = 'support-draft-field';
+      var alabel = document.createElement('span');
+      alabel.className = 'support-draft-label';
+      alabel.textContent = t('support.action.connection.affected');
+      var avalue = document.createElement('span');
+      avalue.textContent = data.affectedProjects.join(', ');
+      arow.appendChild(alabel);
+      arow.appendChild(avalue);
+      card.appendChild(arow);
+    }
+    if (data.noteKey) {
+      var note = document.createElement('p');
+      note.textContent = t(data.noteKey);
+      card.appendChild(note);
+    }
+
     var buttons = document.createElement('div');
     buttons.className = 'support-action-buttons';
     var confirmBtn = document.createElement('button');

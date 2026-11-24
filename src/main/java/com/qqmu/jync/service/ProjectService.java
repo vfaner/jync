@@ -542,50 +542,117 @@ public class ProjectService {
                 || project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             throw new IllegalStateException("error.project.cursor.priority.cdc");
         }
-        List<String> normalized = normalizeCursorPriority(cursorColumnPriority);
-        if (sameCursorPriority(config.getCursorColumnPriority(), normalized)) {
+        List<String> normalized = ProjectTuning.normalizePriority(cursorColumnPriority);
+        if (ProjectTuning.samePriority(config.getCursorColumnPriority(), normalized)) {
             return;
         }
         config.setCursorColumnPriority(normalized);
         saveConfig(projectId, config, actor);
     }
 
-    private static boolean sameCursorPriority(List<String> left, List<String> right) {
-        if (left == null || right == null || left.size() != right.size()) {
-            return left == right;
+    /**
+     * Batch cursor-column overrides plus the optional project-level priority list, saved in
+     * one transaction. Reuses {@link #saveConfig} and clears the per-table cursor for every
+     * table whose effective column changed, exactly like the single-table page action.
+     *
+     * @param columns table name to cursor column; blank means "back to auto-detection"
+     * @param priority ordered preference list, or null to leave it unchanged
+     */
+    @Transactional
+    public void saveCursorSettings(Long projectId, Map<String, String> columns,
+                                   List<String> priority, AccessGuard actor) {
+        Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
+        if (isRunning(project)) {
+            throw new IllegalStateException(stoppedButRunningKey(project,
+                    "error.project.stop.before.config"));
         }
-        for (int i = 0; i < left.size(); i++) {
-            String l = left.get(i);
-            String r = right.get(i);
-            if (l == null ? r != null : !l.equalsIgnoreCase(r)) {
-                return false;
+        SyncConfig config = loadConfig(project);
+        ProjectTuning.requireCursorApplicable(config, project.getTargetKindOrDefault());
+        Map<String, String> normalizedColumns = ProjectTuning.normalizeColumns(config, columns);
+        List<String> normalizedPriority = priority == null
+                ? null : ProjectTuning.normalizePriority(priority);
+        if (normalizedColumns.isEmpty() && priority == null) {
+            throw new IllegalArgumentException("error.project.cursor.empty");
+        }
+
+        // Legacy configs have no local table list; the progress row is then the only place
+        // that knows the stored spelling, and clearCursor matches it exactly.
+        Map<String, String> progressNames = new LinkedHashMap<>();
+        for (SyncProgress progress : progressRepository.findByProjectId(projectId)) {
+            if (progress.getObjectName() != null) {
+                progressNames.put(progress.getObjectName().toUpperCase(Locale.ROOT),
+                        progress.getObjectName());
             }
         }
-        return true;
+        Set<String> clearedTables = new LinkedHashSet<>();
+        for (Map.Entry<String, String> entry : normalizedColumns.entrySet()) {
+            String table = entry.getKey();
+            String canonical = ProjectTuning.canonicalTable(config, table);
+            if (canonical == null) {
+                canonical = progressNames.get(table.toUpperCase(Locale.ROOT));
+            }
+            if (canonical != null) {
+                table = canonical;
+            }
+            String next = entry.getValue().isBlank() ? null : entry.getValue();
+            String canonicalTable = table;
+            String old = config.cursorColumnFor(canonicalTable);
+            String previous = old == null || old.isBlank() ? null : old.trim();
+            if (Objects.equals(previous, next)) {
+                continue;
+            }
+            // cursorColumnFor matches case-insensitively: replacing the key avoids two
+            // entries that would make the override ambiguous.
+            config.getCursorColumns().keySet()
+                    .removeIf(key -> key.equalsIgnoreCase(canonicalTable));
+            if (next != null) {
+                config.getCursorColumns().put(canonicalTable, next);
+            }
+            clearedTables.add(canonicalTable);
+        }
+        boolean priorityChanged = priority != null
+                && !ProjectTuning.samePriority(config.getCursorColumnPriority(),
+                        normalizedPriority);
+        if (priorityChanged) {
+            config.setCursorColumnPriority(normalizedPriority);
+        }
+        if (clearedTables.isEmpty() && !priorityChanged) {
+            return;
+        }
+        // Clear the per-table watermark BEFORE the config write: a clear is REQUIRES_NEW and
+        // commits on its own, so the reverse order could persist the new column while a crash
+        // leaves the old watermark behind — the next cycle would then skip rows. Clearing first
+        // can at worst trigger an extra full load if the save fails, which is harmless.
+        for (String table : clearedTables) {
+            stateWriter.clearCursor(projectId, table);
+        }
+        saveConfig(projectId, config, actor);
     }
 
-    private static List<String> normalizeCursorPriority(List<String> values) {
-        List<String> normalized = new ArrayList<>();
-        Set<String> seen = new LinkedHashSet<>();
-        if (values != null) {
-            for (String raw : values) {
-                String value = raw == null ? "" : raw.trim();
-                if (value.isEmpty()) {
-                    continue;
-                }
-                if (value.length() > 128) {
-                    throw new IllegalArgumentException(
-                            "error.project.cursor.priority.invalid");
-                }
-                if (seen.add(value.toUpperCase(java.util.Locale.ROOT))) {
-                    normalized.add(value);
-                }
-            }
+    /**
+     * Sets or clears the project's cron expression. A blank value returns to interval
+     * scheduling; the scheduler rebuild that follows the save applies it to the next fire.
+     */
+    @Transactional
+    public void updateSchedule(Long projectId, String cronExpression, AccessGuard actor) {
+        Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
+        if (isRunning(project)) {
+            throw new IllegalStateException(stoppedButRunningKey(project,
+                    "error.project.stop.before.config"));
         }
-        if (normalized.size() > 20) {
-            throw new IllegalArgumentException("error.project.cursor.priority.too.many");
+        SyncConfig config = loadConfig(project);
+        ProjectTuning.requireScheduleApplicable(config, project.getTargetKindOrDefault());
+        String cron = ProjectTuning.normalizeCron(cronExpression);
+        String previous = config.getCronExpression() == null
+                || config.getCronExpression().isBlank()
+                ? null : config.getCronExpression().trim();
+        if (Objects.equals(previous, cron)) {
+            return;
         }
-        return normalized;
+        config.setCronExpression(cron);
+        saveConfig(projectId, config, actor);
     }
 
     /**
@@ -691,6 +758,30 @@ public class ProjectService {
                     source.getName());
             return json;
         }
+    }
+
+    /**
+     * Applies the assistant's whitelisted tuning changes.
+     *
+     * <p>Two-phase by construction: the assistant only prepares a card, and this method runs
+     * after the click with the payload the card carried. It re-reads the row and re-applies
+     * every guard — ownership, the stopped state and the field ranges — so a card prepared
+     * before an ownership change or before somebody pressed Start is refused, not honoured.
+     * Only fields in {@link ProjectTuning} can be touched; everything else in the config is
+     * round-tripped unchanged through {@link #saveConfig}.
+     */
+    @Transactional
+    public Project updateTunables(Long projectId, Map<String, Object> changes, AccessGuard actor) {
+        Project project = require(projectId);
+        actor.requireEditable(project.getOwnerUsername());
+        if (isRunning(project)) {
+            throw new IllegalStateException(
+                    stoppedButRunningKey(project, "error.project.config.running"));
+        }
+        SyncConfig config = loadConfig(project);
+        ProjectTuning.apply(config, ProjectTuning.validate(config,
+                project.getTargetKindOrDefault(), changes));
+        return saveConfig(projectId, config, null, actor);
     }
 
     /**

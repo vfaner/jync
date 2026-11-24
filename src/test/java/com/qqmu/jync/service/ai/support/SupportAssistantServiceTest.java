@@ -59,13 +59,17 @@ class SupportAssistantServiceTest {
 
     private static final class Recorder implements SupportSink {
         final List<String> events = new ArrayList<>();
+        final List<ActionView> actions = new ArrayList<>();
 
         public void delta(String text) { events.add("delta:" + text); }
         public void tool(String callId, String name, String labelKey, ToolState state) {
             events.add("tool:" + state + ":" + name);
         }
         public void draft(DraftView draft) { events.add("draft:" + draft.token()); }
-        public void action(ActionView action) { events.add("action:" + action.token()); }
+        public void action(ActionView action) {
+            events.add("action:" + action.token());
+            actions.add(action);
+        }
         public void error(String messageKey) { events.add("error:" + messageKey); }
         public void error(String messageKey, String detail) {
             events.add("error:" + messageKey
@@ -263,6 +267,11 @@ class SupportAssistantServiceTest {
         assertThat(system.getValue())
                 .contains("project_status")
                 .contains("project_table_status")
+                .contains("update_project_params")
+                .contains("update_project_cursor")
+                .contains("update_project_schedule")
+                .contains("update_connection_params")
+                .contains("connection_details")
                 .contains("database_metrics")
                 .contains("project_row_count")
                 .contains("search_docs")
@@ -359,6 +368,40 @@ class SupportAssistantServiceTest {
         assertThat(sink.events).containsExactly(
                 "tool:QUEUED:control_project", "tool:RUNNING:control_project",
                 "tool:DONE:control_project", "delta:请在卡片上确认", "action:tok");
+    }
+
+    @Test
+    void aParameterCardCarriesItsFieldsNoteAndAffectedTasksToTheBrowser() {
+        AiChatClient.ToolCall call = new AiChatClient.ToolCall(
+                "c2", "update_connection_params", "{\"connectionId\":3}");
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(true, "OK", "准备中", List.of(call),
+                                "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "请在卡片上确认", List.of(),
+                                "", 1, false));
+        when(registry.execute(org.mockito.ArgumentMatchers.eq("update_connection_params"),
+                any(), any())).thenReturn("{\"ok\":true,\"token\":\"tok2\","
+                + "\"titleKey\":\"support.action.connection.update_params\","
+                + "\"resourceKindKey\":\"support.action.resource.connection\","
+                + "\"resourceName\":\"prod-mysql\",\"noteKey\":\"support.action.connection.note\","
+                + "\"affectedProjects\":[\"orders\",\"items\"],"
+                + "\"fields\":[{\"field\":\"param:connectTimeout\","
+                + "\"labelKey\":\"connectTimeout\",\"before\":\"3000\",\"after\":\"5000\","
+                + "\"beforeIsDefault\":false,\"afterIsDefault\":false}]}");
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("把连接超时调到 5 秒"), sink);
+
+        SupportSink.ActionView card = sink.actions.get(0);
+        assertThat(card.noteKey()).isEqualTo("support.action.connection.note");
+        assertThat(card.affectedProjects()).containsExactly("orders", "items");
+        assertThat(card.fields()).singleElement().satisfies(field -> {
+            assertThat(field.labelKey()).isEqualTo("connectTimeout");
+            assertThat(field.before()).isEqualTo("3000");
+            assertThat(field.after()).isEqualTo("5000");
+            assertThat(field.beforeIsDefault()).isFalse();
+        });
     }
 
     /**

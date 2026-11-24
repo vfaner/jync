@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 import java.sql.Connection;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.Map;
 import java.util.Optional;
 
 import org.junit.jupiter.api.AfterEach;
@@ -1633,6 +1634,96 @@ class ProjectServiceTest {
         config.setSyncViews(false);
         config.setSyncProcedures(false);
         return config;
+    }
+
+    @Test
+    void tuningIsRefusedWhileTheProjectIsRunning() {
+        Project running = project(1L);
+        running.setEnabled(true);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(running));
+
+        assertThatThrownBy(() -> service.updateTunables(1L, Map.of("batchSize", 1000L),
+                AccessGuard.system()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.config.running");
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    void tuningChangesOnlyTheWhitelistedFieldsAndKeepsTheRestOfTheConfig() {
+        Project stopped = project(1L);
+        stopped.setEnabled(false);
+        SyncConfig stored = new SyncConfig();
+        stored.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.POLLING);
+        stored.setSyncDeletes(true);
+        stored.setTables(new java.util.LinkedHashSet<>(java.util.List.of("orders")));
+        stored.setBatchSize(500);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(stopped));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(contextFactory.parseConfig(stopped)).thenReturn(stored);
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateTunables(1L, Map.of("batchSize", 1000L, "fullLoadParallelism", 4L),
+                AccessGuard.system());
+
+        assertThat(stored.getBatchSize()).isEqualTo(1000);
+        assertThat(stored.getFullLoadParallelism()).isEqualTo(4);
+        assertThat(stored.isSyncDeletes()).isTrue();
+        assertThat(stored.getTables()).containsExactly("orders");
+        verify(projectRepository).save(stopped);
+    }
+
+    @Test
+    void batchCursorSettingsAreSavedAndTheAffectedCursorIsCleared() {
+        Project project = project(7L);
+        SyncConfig stored = new SyncConfig();
+        stored.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.POLLING);
+        stored.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS", "ITEMS")));
+        when(projectRepository.findById(7L)).thenReturn(Optional.of(project));
+        when(taskStore.find(7L)).thenReturn(Optional.empty());
+        when(contextFactory.parseConfig(project)).thenReturn(stored);
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.saveCursorSettings(7L, Map.of("orders", "UPDATED_AT"),
+                java.util.List.of("UPDATE_TIME"), AccessGuard.system());
+
+        assertThat(stored.cursorColumnFor("ORDERS")).isEqualTo("UPDATED_AT");
+        assertThat(stored.getCursorColumnPriority()).containsExactly("UPDATE_TIME");
+        verify(stateWriter).clearCursor(7L, "ORDERS");
+    }
+
+    @Test
+    void aCursorChangeOnALogCdcProjectIsRefused() {
+        Project project = project(7L);
+        SyncConfig stored = new SyncConfig();
+        stored.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        when(projectRepository.findById(7L)).thenReturn(Optional.of(project));
+        when(taskStore.find(7L)).thenReturn(Optional.empty());
+        when(contextFactory.parseConfig(project)).thenReturn(stored);
+
+        assertThatThrownBy(() -> service.saveCursorSettings(7L, Map.of("ORDERS", "ID"),
+                null, AccessGuard.system()))
+                .hasMessage("error.project.cursor.not.polling");
+        verify(projectRepository, never()).save(any());
+    }
+
+    @Test
+    void aCronChangeIsSavedThroughTheOrdinaryConfigPath() {
+        Project project = project(7L);
+        SyncConfig stored = new SyncConfig();
+        stored.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.POLLING);
+        when(projectRepository.findById(7L)).thenReturn(Optional.of(project));
+        when(taskStore.find(7L)).thenReturn(Optional.empty());
+        when(contextFactory.parseConfig(project)).thenReturn(stored);
+        when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.updateSchedule(7L, "0 0/5 * * * ?", AccessGuard.system());
+
+        assertThat(stored.getCronExpression()).isEqualTo("0 0/5 * * * ?");
+        verify(scheduler).reschedule(any());
     }
 
     @Test

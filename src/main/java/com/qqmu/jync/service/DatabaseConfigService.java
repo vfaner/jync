@@ -19,13 +19,16 @@ import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.DbMetricSampleRepository;
 import com.qqmu.jync.repository.ProjectRepository;
+import com.qqmu.jync.service.connection.ConnectionParams;
 import com.qqmu.jync.service.connection.ConnectionTestService;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.DriverPresence;
 import com.qqmu.jync.service.etl.mongo.MongoUriBuilder;
+import com.qqmu.jync.service.task.SyncTaskStore;
 import com.qqmu.jync.util.CryptoUtil;
 
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +40,7 @@ public class DatabaseConfigService {
 
     private final DatabaseConfigRepository repository;
     private final ProjectRepository projectRepository;
+    private final SyncTaskStore taskStore;
     private final DataSourceManager dataSourceManager;
     private final ConnectionTestService connectionTestService;
     private final CryptoUtil cryptoUtil;
@@ -45,6 +49,7 @@ public class DatabaseConfigService {
 
     public DatabaseConfigService(DatabaseConfigRepository repository,
                                  ProjectRepository projectRepository,
+                                 SyncTaskStore taskStore,
                                  DataSourceManager dataSourceManager,
                                  ConnectionTestService connectionTestService,
                                  CryptoUtil cryptoUtil,
@@ -52,6 +57,7 @@ public class DatabaseConfigService {
                                  DbMetricSampleRepository metricSampleRepository) {
         this.repository = repository;
         this.projectRepository = projectRepository;
+        this.taskStore = taskStore;
         this.dataSourceManager = dataSourceManager;
         this.connectionTestService = connectionTestService;
         this.cryptoUtil = cryptoUtil;
@@ -74,6 +80,69 @@ public class DatabaseConfigService {
 
     public Optional<DatabaseConfig> findById(Long id) {
         return repository.findById(id);
+    }
+
+    /** Every sync task that uses this connection as source or target. */
+    public List<Project> projectsUsing(Long connectionId) {
+        return projectRepository.findBySourceDbIdOrTargetDbId(connectionId, connectionId);
+    }
+
+    /**
+     * The same "is a round in flight?" rule {@code ProjectService.isRunning} uses: an enabled
+     * project, or a stopped one whose previous round still holds a live lease. Connection
+     * edits evict the shared pool, so a finishing round counts too — not only enabled tasks.
+     */
+    public boolean isRunning(Project project) {
+        if (project == null) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(project.getEnabled())) {
+            return true;
+        }
+        if (project.getId() == null) {
+            return false;
+        }
+        SyncTask task = taskStore.find(project.getId()).orElse(null);
+        if (task == null || task.getLockOwner() == null) {
+            return false;
+        }
+        return task.getLockExpiresAt() == null
+                || task.getLockExpiresAt().isAfter(java.time.Instant.now());
+    }
+
+    /**
+     * Changes only the free-form JDBC {@code extraParams} of an existing connection.
+     *
+     * <p>Identity and security fields (host, port, database, accounts, password, custom URL
+     * or driver jar) are never touched. {@link #save} re-applies its own guards: the caller
+     * must be able to edit the connection, and no project using it may be running. That is
+     * also why the assistant's card is refused when any dependent project is enabled — the
+     * connection pool is shared.
+     */
+    @Transactional
+    public DatabaseConfig updateExtraParams(Long connectionId, java.util.Map<String, String> set,
+                                            List<String> remove, AccessGuard actor) {
+        DatabaseConfig existing = repository.findById(connectionId)
+                .orElseThrow(() -> new IllegalArgumentException("error.connection.not.found"));
+        actor.requireEditable(existing.getOwnerUsername());
+        // Same guard as save(), but without the appended project names: this path returns a
+        // message key to the assistant's card, and "key:names" would render verbatim.
+        List<Project> using = projectsUsing(connectionId);
+        if (!actor.isAdmin() && using.stream()
+                .anyMatch(project -> !actor.canEdit(project.getOwnerUsername()))) {
+            // A driver parameter affects every task on the connection. An operator must not
+            // change it under somebody else's task even though they own the connection row.
+            throw new IllegalStateException("error.connection.sharedByOthers");
+        }
+        boolean running = using.stream().anyMatch(this::isRunning);
+        if (running) {
+            throw new IllegalStateException("error.connection.edit.running");
+        }
+        // Merge against the freshly loaded string: a concurrent edit to another parameter is
+        // preserved instead of being overwritten by the card's snapshot.
+        existing.setExtraParams(ConnectionParams.merge(existing.getExtraParams(), set, remove));
+        // Blank raw passwords keep the stored ciphertext, so this does not round-trip secrets.
+        return save(existing, "", "", actor);
     }
 
     public long count() {

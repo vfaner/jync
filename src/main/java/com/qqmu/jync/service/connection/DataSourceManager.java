@@ -546,36 +546,52 @@ public class DataSourceManager {
     }
 
     /**
-     * Validates one {@code key=value} pair, returning the rendered pair or null when it
-     * must be dropped. Blocked keys are refused even if the driver would ignore them, and
-     * values carrying separator or control characters are refused because they would
-     * smuggle additional properties past the per-key validation.
+     * Strict form of {@link #sanitizeExtraParam}: returns the rendered pair or throws. Used
+     * by the assistant's connection-parameter card so a refused key is explained instead of
+     * silently disappearing at the next connection open. Blocked keys are refused even if the
+     * driver would ignore them, and values carrying separator or control characters are
+     * refused because they would smuggle additional properties past the per-key validation.
+     */
+    public static String validatedExtraParam(String key, String value) {
+        String k = key == null ? "" : key.trim();
+        String v = value == null ? "" : value.trim();
+        if (!StringUtils.hasText(k)
+                || BLOCKED_PARAM_KEYS.contains(k.toUpperCase(java.util.Locale.ROOT))
+                // H2's INIT/RUNSCRIPT are blocked in the assembled-URL check; keep them out
+                // of the stored parameter string as well.
+                || "INIT".equalsIgnoreCase(k) || "RUNSCRIPT".equalsIgnoreCase(k)) {
+            throw new IllegalArgumentException("error.connection.url.unsafe");
+        }
+        for (int i = 0; i < k.length(); i++) {
+            char c = k.charAt(i);
+            // '=', '&' and ';' would let one "key" split into an extra pair when the stored
+            // string is parsed again: the card would show one parameter and the URL would
+            // receive two. A key is a driver property name, never a separator.
+            if (Character.isWhitespace(c) || c <= 0x1f || c == 0x7f
+                    || c == '=' || c == '&' || c == ';') {
+                throw new IllegalArgumentException("error.connection.url.unsafe");
+            }
+        }
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            if (c == '&' || c == ';' || c <= 0x1f || c == 0x7f) {
+                throw new IllegalArgumentException("error.connection.url.unsafe");
+            }
+        }
+        return v.isEmpty() ? k : k + "=" + v;
+    }
+
+    /**
+     * Runtime path for one {@code key=value} pair: an unsafe pair is logged and dropped
+     * rather than failing every connection open for a stored value that predates validation.
      */
     private String sanitizeExtraParam(String connectionName, String key, String value) {
-        // Locale.ROOT: a default-locale uppercase maps 'i' to 'İ' under tr-TR, which would
-        // make every blocklisted key containing an 'i' slip through.
-        if (!StringUtils.hasText(key)
-                || BLOCKED_PARAM_KEYS.contains(key.toUpperCase(java.util.Locale.ROOT))) {
+        try {
+            return validatedExtraParam(key, value);
+        } catch (IllegalArgumentException e) {
             log.warn("Refused unsafe JDBC property '{}' on connection '{}'", key, connectionName);
             return null;
         }
-        for (int i = 0; i < key.length(); i++) {
-            char c = key.charAt(i);
-            if (Character.isWhitespace(c) || c <= 0x1f || c == 0x7f) {
-                log.warn("Refused JDBC property with illegal characters in key '{}' on '{}'",
-                        key, connectionName);
-                return null;
-            }
-        }
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (c == '&' || c == ';' || c <= 0x1f || c == 0x7f) {
-                log.warn("Refused JDBC property '{}' — value contains separator/control"
-                        + " characters on connection '{}'", key, connectionName);
-                return null;
-            }
-        }
-        return value.isEmpty() ? key : key + "=" + value;
     }
 
     /** Dangerous keys checked against the whole assembled URL, including H2 INIT/RUNSCRIPT. */

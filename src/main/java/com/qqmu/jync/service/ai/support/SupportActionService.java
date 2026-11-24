@@ -1,11 +1,16 @@
 package com.qqmu.jync.service.ai.support;
 
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.MigrationRunTrigger;
 import com.qqmu.jync.service.AdminAuditService;
+import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.AccessGuard;
@@ -47,16 +52,19 @@ public class SupportActionService {
     private final EtlTaskService etlTasks;
     private final MigrationTaskService migrationTasks;
     private final CdcOperationsService cdcOperations;
+    private final DatabaseConfigService databases;
     private final AdminAuditService audit;
 
     public SupportActionService(SupportActionStore store, ProjectService projects,
                                 EtlTaskService etlTasks, MigrationTaskService migrationTasks,
-                                CdcOperationsService cdcOperations, AdminAuditService audit) {
+                                CdcOperationsService cdcOperations, DatabaseConfigService databases,
+                                AdminAuditService audit) {
         this.store = store;
         this.projects = projects;
         this.etlTasks = etlTasks;
         this.migrationTasks = migrationTasks;
         this.cdcOperations = cdcOperations;
+        this.databases = databases;
         this.audit = audit;
     }
 
@@ -73,7 +81,9 @@ public class SupportActionService {
         try {
             run(pending, actor);
             audit(pending, actor, true);
-            return new Result(Outcome.OK, "support.action.done");
+            // A config save is not visible on the page until a refresh, and it only takes
+            // effect on the next start; saying "done" alone invites "so it is faster now?".
+            return new Result(Outcome.OK, doneKey(pending.action()));
         } catch (AccessDeniedException e) {
             // Ownership was checked here as well as when the card was prepared, but the row
             // may have changed hands between the two.
@@ -112,6 +122,7 @@ public class SupportActionService {
             case PROJECT -> runProject(pending, actor);
             case ETL_TASK -> runEtlTask(pending, actor);
             case MIGRATION_TASK -> runMigrationTask(pending, actor);
+            case CONNECTION -> runConnection(pending, actor);
         }
     }
 
@@ -127,6 +138,24 @@ public class SupportActionService {
                 projects.requireEditable(pending.resourceId(), actor);
                 cdcOperations.rebaseline(pending.resourceId());
             }
+            // The payload holds only whitelisted tuning fields; updateTunables re-checks
+            // ownership, the stopped state and the ranges against the fresh row.
+            case UPDATE_CONFIG ->
+                    projects.updateTunables(pending.resourceId(), pending.payload(), actor);
+            case UPDATE_CURSOR -> projects.saveCursorSettings(pending.resourceId(),
+                    stringMap(pending.payload().get("columns")),
+                    stringList(pending.payload().get("priority")), actor);
+            case UPDATE_SCHEDULE -> projects.updateSchedule(pending.resourceId(),
+                    string(pending.payload().get("cronExpression")), actor);
+            default -> throw new IllegalStateException("support.action.failed");
+        }
+    }
+
+    private void runConnection(SupportActionStore.Pending pending, AccessGuard actor) {
+        switch (pending.action()) {
+            case UPDATE_PARAMS -> databases.updateExtraParams(pending.resourceId(),
+                    stringMap(pending.payload().get("set")),
+                    stringList(pending.payload().get("remove")), actor);
             default -> throw new IllegalStateException("support.action.failed");
         }
     }
@@ -168,12 +197,99 @@ public class SupportActionService {
         }
     }
 
+    private String doneKey(SupportActionStore.Action action) {
+        return switch (action) {
+            case UPDATE_CONFIG -> "support.action.config.done";
+            case UPDATE_CURSOR -> "support.action.cursor.done";
+            case UPDATE_SCHEDULE -> "support.action.schedule.done";
+            case UPDATE_PARAMS -> "support.action.connection.done";
+            default -> "support.action.done";
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> stringMap(Object raw) {
+        if (raw == null) {
+            return Map.of();
+        }
+        if (!(raw instanceof Map<?, ?> map)) {
+            throw new IllegalArgumentException("error.support.param.invalid");
+        }
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (Map.Entry<?, ?> entry : map.entrySet()) {
+            if (!(entry.getKey() instanceof String key)) {
+                throw new IllegalArgumentException("error.support.param.invalid");
+            }
+            out.put(key, entry.getValue() == null ? "" : String.valueOf(entry.getValue()));
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> stringList(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof List<?> list)) {
+            throw new IllegalArgumentException("error.support.param.invalid");
+        }
+        List<String> out = new java.util.ArrayList<>();
+        for (Object item : list) {
+            if (!(item instanceof String text)) {
+                throw new IllegalArgumentException("error.support.param.invalid");
+            }
+            out.add(text);
+        }
+        return out;
+    }
+
+    private String string(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        if (!(raw instanceof String text)) {
+            throw new IllegalArgumentException("error.support.param.invalid");
+        }
+        return text;
+    }
+
     private void audit(SupportActionStore.Pending pending, AccessGuard actor, boolean success) {
+        String outcome = "@msg:" + (success ? "audit.support.outcome.ok"
+                : "audit.support.outcome.failed");
+        if (pending.action() == SupportActionStore.Action.UPDATE_CONFIG
+                || pending.action() == SupportActionStore.Action.UPDATE_CURSOR
+                || pending.action() == SupportActionStore.Action.UPDATE_SCHEDULE
+                || pending.action() == SupportActionStore.Action.UPDATE_PARAMS) {
+            // A generic "action done" row cannot answer "what changed?". Field names and
+            // tuning values are not credentials, so the audit carries them.
+            audit.record(AuditAction.AI_SUPPORT_ACTION, AuditDetail.of(
+                            "audit.detail.supportConfig",
+                            pending.resourceName(), changes(pending.payload()), outcome),
+                    actor.username());
+            return;
+        }
         audit.record(AuditAction.AI_SUPPORT_ACTION, AuditDetail.of("audit.detail.supportAction",
                         "@msg:" + SupportActionStore.titleKey(pending.kind(), pending.action()),
-                        pending.resourceName(),
-                        "@msg:" + (success ? "audit.support.outcome.ok"
-                                : "audit.support.outcome.failed")),
+                        pending.resourceName(), outcome),
                 actor.username());
+    }
+
+    private String changes(Map<String, Object> payload) {
+        if (payload == null || payload.isEmpty()) {
+            return "-";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, Object> entry : new TreeMap<>(payload).entrySet()) {
+            if (!sb.isEmpty()) {
+                sb.append(", ");
+            }
+            sb.append(entry.getKey()).append('=').append(entry.getValue());
+            // audit_event.detail is 1024 chars; a long driver-parameter value must not turn a
+            // successful save into a failed audit insert.
+            if (sb.length() > 480) {
+                return sb.substring(0, 480) + "…";
+            }
+        }
+        return sb.toString();
     }
 }
