@@ -2896,6 +2896,11 @@ public class DataSyncService {
         }
         List<String> pk = table.getPrimaryKeys();
         int chunkSize = chunkSizeFor(table);
+        // A production context can borrow a fresh pair per chunk. That keeps a connection
+        // that a previous chunk retired from poisoning every later attempt; hand-built test
+        // contexts without a provider keep using the cycle's connections.
+        Connection chunkSource = ctx.getConnectionProvider() == null ? sourceConn : null;
+        Connection chunkTarget = ctx.getConnectionProvider() == null ? targetConn : null;
 
         RangeResume resume = resumePoint(saved, 0, table);
         List<Object> lastPk = resume.boundary;
@@ -2929,7 +2934,7 @@ public class DataSyncService {
             List<Object> params = new ArrayList<>();
             String pageSql = KeysetChunker.pageSql(ctx.getSourceDialect(), ctx.getSourceSchema(),
                     table.getName(), pk, lastPk, null, strategy, upperBound, chunkSize, params);
-            ChunkCopy copy = copyFullLoadChunk(sourceConn, targetConn, pageSql, params,
+            ChunkCopy copy = copyFullLoadChunk(chunkSource, chunkTarget, pageSql, params,
                     table, targetTable, ctx, pk, insertFirst);
             WriteStats stats = copy.stats();
             if (stats.read == 0) {
@@ -3043,6 +3048,8 @@ public class DataSyncService {
             chunkIndex = Math.max(chunkIndex, checkpoint.getChunkIndex() + 1);
         }
         int chunkSize = chunkSizeFor(table);
+        Connection chunkSource = ctx.getConnectionProvider() == null ? sourceConn : null;
+        Connection chunkTarget = ctx.getConnectionProvider() == null ? targetConn : null;
         List<String> columns = new ArrayList<>(table.getColumns().size());
         for (ColumnMeta column : table.getColumns()) {
             columns.add(column.getName());
@@ -3067,7 +3074,7 @@ public class DataSyncService {
             String pageSql = KeysetChunker.keylessPageSql(ctx.getSourceDialect(),
                     ctx.getSourceSchema(), table.getName(), columns, orderColumns,
                     strategy, upperBound, position, chunkSize, params);
-            WriteStats stats = copyFullLoadChunk(sourceConn, targetConn, pageSql, params,
+            WriteStats stats = copyFullLoadChunk(chunkSource, chunkTarget, pageSql, params,
                     table, targetTable, ctx, null, insertFirst).stats();
             if (stats.read == 0) {
                 break;
