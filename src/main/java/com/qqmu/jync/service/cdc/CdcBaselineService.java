@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.dto.SyncResult;
 import com.qqmu.jync.model.CaptureStrategy;
+import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.SyncTargetKind;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -271,6 +272,19 @@ public class CdcBaselineService {
         CaptureStrategy strategy = ctx.getConfig() == null
                 ? CaptureStrategy.POLLING
                 : ctx.getConfig().getCaptureStrategyOrDefault();
+        // A baseline that failed halfway leaves its position row not-done. Resuming it must
+        // keep that anchor and the chunk checkpoints: replacing the anchor would skip every
+        // change between the old and new position, and resetting progress would throw away
+        // the completed tables' resume state. A deliberate rebuild deletes the position
+        // first, so this branch is only the "continue unfinished baseline" path.
+        if (ctx.getProject().getTargetKindOrDefault() != SyncTargetKind.REDIS) {
+            CdcPosition existing = positionStore.find(projectId).orElse(null);
+            if (existing != null && !Boolean.TRUE.equals(existing.isBaselineDone())) {
+                log.info("CDC baseline for project {} resumes from its existing anchor;"
+                        + " completed tables and chunk checkpoints are kept", projectId);
+                return existing.getScn();
+            }
+        }
         Long logMinerAnchorScn = null;
         switch (strategy) {
             case LOGMINER_CDC: {

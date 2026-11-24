@@ -372,4 +372,56 @@ public class CdcOperationsService {
         return restarted;
     }
 
+    /**
+     * Continues a baseline that stopped halfway. Unlike {@link #rebaseline(Long)}, this keeps
+     * the original capture anchor and the per-table chunk checkpoints, so completed tables
+     * are not re-read and the in-flight tables resume from their last committed block.
+     */
+    public boolean resumeBaseline(Long projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        if (!CaptureStrategyParser.parse(project.getSyncConfig()).isLogCdc()) {
+            throw new IllegalArgumentException("error.project.cdc.not.cdc");
+        }
+        if (cdcManager.statsFor(projectId) == null
+                && lockService.isLeaseHeldByAnotherLiveOwner(projectId)) {
+            throw new CdcNotHolderException("cdc.rebaseline.not.holder");
+        }
+        var position = positionStore.find(projectId).orElse(null);
+        if (position == null || Boolean.TRUE.equals(position.isBaselineDone())) {
+            throw new IllegalArgumentException("error.project.cdc.resume.noPending");
+        }
+        log.info("Resuming the unfinished CDC baseline of project {} ('{}')",
+                projectId, project.getName());
+        cdcManager.ensureStopped(projectId);
+        Project fresh = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        boolean restarted = Boolean.TRUE.equals(fresh.getEnabled());
+        if (restarted) {
+            taskStore.markCdcRunning(projectId);                 // lift the ERROR hat
+            try {
+                cdcManager.ensureStarted(fresh);
+            } catch (RuntimeException e) {
+                log.error("CDC baseline of project {} could not be resumed; supervision will"
+                        + " retry", projectId, e);
+                changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
+                        fresh.getName(), ChangeType.ERROR,
+                        "baseline resume; consumer restart failed"));
+                auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
+                        AuditDetail.of("audit.detail.cdcRebaseline", String.valueOf(projectId),
+                                "@rebaseline:resumeFailed"));
+                throw new CdcRestartFailedException(e);
+            }
+        } else {
+            taskStore.markStoppedClearingResult(projectId);
+        }
+        changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
+                fresh.getName(), ChangeType.INFO,
+                restarted ? "baseline resume requested" : "baseline resume pending start"));
+        auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
+                AuditDetail.of("audit.detail.cdcRebaseline", String.valueOf(projectId),
+                        "@rebaseline:" + (restarted ? "resumed" : "resumePending")));
+        return restarted;
+    }
+
 }

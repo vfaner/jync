@@ -129,6 +129,30 @@ public class CdcApiController {
         return ResponseEntity.ok(body);
     }
 
+    @PostMapping("/{id}/cdc-resume-baseline")
+    public ResponseEntity<Map<String, Object>> resumeBaseline(@PathVariable Long id) {
+        try {
+            projectService.requireEditable(id, AccessGuard.current());
+        } catch (IllegalArgumentException e) {
+            return badRequest(e);
+        }
+        boolean restarted;
+        try {
+            restarted = operations.resumeBaseline(id);
+        } catch (IllegalArgumentException e) {
+            return badRequest(e);
+        } catch (CdcNotHolderException e) {
+            return conflict(e);
+        } catch (CdcRestartFailedException e) {
+            return unavailable(e);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        body.put("success", true);
+        body.put("message", restarted ? "msg.cdc.resume.done" : "msg.cdc.resume.pending");
+        return ResponseEntity.ok(body);
+    }
+
     private static boolean hasServerIdConflict(CdcProbeResult result) {
         for (CdcProbeResult.Check check : result.getChecks()) {
             if (CdcProbeResult.SERVER_ID.equals(check.getName()) && !check.isPassed()

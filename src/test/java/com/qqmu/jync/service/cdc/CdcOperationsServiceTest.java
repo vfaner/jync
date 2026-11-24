@@ -32,6 +32,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.ChangeLog;
+import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -442,6 +443,37 @@ class CdcOperationsServiceTest {
         assertThat(changeLog.getValue().getChangeType()).isEqualTo(ChangeType.ERROR);
         assertThat(changeLog.getValue().getDetails()).contains("restart failed");
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), anyString());
+    }
+
+    @Test
+    void resumeBaselineKeepsTheAnchorAndCheckpoints() {
+        Project stale = cdcProject("stale");
+        Project fresh = cdcProject("fresh");
+        when(projectRepository.findById(1L))
+                .thenReturn(Optional.of(stale), Optional.of(fresh));
+        CdcPosition position = new CdcPosition();
+        position.setProjectId(1L);
+        position.setBaselineDone(false);
+        when(positionStore.find(1L)).thenReturn(Optional.of(position));
+
+        assertThat(service.resumeBaseline(1L)).isTrue();
+
+        verify(cdcManager).ensureStopped(1L);
+        verify(positionStore, never()).delete(1L);
+        verify(stateWriter, never()).clearCursor(1L);
+        verify(taskStore).markCdcRunning(1L);
+        verify(cdcManager).ensureStarted(same(fresh));
+    }
+
+    @Test
+    void resumeBaselineRejectsACompletedOrMissingBaseline() {
+        Project p = cdcProject("done");
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(p));
+        when(positionStore.find(1L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resumeBaseline(1L))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.project.cdc.resume.noPending");
     }
 
     /**

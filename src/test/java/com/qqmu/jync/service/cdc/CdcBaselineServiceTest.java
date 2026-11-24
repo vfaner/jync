@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 import com.qqmu.jync.dto.SyncResult;
+import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -179,6 +180,21 @@ class CdcBaselineServiceTest {
         assertThat(mark.getFile()).isEqualTo("mysql-bin.000009");
         assertThat(mark.getPos()).isEqualTo(321L);
         assertThat(mark.getGtidSet()).isNull();
+    }
+
+    @Test
+    void anUnfinishedBaselineResumesItsAnchorWithoutResetting() {
+        CdcPosition position = new CdcPosition();
+        position.setProjectId(7L);
+        position.setScn(777L);
+        position.setBaselineDone(false);
+        when(positionStore.find(7L)).thenReturn(java.util.Optional.of(position));
+
+        Long anchor = service.recordBaselineAnchor(ctx(7L));
+
+        assertThat(anchor).isEqualTo(777L);
+        verify(engine, never()).resetProject(7L);
+        verify(positionStore, never()).recordBaselineStart(any(), any(), anyLong(), any(), anyLong());
     }
 
     @Test
