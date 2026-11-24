@@ -52,6 +52,18 @@
             <th:block th:replace="~{project-detail/progress-badges :: badge(${p})}"/>
         </div>
     </div>
+    <div id="table-status-summary-data" hidden th:if="${tableStatuses != null}">
+        <th:block th:replace="~{project-detail/table-status :: summary(
+                ${tableStatusCompleted}, ${tableStatusInProgress},
+                ${tableStatusIncomplete}, ${tableStatusNotStarted})}"/>
+    </div>
+    <table id="table-status-data" hidden th:if="${tableStatuses != null}">
+        <tbody>
+        <th:block th:each="s : ${tableStatuses}">
+            <tr th:replace="~{project-detail/table-status :: row(${s})}"></tr>
+        </th:block>
+        </tbody>
+    </table>
 </div>
 </body>
 </html>

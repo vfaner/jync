@@ -375,17 +375,7 @@ public class ProjectController {
             }
         }
         model.addAttribute("progressByTable", progressByTable);
-        List<ProjectService.TableSyncStatus> tableStatuses =
-                projectService.findTableSyncStatuses(id, config);
-        model.addAttribute("tableStatuses", tableStatuses);
-        model.addAttribute("tableStatusCompleted", tableStatuses.stream()
-                .filter(status -> status.state() == ProjectService.SyncState.COMPLETED).count());
-        model.addAttribute("tableStatusInProgress", tableStatuses.stream()
-                .filter(status -> status.state() == ProjectService.SyncState.IN_PROGRESS).count());
-        model.addAttribute("tableStatusIncomplete", tableStatuses.stream()
-                .filter(status -> status.state() == ProjectService.SyncState.INCOMPLETE).count());
-        model.addAttribute("tableStatusNotStarted", tableStatuses.stream()
-                .filter(status -> status.state() == ProjectService.SyncState.NOT_STARTED).count());
+        addTableStatuses(id, config, model);
         Set<String> columnRuleTables = new TreeSet<>();
         for (ColumnRule r : config.getColumnRules()) {
             if (r.getTable() != null && !r.getTable().isBlank()) {
@@ -616,11 +606,36 @@ public class ProjectController {
      */
     @GetMapping("/{id}/full-load-card")
     public String fullLoadCardFragment(@PathVariable Long id, Model model) {
-        projectService.findById(id).ifPresent(project -> model.addAttribute("project", project));
+        projectService.findById(id).ifPresent(project -> {
+            model.addAttribute("project", project);
+            addTableStatuses(id, projectService.loadConfig(project), model);
+        });
         List<SyncProgress> progress = projectService.findProgress(id);
         model.addAttribute("progressList", progress);
         addFullLoadProgress(id, progress, model);
         return "project-detail/full-load-progress :: card";
+    }
+
+    /**
+     * Selected-table statuses (including tables that have not started yet) plus the four
+     * counters the summary badge needs. Shared by the detail page and the 2-second
+     * full-load fragment so both always describe the same table list.
+     */
+    private void addTableStatuses(Long id, SyncConfig config, Model model) {
+        List<ProjectService.TableSyncStatus> tableStatuses =
+                projectService.findTableSyncStatuses(id, config);
+        if (tableStatuses == null) {
+            return;
+        }
+        model.addAttribute("tableStatuses", tableStatuses);
+        model.addAttribute("tableStatusCompleted", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.COMPLETED).count());
+        model.addAttribute("tableStatusInProgress", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.IN_PROGRESS).count());
+        model.addAttribute("tableStatusIncomplete", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.INCOMPLETE).count());
+        model.addAttribute("tableStatusNotStarted", tableStatuses.stream()
+                .filter(status -> status.state() == ProjectService.SyncState.NOT_STARTED).count());
     }
 
     /**

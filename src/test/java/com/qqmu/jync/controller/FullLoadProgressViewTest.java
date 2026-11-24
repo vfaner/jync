@@ -203,6 +203,28 @@ class FullLoadProgressViewTest {
     }
 
     @Test
+    void theFullLoadFragmentCarriesFreshStatusRowsAndSummaryForLiveRefresh() throws Exception {
+        stubDetail(Map.of());
+        when(projectService.findTableSyncStatuses(eq(1L), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("DONE", ProjectService.SyncState.COMPLETED,
+                        10L, java.time.Instant.now(), null, null),
+                new ProjectService.TableSyncStatus("TODO", ProjectService.SyncState.NOT_STARTED,
+                        null, null, null, null)));
+
+        String fragment = mvc.perform(get("/projects/1/full-load-card").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The 2-second card poll replaces the visible status rows from these hidden ones,
+        // so the fragment must ship both a row per table (named by table) and the summary.
+        assertThat(fragment).contains("id=\"table-status-data\"");
+        assertThat(fragment).contains("data-table-status-name=\"DONE\"");
+        assertThat(fragment).contains("data-table-status-name=\"TODO\"");
+        assertThat(fragment).contains("id=\"table-status-summary-data\"");
+        assertThat(fragment).contains("data-table-status-summary");
+    }
+
+    @Test
     void aTableWithoutCheckpointsShowsNoFullLoadBadge() throws Exception {
         stubDetail(Map.of());
 

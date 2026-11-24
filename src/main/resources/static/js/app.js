@@ -3510,6 +3510,28 @@
       });
     }
 
+    function updateTableStatus(fresh) {
+      var visible = document.querySelectorAll('#table-status-card tr[data-table-status-row]');
+      if (!visible.length) return;
+      var byName = {};
+      visible.forEach(function (row) {
+        byName[row.getAttribute('data-table-status-name')] = row;
+      });
+      fresh.querySelectorAll('#table-status-data tr[data-table-status-row]').forEach(function (entry) {
+        var row = byName[entry.getAttribute('data-table-status-name')];
+        if (row) {
+          row.innerHTML = entry.innerHTML;
+        }
+      });
+      // Counts in the summary badge shift as tables start/finish; the row update alone
+      // would leave a stale "0 running" next to a visibly running table.
+      var summary = document.querySelector('#table-status-card [data-table-status-summary]');
+      var freshSummary = fresh.querySelector('#table-status-summary-data [data-table-status-summary]');
+      if (summary && freshSummary) {
+        summary.textContent = freshSummary.textContent;
+      }
+    }
+
     function refresh() {
       if (inFlight) return;
       inFlight = true;
@@ -3528,6 +3550,7 @@
             return;
           }
           updateBadges(fresh);
+          updateTableStatus(fresh);
           card.innerHTML = freshCard.innerHTML;
           active = freshCard.getAttribute('data-full-load-active') === 'true';
           if (active) {
