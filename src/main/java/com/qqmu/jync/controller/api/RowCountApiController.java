@@ -82,4 +82,13 @@ public class RowCountApiController {
         });
         return ResponseEntity.ok(body);
     }
+
+    @PostMapping("/{id}/row-count-job/{jobId}/cancel")
+    public ResponseEntity<Map<String, Object>> cancelRowCountJob(@PathVariable Long id,
+                                                                 @PathVariable String jobId) {
+        projectService.requireEditable(id, AccessGuard.current());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", rowCountJobService.cancel(id, jobId));
+        return ResponseEntity.ok(body);
+    }
 }

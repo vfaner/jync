@@ -8,6 +8,7 @@ import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.TableRowCount;
 
 class RowCountJobServiceTest {
@@ -20,7 +21,7 @@ class RowCountJobServiceTest {
                 new TableRowCount.SideCount(TableRowCount.Status.OK, 2_999_000L, 11L),
                 21L);
         when(preview.rowCount(1L, "orders", true, 300)).thenReturn(counts);
-        RowCountJobService service = new RowCountJobService(preview);
+        RowCountJobService service = new RowCountJobService(preview, new SyncProperties());
 
         String id = service.submit(1L, "orders");
         Optional<RowCountJobService.JobView> done = waitFor(service, id);
@@ -33,7 +34,7 @@ class RowCountJobServiceTest {
     @Test
     void aJobIsNotVisibleFromAnotherProject() {
         TablePreviewService preview = mock(TablePreviewService.class);
-        RowCountJobService service = new RowCountJobService(preview);
+        RowCountJobService service = new RowCountJobService(preview, new SyncProperties());
 
         String id = service.submit(1L, "orders");
 

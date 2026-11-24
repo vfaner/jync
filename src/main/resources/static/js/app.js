@@ -1878,6 +1878,8 @@
     var runId = 0;
     var batchRunning = false;
     var perRowBusy = false;
+    var activeJobUrl = null;
+    var activeJobRow = null;
 
     function rows() {
       return Array.prototype.slice.call(body.querySelectorAll('tr[data-object]'));
@@ -1998,7 +2000,15 @@
           fail(row, payload.message || 'error.unexpected');
           return;
         }
-        return pollJob(row, jobBase + '/' + payload.jobId);
+        var jobUrl = jobBase + '/' + payload.jobId;
+        activeJobUrl = jobUrl;
+        activeJobRow = row;
+        return pollJob(row, jobUrl).then(function () {
+          if (activeJobUrl === jobUrl) {
+            activeJobUrl = null;
+            activeJobRow = null;
+          }
+        });
       }).catch(function () {
         fail(row, 'error.unexpected');
       });
@@ -2017,6 +2027,14 @@
         }
         if (job.status === 'ERROR') {
           fail(row, job.error || 'rowcount.error');
+          return;
+        }
+        if (job.status === 'CANCELLED') {
+          row.dataset.result = 'failed';
+          setCount(row, 'source-count', null);
+          setCount(row, 'target-count', null);
+          setCount(row, 'diff', null);
+          setStatus(row, 'rowcount.cancelled', 'badge-mute');
           return;
         }
         return new Promise(function (resolve) {
@@ -2071,6 +2089,20 @@
     }
 
     function stop() {
+      // Background exact COUNT cannot be stopped by the browser request: cancel the job,
+      // then mark the row. Do this even for a single-row recheck (no stop button visible).
+      if (activeJobUrl) {
+        postJson(activeJobUrl + '/cancel').catch(function () { /* next poll sees it */ });
+        if (activeJobRow) {
+          activeJobRow.dataset.result = 'failed';
+          setCount(activeJobRow, 'source-count', null);
+          setCount(activeJobRow, 'target-count', null);
+          setCount(activeJobRow, 'diff', null);
+          setStatus(activeJobRow, 'rowcount.cancelled', 'badge-mute');
+        }
+        activeJobUrl = null;
+        activeJobRow = null;
+      }
       // 没在跑时关弹窗不该把摘要改成「已停止」。
       if (stopBtn && stopBtn.classList.contains('is-hidden')) { return; }
       runId++;

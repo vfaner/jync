@@ -252,6 +252,8 @@ sync:
   # holds every row the cursor claims to have delivered. Set to 0 to disable.
   # Costs one COUNT(*) per side per table, hence the throttle.
   row-count-audit-interval-ms: 60000
+  # Per-side timeout for the user-triggered exact row-count background job.
+  row-count-job-timeout-seconds: 300
   # Content audit: sample keys across the synced range and compare the projected values on
   # both sides, catching rows whose count is right but whose content differs. 0 disables it.
   content-audit-interval-ms: 900000

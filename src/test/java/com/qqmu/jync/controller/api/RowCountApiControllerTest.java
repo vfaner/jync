@@ -77,6 +77,15 @@ class RowCountApiControllerTest {
     }
 
     @Test
+    void cancelsTheExactCountJob() throws Exception {
+        when(rowCountJobService.cancel(1L, "job-1")).thenReturn(true);
+
+        mvc.perform(post("/api/projects/1/row-count-job/job-1/cancel").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true));
+    }
+
+    @Test
     void forwardsEstimateModeToTheService() throws Exception {
         when(tablePreviewService.rowCount(1L, "orders", false)).thenReturn(new TableRowCount(
                 "orders",

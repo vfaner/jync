@@ -6,9 +6,11 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.springframework.stereotype.Service;
 
+import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.TableRowCount;
 
 import jakarta.annotation.PreDestroy;
@@ -23,10 +25,8 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class RowCountJobService {
 
-    /** Exact scans are deliberately serialized per side by the caller; two workers are enough. */
-    private static final int EXACT_COUNT_TIMEOUT_SECONDS = 300;
-
     private final TablePreviewService preview;
+    private final SyncProperties properties;
     private final ExecutorService executor = Executors.newFixedThreadPool(2, runnable -> {
         Thread thread = new Thread(runnable, "jync-row-count");
         thread.setDaemon(true);
@@ -34,8 +34,9 @@ public class RowCountJobService {
     });
     private final ConcurrentHashMap<String, Job> jobs = new ConcurrentHashMap<>();
 
-    public RowCountJobService(TablePreviewService preview) {
+    public RowCountJobService(TablePreviewService preview, SyncProperties properties) {
         this.preview = preview;
+        this.properties = properties;
     }
 
     public String submit(Long projectId, String table) {
@@ -43,11 +44,12 @@ public class RowCountJobService {
         String id = UUID.randomUUID().toString();
         Job job = new Job(id, projectId, table);
         jobs.put(id, job);
-        executor.submit(() -> run(job));
+        job.future = executor.submit(() -> run(job));
         return id;
     }
 
     public Optional<JobView> find(Long projectId, String jobId) {
+        purgeOld();
         Job job = jobs.get(jobId);
         if (job == null || !job.projectId.equals(projectId)) {
             return Optional.empty();
@@ -55,12 +57,24 @@ public class RowCountJobService {
         return Optional.of(job.view());
     }
 
+    /** Marks a running scan cancelled and interrupts its worker. */
+    public boolean cancel(Long projectId, String jobId) {
+        Job job = jobs.get(jobId);
+        if (job == null || !job.projectId.equals(projectId)) {
+            return false;
+        }
+        return job.cancel();
+    }
+
     private void run(Job job) {
         try {
-            TableRowCount result = preview.rowCount(job.projectId, job.table, true,
-                    EXACT_COUNT_TIMEOUT_SECONDS);
+            int timeout = Math.max(1, properties.getRowCountJobTimeoutSeconds());
+            TableRowCount result = preview.rowCount(job.projectId, job.table, true, timeout);
             job.finish(result, null);
         } catch (RuntimeException e) {
+            if (job.isCancelled()) {
+                return;
+            }
             log.warn("Exact row-count job {} for {}.{} failed: {}",
                     job.id, job.projectId, job.table, e.getMessage());
             job.finish(null, e.getMessage() == null ? e.getClass().getSimpleName()
@@ -70,7 +84,8 @@ public class RowCountJobService {
 
     private void purgeOld() {
         Instant cutoff = Instant.now().minusSeconds(30 * 60);
-        jobs.entrySet().removeIf(entry -> entry.getValue().createdAt.isBefore(cutoff));
+        jobs.entrySet().removeIf(entry -> entry.getValue().createdAt.isBefore(cutoff)
+                && !entry.getValue().isRunning());
     }
 
     @PreDestroy
@@ -78,7 +93,7 @@ public class RowCountJobService {
         executor.shutdownNow();
     }
 
-    public enum Status { RUNNING, DONE, ERROR }
+    public enum Status { RUNNING, DONE, ERROR, CANCELLED }
 
     public record JobView(String id, Long projectId, String table, Status status,
                           TableRowCount rowCount, String error) {
@@ -92,6 +107,7 @@ public class RowCountJobService {
         private volatile Status status = Status.RUNNING;
         private volatile TableRowCount rowCount;
         private volatile String error;
+        private volatile Future<?> future;
 
         private Job(String id, Long projectId, String table) {
             this.id = id;
@@ -99,10 +115,33 @@ public class RowCountJobService {
             this.table = table;
         }
 
-        private void finish(TableRowCount result, String failure) {
+        private synchronized boolean cancel() {
+            if (status != Status.RUNNING) {
+                return false;
+            }
+            status = Status.CANCELLED;
+            Future<?> running = future;
+            if (running != null) {
+                running.cancel(true);
+            }
+            return true;
+        }
+
+        private synchronized void finish(TableRowCount result, String failure) {
+            if (status == Status.CANCELLED) {
+                return;
+            }
             rowCount = result;
             error = failure;
             status = failure == null ? Status.DONE : Status.ERROR;
+        }
+
+        private boolean isCancelled() {
+            return status == Status.CANCELLED;
+        }
+
+        private boolean isRunning() {
+            return status == Status.RUNNING;
         }
 
         private JobView view() {
