@@ -1786,7 +1786,7 @@
     var primaryHidden = picker.querySelector('[data-role="target-primary-hidden"]');
     var extras = picker.querySelector('[data-role="target-extras"]');
     if (!chips || !primary || !extras) return;
-    var max = parseInt(picker.getAttribute('data-max'), 10) || 9;
+    var max = parseInt(picker.getAttribute('data-max'), 10) || 20;
     var locked = picker.getAttribute('data-locked') === 'true';
 
     function chipNodes() {

@@ -1085,7 +1085,10 @@ public class ProjectController {
                             clean.add(targetId);
                         }
                     }
-                    if (clean.size() > 8) {
+                    // One worker, one connection and one queue entry set per target; 19
+                    // extras (20 in total) is the documented ceiling rather than a
+                    // technical limit of the fan-out design.
+                    if (clean.size() > 19) {
                         return ConfigSaveOutcome.error("error.project.fanout.tooMany");
                     }
                     if (!clean.isEmpty()) {
