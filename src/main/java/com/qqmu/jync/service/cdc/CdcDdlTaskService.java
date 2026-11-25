@@ -60,6 +60,12 @@ public class CdcDdlTaskService {
     private final CdcConsumerManager cdcConsumerManager;
     private final SyncContextFactory contextFactory;
     private final DataSyncService dataSyncService;
+    /**
+     * Optional: builds one context per fan-out target so an administrator's DDL also lands
+     * on the extra targets. Null in hand-built tests, which keep the single-target path.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutTargetContextFactory fanoutTargetContexts;
 
     @Autowired
     public CdcDdlTaskService(ChangeLogRepository repository,
@@ -512,6 +518,57 @@ public class CdcDdlTaskService {
      * state the statement asks for.
      */
     /** Oracle family: no {@code DROP ... IF EXISTS}, so a missing object is caught instead. */
+    /**
+     * Applies the same (already validated) statement to every extra fan-out target. The
+     * primary target was aligned before this runs, so a failure here leaves the project in a
+     * half-aligned state on purpose: the row is marked FAILED with the failing target named,
+     * and the retry is idempotent (the primary side accepts "duplicate column" as success).
+     *
+     * <p>Statements are rewritten per target — schema qualifier, identifier quotes and the
+     * project's table mapping — so a MySQL primary and a same-family extra both accept it.
+     * A cross-engine extra whose syntax differs fails visibly instead of being skipped.
+     */
+    private List<String> applyToFanoutTargets(Project project, String rawStatement,
+                                             SyncConfig config) {
+        if (fanoutTargetContexts == null || config == null
+                || config.getFanoutTargetDbIds() == null
+                || config.getFanoutTargetDbIds().isEmpty()) {
+            return List.of();
+        }
+        List<String> failures = new ArrayList<>();
+        for (Long targetId : config.getFanoutTargetDbIds()) {
+            String name = databaseConfigRepository.findById(targetId)
+                    .map(DatabaseConfig::getName).orElse("#" + targetId);
+            try {
+                executeOnFanoutTarget(project, targetId, rawStatement, config);
+            } catch (Exception e) {
+                log.warn("Fan-out target {} did not accept the DDL '{}': {}",
+                        name, rawStatement, e.toString());
+                failures.add(name + ": " + brief(e, 300));
+            }
+        }
+        return failures;
+    }
+
+    private void executeOnFanoutTarget(Project project, Long targetId, String rawStatement,
+                                       SyncConfig config) throws SQLException {
+        SyncContext targetCtx = fanoutTargetContexts.build(project, targetId, "ddl-align",
+                () -> true);
+        DatabaseConfig extra = targetCtx.getTargetConfig();
+        try (Connection connection = dataSourceManager.getConnection(extra)) {
+            String identifierQuote = com.qqmu.jync.util.JdbcUtil.identifierQuote(connection);
+            String statement = targetize(rawStatement,
+                    executionSchema(extra, connection), identifierQuote);
+            statement = retargetTables(statement, config::targetTableName, identifierQuote);
+            if (com.qqmu.jync.util.DdlIfExists.isDropTableOrView(rawStatement)) {
+                statement = oracleFamily(extra)
+                        ? com.qqmu.jync.util.DdlIfExists.remove(statement)
+                        : com.qqmu.jync.util.DdlIfExists.add(statement);
+            }
+            new DdlExecutor(connection).executeIdempotentCreate(statement);
+        }
+    }
+
     private static boolean oracleFamily(DatabaseConfig target) {
         DatabaseType type = target == null ? null : target.effectiveType();
         return type != null
@@ -611,6 +668,9 @@ public class CdcDdlTaskService {
         // A statement that only drops things leaves no data behind; one that adds, renames
         // or retypes a column leaves that column's values unreplicated.
         boolean backslashEscapes = backslashEscapes(project);
+        // Kept for the fan-out targets: the primary's copy is rewritten below with that
+        // target's schema/quotes/table mapping, and each extra needs its own rewrite.
+        String originalStatement = statement;
         boolean gap = hasColumnGap(statement, backslashEscapes);
         List<String> dropped = droppedColumns(statement, backslashEscapes);
         // A DROP TABLE/VIEW asks for an end state ("gone"), not for a failing precondition.
@@ -661,6 +721,21 @@ public class CdcDdlTaskService {
             }
         }
 
+        List<String> fanoutFailures = applyToFanoutTargets(project, originalStatement,
+                targetConfig);
+        if (!fanoutFailures.isEmpty()) {
+            // The primary target IS aligned, but the project as a whole is not. Keep the row
+            // retryable (ddlExecuted stays false): the primary side treats "duplicate column"
+            // as success, so a retry only has the remaining targets to fix.
+            entry.setTargetDdlSql(statement);
+            entry.setErrorDetail(String.join("; ", fanoutFailures));
+            entry.setResolutionStatus(ChangeLog.RESOLUTION_FAILED);
+            entry.setHandledBy(currentActor());
+            entry.setHandledAt(Instant.now());
+            repository.save(entry);
+            throw new IllegalStateException("error.ddl.execute:"
+                    + String.join("; ", fanoutFailures));
+        }
         // The target structure just changed underneath a live consumer. Its cached
         // target-column set survives up to 30 s and would keep projecting the new column
         // away (values not replicated while the position advances) unless it is dropped now.
@@ -910,6 +985,34 @@ public class CdcDdlTaskService {
         Project project = projectRepository.findById(entry.getProjectId())
                 .orElseThrow(() -> new IllegalStateException("error.ddl.noTarget"));
         SyncContext ctx = contextFactory.build(project, "ddl-replay", () -> true, () -> false);
+        try {
+            replayTablesIntoTarget(ctx, tables);
+            replayFanoutTargets(project, tables);
+        } catch (RuntimeException | SQLException e) {
+            entry.setErrorDetail(brief(e, 2000));
+            entry.setResolutionStatus(ChangeLog.RESOLUTION_FAILED);
+            entry.setHandledBy(currentActor());
+            entry.setHandledAt(Instant.now());
+            repository.save(entry);
+            String message = brief(e, 300);
+            if (message.startsWith("error.ddl.")) {
+                // A nested key such as error.ddl.tableMissing:<table> must reach the toast
+                // as-is: ChangeLogController translates only the head before the first
+                // colon, so prefixing it with error.ddl.replay: printed the inner key
+                // verbatim. The failure is already saved above.
+                throw new IllegalStateException(message, e);
+            }
+            throw new IllegalStateException("error.ddl.replay:" + message, e);
+        }
+        markReplayed(entry);
+    }
+
+    /**
+     * The primary target half of a gap replay: re-read every affected table from the source
+     * and upsert it over what the target holds (never truncated).
+     */
+    private void replayTablesIntoTarget(SyncContext ctx, List<String> tables)
+            throws SQLException {
         try (Connection sourceConn = dataSourceManager.getConnection(ctx.getSourceConfig());
              Connection targetConn = dataSourceManager.getConnection(ctx.getTargetConfig())) {
             for (String sourceTable : tables) {
@@ -930,23 +1033,33 @@ public class CdcDdlTaskService {
                     throw new IllegalStateException("error.ddl.replay:" + result.getError());
                 }
             }
-        } catch (RuntimeException | SQLException e) {
-            entry.setErrorDetail(brief(e, 2000));
-            entry.setResolutionStatus(ChangeLog.RESOLUTION_FAILED);
-            entry.setHandledBy(currentActor());
-            entry.setHandledAt(Instant.now());
-            repository.save(entry);
-            String message = brief(e, 300);
-            if (message.startsWith("error.ddl.")) {
-                // A nested key such as error.ddl.tableMissing:<table> must reach the toast
-                // as-is: ChangeLogController translates only the head before the first
-                // colon, so prefixing it with error.ddl.replay: printed the inner key
-                // verbatim. The failure is already saved above.
-                throw new IllegalStateException(message, e);
-            }
-            throw new IllegalStateException("error.ddl.replay:" + message, e);
         }
-        markReplayed(entry);
+    }
+
+    /**
+     * The extra fan-out targets: each re-reads the same affected tables into its own target
+     * connection. The DDL was already applied there by {@code executeDdl}, so the replay is
+     * the second half of "every target converges", not an optional extra.
+     */
+    private void replayFanoutTargets(Project project, List<String> tables) throws SQLException {
+        SyncConfig config = contextFactory.parseConfig(project);
+        if (fanoutTargetContexts == null || config == null
+                || config.getFanoutTargetDbIds() == null
+                || config.getFanoutTargetDbIds().isEmpty()) {
+            return;
+        }
+        for (Long targetId : config.getFanoutTargetDbIds()) {
+            String name = databaseConfigRepository.findById(targetId)
+                    .map(DatabaseConfig::getName).orElse("#" + targetId);
+            try {
+                SyncContext targetCtx = fanoutTargetContexts.build(project, targetId,
+                        "ddl-replay", () -> true);
+                replayTablesIntoTarget(targetCtx, tables);
+            } catch (RuntimeException | SQLException e) {
+                throw new IllegalStateException("fan-out target " + name + ": "
+                        + brief(e, 300), e);
+            }
+        }
     }
 
     private void markReplayed(ChangeLog entry) {

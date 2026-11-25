@@ -46,6 +46,8 @@ import com.qqmu.jync.service.sync.DataSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.service.fanout.FanoutTargetContextFactory;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * The administrator's "execute on target" and "replay the missing rows" actions: the first
@@ -146,6 +148,88 @@ class CdcDdlTaskServiceTest {
         assertThat(log.getDdlExecuted()).isTrue();
         assertThat(log.getErrorDetail()).isNull();
         assertThat(log.getTargetDdlSql()).isEqualTo("DROP TABLE IF EXISTS tz_probe_tmp");
+    }
+
+    @Test
+    void theDdlAlsoLandsOnEveryFanoutTarget() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig primary = target();
+        primary.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(primary));
+        DatabaseConfig extra = new DatabaseConfig();
+        extra.setId(13L);
+        extra.setName("extra-db");
+        extra.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(13L)).thenReturn(Optional.of(extra));
+        SyncConfig cfg = new SyncConfig();
+        cfg.setFanoutTargetDbIds(new java.util.ArrayList<>(List.of(13L)));
+        when(contextFactory.parseConfig(any(Project.class))).thenReturn(cfg);
+        try (Connection primaryConn = DriverManager.getConnection(
+                        "jdbc:h2:mem:ddl_fan_primary;DB_CLOSE_DELAY=-1", "sa", "");
+             Connection extraConn = DriverManager.getConnection(
+                        "jdbc:h2:mem:ddl_fan_extra;DB_CLOSE_DELAY=-1", "sa", "")) {
+            try (Statement st = primaryConn.createStatement()) {
+                st.execute("CREATE TABLE t (id INT)");
+            }
+            try (Statement st = extraConn.createStatement()) {
+                st.execute("CREATE TABLE t (id INT)");
+            }
+            when(dataSourceManager.getConnection(primary)).thenReturn(primaryConn);
+            when(dataSourceManager.getConnection(extra)).thenReturn(extraConn);
+            SyncContext extraCtx = mock(SyncContext.class);
+            when(extraCtx.getTargetConfig()).thenReturn(extra);
+            FanoutTargetContextFactory factory = mock(FanoutTargetContextFactory.class);
+            when(factory.build(any(Project.class), eq(13L), any(), any())).thenReturn(extraCtx);
+            ReflectionTestUtils.setField(service, "fanoutTargetContexts", factory);
+
+            service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
+
+        }
+        try (Connection check = DriverManager.getConnection(
+                "jdbc:h2:mem:ddl_fan_extra;DB_CLOSE_DELAY=-1", "sa", "");
+             Statement st = check.createStatement()) {
+            st.executeQuery("SELECT c FROM t").close();
+        }
+        assertThat(log.getErrorDetail()).isNull();
+        verify(changeLogRepository).save(log);
+    }
+
+    @Test
+    void aFanoutTargetThatRejectsTheDdlMarksTheTaskFailedAndNamesIt() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig primary = target();
+        primary.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(primary));
+        DatabaseConfig extra = new DatabaseConfig();
+        extra.setId(13L);
+        extra.setName("extra-db");
+        extra.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(13L)).thenReturn(Optional.of(extra));
+        SyncConfig cfg = new SyncConfig();
+        cfg.setFanoutTargetDbIds(new java.util.ArrayList<>(List.of(13L)));
+        when(contextFactory.parseConfig(any(Project.class))).thenReturn(cfg);
+        Connection primaryConn = connectionExecuting(true);
+        Connection extraConn = connectionExecuting(false);
+        when(dataSourceManager.getConnection(primary)).thenReturn(primaryConn);
+        when(dataSourceManager.getConnection(extra)).thenReturn(extraConn);
+        SyncContext extraCtx = mock(SyncContext.class);
+        when(extraCtx.getTargetConfig()).thenReturn(extra);
+        FanoutTargetContextFactory factory = mock(FanoutTargetContextFactory.class);
+        when(factory.build(any(Project.class), eq(13L), any(), any())).thenReturn(extraCtx);
+        ReflectionTestUtils.setField(service, "fanoutTargetContexts", factory);
+
+        assertThatThrownBy(() -> service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT",
+                AccessGuard.system()))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("extra-db");
+        assertThat(log.getResolutionStatus()).isEqualTo(ChangeLog.RESOLUTION_FAILED);
+        assertThat(log.getErrorDetail()).contains("extra-db");
+        // Retryable: the primary side is idempotent, so the next click only fixes the rest.
+        assertThat(log.getDdlExecuted()).isNotEqualTo(Boolean.TRUE);
     }
 
     @Test
@@ -253,6 +337,43 @@ class CdcDdlTaskServiceTest {
         // the consumer's life; without clearing, every later DDL task inherits this
         // table's columns and asks for a replay that was already done.
         assertThat(stats.prunedGaps()).isEmpty();
+    }
+
+    @Test
+    void replayingTheGapAlsoBringsTheRowsToEveryFanoutTarget() throws Exception {
+        ChangeLog log = pendingLog();
+        log.setDdlExecuted(true);
+        log.setAffectedTables("orders(suffix)");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        when(contextFactory.build(any(), any(), any(), any())).thenReturn(ctx);
+        when(ctx.getSourceConfig()).thenReturn(new DatabaseConfig());
+        when(ctx.getTargetConfig()).thenReturn(new DatabaseConfig());
+        when(ctx.getSourceSchema()).thenReturn(null);
+        when(ctx.getSourceReader()).thenReturn(metadataReader);
+        when(metadataReader.readTable(any(), any(), eq("orders"))).thenReturn(tableMeta);
+        when(tableMeta.getColumns()).thenReturn(Collections.<ColumnMeta>singletonList(null));
+        when(dataSourceManager.getConnection(any())).thenReturn(mock(Connection.class));
+        when(dataSyncService.syncTable(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new DataSyncService.TableSyncResult());
+        SyncConfig cfg = new SyncConfig();
+        cfg.setFanoutTargetDbIds(new java.util.ArrayList<>(List.of(13L)));
+        when(contextFactory.parseConfig(any(Project.class))).thenReturn(cfg);
+        SyncContext extraCtx = mock(SyncContext.class);
+        when(extraCtx.getSourceConfig()).thenReturn(new DatabaseConfig());
+        when(extraCtx.getTargetConfig()).thenReturn(new DatabaseConfig());
+        when(extraCtx.getSourceSchema()).thenReturn(null);
+        when(extraCtx.getSourceReader()).thenReturn(metadataReader);
+        FanoutTargetContextFactory factory = mock(FanoutTargetContextFactory.class);
+        when(factory.build(any(Project.class), eq(13L), any(), any())).thenReturn(extraCtx);
+        ReflectionTestUtils.setField(service, "fanoutTargetContexts", factory);
+
+        service.replayDdl(9L, AccessGuard.system());
+
+        // Primary + one extra target, same table, one gap replay each.
+        verify(dataSyncService, org.mockito.Mockito.times(2))
+                .syncTable(any(), any(), any(), any(), any(), any());
+        assertThat(log.getReplayDone()).isTrue();
     }
 
     @Test
