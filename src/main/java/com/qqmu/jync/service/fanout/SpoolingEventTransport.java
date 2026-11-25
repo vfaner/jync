@@ -1,10 +1,6 @@
 package com.qqmu.jync.service.fanout;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -65,16 +61,7 @@ public final class SpoolingEventTransport implements EventTransport {
         if (closed) {
             throw new IllegalStateException("transport is closed");
         }
-        byte[] bytes;
-        try {
-            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-            try (ObjectOutputStream out = new ObjectOutputStream(buffer)) {
-                out.writeObject(event);
-            }
-            bytes = buffer.toByteArray();
-        } catch (IOException e) {
-            throw new IllegalStateException("could not serialize a fan-out event", e);
-        }
+        byte[] bytes = EventCodec.serialize(event);
         for (SpoolSubscription sub : subscriptions) {
             if (!sub.closed) {
                 sub.append(bytes);
@@ -167,12 +154,7 @@ public final class SpoolingEventTransport implements EventTransport {
                 byte[] bytes = new byte[length];
                 spool.readFully(bytes);
                 readPosition = spool.getFilePointer();
-                try (ObjectInputStream in = new ObjectInputStream(
-                        new ByteArrayInputStream(bytes))) {
-                    return (ChangeEvent) in.readObject();
-                } catch (ClassNotFoundException e) {
-                    throw new IOException("unknown fan-out event class", e);
-                }
+                return EventCodec.deserialize(bytes);
             } catch (IOException e) {
                 throw new IllegalStateException("could not read the fan-out spool for '"
                         + group, e);

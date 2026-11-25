@@ -400,6 +400,31 @@ public class SyncProperties {
         private long metricsLogIntervalMs = 60_000L;
     }
 
+    /** One-source-many-targets transport settings. Bound from {@code sync.fanout.*}. */
+    private final Fanout fanout = new Fanout();
+
+    /**
+     * Where the fan-out capture puts events between the source stream and the target workers.
+     *
+     * <p>{@code SPOOL} is the default: per-target append-only files beside the metadata
+     * store, no external dependency. {@code REDIS} uses one Redis Stream per project and one
+     * consumer group per target — useful when the spool directory is not shared or when the
+     * operator already runs Redis. Both are at-least-once; rows are idempotent upserts.
+     */
+    @Getter
+    @Setter
+    public static class Fanout {
+
+        public enum Transport {
+            SPOOL, REDIS
+        }
+
+        private Transport transport = Transport.SPOOL;
+
+        /** Redis URI for the REDIS transport; ignored for SPOOL. */
+        private String redisUri = "redis://127.0.0.1:6379/0";
+    }
+
     /** MySQL binlog CDC settings (v1.5.0, task book 阶段 B). Bound from {@code sync.cdc.*}. */
     private final Cdc cdc = new Cdc();
 

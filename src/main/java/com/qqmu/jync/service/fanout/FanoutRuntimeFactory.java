@@ -14,6 +14,8 @@ import com.qqmu.jync.service.cdc.CdcRuntimeStats;
 import com.qqmu.jync.service.sync.StructureSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
 
+import com.qqmu.jync.config.SyncProperties;
+
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -32,19 +34,21 @@ public class FanoutRuntimeFactory {
     private final FanoutPositionStore positionStore;
     private final com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair;
     private final ObjectMapper mapper;
+    private final SyncProperties properties;
 
     public FanoutRuntimeFactory(FanoutTargetContextFactory targetContexts,
                                 StructureSyncService structureSync,
                                 FanoutProgressStore progressStore,
                                 FanoutPositionStore positionStore,
                                 com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
-                                ObjectMapper mapper) {
+                                ObjectMapper mapper, SyncProperties properties) {
         this.targetContexts = targetContexts;
         this.structureSync = structureSync;
         this.progressStore = progressStore;
         this.positionStore = positionStore;
         this.targetRepair = targetRepair;
         this.mapper = mapper;
+        this.properties = properties;
     }
 
     public FanoutRuntime create(Project project, SyncContext sourceCtx, String lockOwner,
@@ -65,10 +69,19 @@ public class FanoutRuntimeFactory {
             targets.add(new FanoutBaselineService.Target(targetId,
                     targetContexts.build(project, targetId, lockOwner, lockRenewer)));
         }
-        Path spool = Path.of("data", "fanout", String.valueOf(project.getId()));
+        EventTransport transport;
+        if (properties.getFanout().getTransport()
+                == SyncProperties.Fanout.Transport.REDIS) {
+            transport = new RedisStreamEventTransport(
+                    properties.getFanout().getRedisUri(),
+                    "jync:fanout:" + project.getId() + ":events");
+        } else {
+            Path spool = Path.of("data", "fanout", String.valueOf(project.getId()));
+            transport = new SpoolingEventTransport(spool, SPOOL_MAX_BYTES, mapper);
+        }
         // Every target gets the same missing-table repair as a single-target consumer; the
         // service's attempt budget is per project, which is shared by all targets.
         return new FanoutRuntime(sourceCtx, targets, stats, structureSync, progressStore,
-                positionStore, targetRepair, mapper, spool, SPOOL_MAX_BYTES);
+                positionStore, targetRepair, transport);
     }
 }

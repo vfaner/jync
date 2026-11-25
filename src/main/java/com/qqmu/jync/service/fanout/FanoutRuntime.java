@@ -1,6 +1,5 @@
 package com.qqmu.jync.service.fanout;
 
-import java.nio.file.Path;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,7 +17,6 @@ import com.qqmu.jync.service.sync.StructureSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
 
 import lombok.extern.slf4j.Slf4j;
-import tools.jackson.databind.ObjectMapper;
 
 /**
  * One fan-out run: owns the shared transport, the source connection used for bindings and the
@@ -53,14 +51,14 @@ public final class FanoutRuntime implements AutoCloseable {
                          CdcRuntimeStats stats, StructureSyncService structureSync,
                          FanoutProgressStore progressStore, FanoutPositionStore positionStore,
                          com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
-                         ObjectMapper mapper, Path spoolDirectory, long maxSpoolBytes)
+                         EventTransport transport)
             throws Exception {
         this.sourceCtx = sourceCtx;
         this.targets = List.copyOf(targets);
         this.sourceConn = sourceCtx.getConnectionProvider()
                 .open(sourceCtx.getSourceConfig());
         this.bindings = new FanoutBindingResolver(sourceCtx, sourceConn);
-        this.transport = new SpoolingEventTransport(spoolDirectory, maxSpoolBytes, mapper);
+        this.transport = transport;
         this.progressStore = progressStore;
         this.positionStore = positionStore;
         this.stats = stats;
