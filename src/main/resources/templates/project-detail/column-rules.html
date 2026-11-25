@@ -30,10 +30,6 @@
                 <span class="muted small column-rule-summary" data-role="column-rule-summary"
                       th:attr="data-template=#{columnrule.summary}"
                       th:text="#{columnrule.summary(${#lists.size(config.columnRules)}, ${columnRuleTables.size()})}">summary</span>
-                <button type="button" class="btn btn-primary btn-sm" data-role="column-rule-add">
-                    <svg class="ico"><use href="#plus-lg"/></svg>
-                    <span th:text="#{columnrule.add}">Add rule</span>
-                </button>
             </div>
             <div class="tbl-wrap">
                 <table class="tbl dense" data-role="column-rule-table">
@@ -160,6 +156,7 @@
             </div>
             <div class="column-rule-actions">
                 <button type="submit" class="btn btn-primary btn-sm"
+                        data-role="column-rule-submit"
                         th:disabled="${project.enabled}">
                     <svg class="ico"><use href="#plus-lg"/></svg>
                     <span th:text="#{columnrule.add}">Add rule</span>

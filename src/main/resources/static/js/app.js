@@ -1712,7 +1712,7 @@
 
   /**
    * 列清洗规则表的客户端筛选：按表下拉 + 列名搜索过滤行，实时更新「共 N 条覆盖 M 表」
-   * 汇总；「新增规则」按钮聚焦底部添加表单。纯前端，不打库。
+   * 汇总。新增入口只有底部表单一个提交按钮，表头不再放第二个同名的按钮。纯前端，不打库。
    */
   function bindColumnRuleFilter(table) {
     var card = table.closest('.column-rules-card');
@@ -1720,7 +1720,6 @@
     var filter = card.querySelector('[data-role="column-rule-table-filter"]');
     var search = card.querySelector('[data-role="column-rule-search"]');
     var summary = card.querySelector('[data-role="column-rule-summary"]');
-    var addBtn = card.querySelector('[data-role="column-rule-add"]');
     var rows = Array.prototype.slice.call(table.querySelectorAll('tbody tr'));
     var template = summary ? (summary.getAttribute('data-template') || '') : '';
 
@@ -1745,10 +1744,6 @@
 
     if (filter) filter.addEventListener('change', apply);
     if (search) search.addEventListener('input', apply);
-    if (addBtn) addBtn.addEventListener('click', function () {
-      var input = card.querySelector('#columnRuleTable');
-      if (input) { input.focus(); input.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
-    });
   }
 
   /* ─── 只读数据预览 ──────────────────────────────────────── */

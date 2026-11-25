@@ -397,6 +397,18 @@ class ProjectColumnRuleViewTest {
     }
 
     @Test
+    void theAddFormCarriesTheOnlyAddButton() throws Exception {
+        storedConfig(false);
+
+        String page = renderDetailWithProgress(List.of());
+
+        // The toolbar used to repeat the form's submit as a focus shortcut; two buttons with
+        // the same label sat above and below the editor at the same time.
+        assertThat(page.split("column-rule-submit", -1).length - 1).isEqualTo(1);
+        assertThat(page).doesNotContain("column-rule-add");
+    }
+
+    @Test
     void theRulesTableShowsStrategySyncedTotalsAndFilterToolbar() throws Exception {
         SyncConfig config = storedConfig(false);
         config.getColumnRules().add(rule("orders", "customer_name", ColumnRuleType.TRIM, null));
