@@ -69,7 +69,9 @@ public final class SpoolingEventTransport implements EventTransport {
         }
         byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
         for (SpoolSubscription sub : subscriptions) {
-            sub.append(bytes);
+            if (!sub.closed) {
+                sub.append(bytes);
+            }
         }
     }
 
@@ -163,6 +165,13 @@ public final class SpoolingEventTransport implements EventTransport {
             }
             try {
                 Files.writeString(offsetPath, Long.toString(readPosition));
+                // Caught up: the whole file is acknowledged, so truncating it cannot drop
+                // unread events and keeps a long-running spool from growing forever.
+                if (readPosition == spool.length() && readPosition > 0) {
+                    spool.setLength(0);
+                    readPosition = 0;
+                    Files.writeString(offsetPath, "0");
+                }
             } catch (IOException e) {
                 throw new IllegalStateException("could not persist the fan-out offset for '"
                         + group, e);

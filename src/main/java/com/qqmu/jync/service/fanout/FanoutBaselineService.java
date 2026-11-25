@@ -40,22 +40,24 @@ public final class FanoutBaselineService {
     private static final int ROW_BATCH = 500;
 
     private final StructureSyncService structureSync;
-    private final FanoutProgressStore progressStore;
 
-    public FanoutBaselineService(StructureSyncService structureSync,
-                                 FanoutProgressStore progressStore) {
+    public FanoutBaselineService(StructureSyncService structureSync) {
         this.structureSync = structureSync;
-        this.progressStore = progressStore;
+    }
+
+    /** One table's baseline result; the caller marks progress after every target acked. */
+    public record TableLoad(String table, long rows) {
     }
 
     /** One target's id + context; the context resolves that target's dialect and schema. */
     public record Target(Long targetDbId, SyncContext context) {
     }
 
-    public void baseline(SyncContext sourceCtx, Connection sourceConn,
-                         List<Target> targets, EventTransport transport) throws Exception {
+    public List<TableLoad> baseline(SyncContext sourceCtx, Connection sourceConn,
+                                    List<Target> targets, EventTransport transport)
+            throws Exception {
         if (targets == null || targets.isEmpty()) {
-            return;
+            return List.of();
         }
         List<TableMeta> tables = selectedTables(sourceCtx, sourceConn);
         List<TableMeta> keyed = new ArrayList<>();
@@ -70,14 +72,14 @@ public final class FanoutBaselineService {
         for (Target target : targets) {
             ensureTargetTables(target, keyed);
         }
+        List<TableLoad> loads = new ArrayList<>();
         for (TableMeta table : keyed) {
             long rows = publishTable(sourceCtx, sourceConn, table, transport);
-            for (Target target : targets) {
-                markLoaded(sourceCtx.projectId(), target.targetDbId(), table.getName(), rows);
-            }
-            log.info("Fan-out baseline: {} copied {} row(s) to {} target(s)",
+            loads.add(new TableLoad(table.getName(), rows));
+            log.info("Fan-out baseline: {} queued {} row(s) for {} target(s)",
                     table.getName(), rows, targets.size());
         }
+        return loads;
     }
 
     private List<TableMeta> selectedTables(SyncContext ctx, Connection conn) throws SQLException {
@@ -164,11 +166,5 @@ public final class FanoutBaselineService {
         transport.publish(ChangeEvent.commit(token, token, System.currentTimeMillis()));
     }
 
-    private void markLoaded(Long projectId, Long targetDbId, String table, long rows) {
-        FanoutProgress progress = progressStore.loadOrCreate(projectId, targetDbId, table);
-        progress.setInitialLoadDone(true);
-        progress.setRowsSyncedTotal(rows);
-        progress.setLastSyncTime(Instant.now());
-        progressStore.save(progress);
-    }
+
 }

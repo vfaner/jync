@@ -4,6 +4,12 @@ import java.nio.file.Path;
 import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
 import com.qqmu.jync.service.cdc.JdbcFanoutApplier;
@@ -26,8 +32,13 @@ public final class FanoutRuntime implements AutoCloseable {
     private final Connection sourceConn;
     private final FanoutBindingResolver bindings;
     private final EventTransport transport;
-    private final List<FanoutTargetWorker> workers;
+    private final List<FanoutTargetWorker> workers = new ArrayList<>();
     private final FanoutBaselineService baselineService;
+    private final FanoutProgressStore progressStore;
+    private final FanoutPositionStore positionStore;
+    private final CdcRuntimeStats stats;
+    private final Map<Long, Integer> restartAttempts = new ConcurrentHashMap<>();
+    private ScheduledExecutorService supervisor;
 
     public FanoutRuntime(SyncContext sourceCtx, List<FanoutBaselineService.Target> targets,
                          CdcRuntimeStats stats, StructureSyncService structureSync,
@@ -40,8 +51,10 @@ public final class FanoutRuntime implements AutoCloseable {
                 .open(sourceCtx.getSourceConfig());
         this.bindings = new FanoutBindingResolver(sourceCtx, sourceConn);
         this.transport = new SpoolingEventTransport(spoolDirectory, maxSpoolBytes, mapper);
-        this.workers = new ArrayList<>();
-        this.baselineService = new FanoutBaselineService(structureSync, progressStore);
+        this.progressStore = progressStore;
+        this.positionStore = positionStore;
+        this.stats = stats;
+        this.baselineService = new FanoutBaselineService(structureSync);
         for (FanoutBaselineService.Target target : targets) {
             String group = String.valueOf(target.targetDbId());
             EventTransport.Subscription subscription = transport.subscribe(group);
@@ -53,12 +66,80 @@ public final class FanoutRuntime implements AutoCloseable {
     }
 
     /** Must run before the baseline so published rows are consumed immediately. */
-    public void startWorkers() {
+    public synchronized void startWorkers() {
         workers.forEach(FanoutTargetWorker::start);
+        supervisor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "fanout-supervisor-" + sourceCtx.projectId());
+            t.setDaemon(true);
+            return t;
+        });
+        supervisor.scheduleWithFixedDelay(this::restartDeadWorkers, 5, 5, TimeUnit.SECONDS);
+    }
+
+    /** Restarts a target whose worker stopped; the spool offset makes replay lossless. */
+    private synchronized void restartDeadWorkers() {
+        for (int i = 0; i < workers.size(); i++) {
+            FanoutTargetWorker worker = workers.get(i);
+            if (worker.isAlive()) {
+                continue;
+            }
+            FanoutBaselineService.Target target = targets.get(i);
+            int attempts = restartAttempts.merge(target.targetDbId(), 1, Integer::sum);
+            worker.close();
+            if (attempts > 5) {
+                log.error("Fan-out target {} stopped {} times; not restarting it again"
+                        + " until the project restarts", target.targetDbId(), attempts - 1);
+                continue;
+            }
+            log.warn("Fan-out target {} worker stopped ({}); restarting attempt {}",
+                    target.targetDbId(), worker.getLastError(), attempts);
+            FanoutTargetWorker replacement = newWorker(target);
+            workers.set(i, replacement);
+            replacement.start();
+        }
+    }
+
+    private FanoutTargetWorker newWorker(FanoutBaselineService.Target target) {
+        String group = String.valueOf(target.targetDbId());
+        EventTransport.Subscription subscription = transport.subscribe(group);
+        EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
+        return new FanoutTargetWorker(group, subscription, applier,
+                position -> recordTargetPosition(positionStore, sourceCtx.projectId(),
+                        target.targetDbId(), position));
     }
 
     public void baseline() throws Exception {
-        baselineService.baseline(sourceCtx, sourceConn, targets, transport);
+        List<FanoutBaselineService.TableLoad> loads =
+                baselineService.baseline(sourceCtx, sourceConn, targets, transport);
+        if (loads.isEmpty()) {
+            return;
+        }
+        // Barrier: every worker must acknowledge the final marker before the baseline is
+        // reported complete, otherwise a crash right after "done" could restart capture from
+        // the anchor with a target that never consumed the rows.
+        String marker = "baseline-done:" + UUID.randomUUID();
+        transport.publish(ChangeEvent.commit(marker, marker, System.currentTimeMillis()));
+        long deadline = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(5);
+        for (FanoutTargetWorker worker : workers) {
+            while (!marker.equals(worker.getLastAppliedPosition())
+                    && System.currentTimeMillis() < deadline
+                    && worker.isAlive()) {
+                Thread.sleep(50L);
+            }
+            if (!marker.equals(worker.getLastAppliedPosition())) {
+                throw new IllegalStateException("fan-out baseline barrier timed out for a target");
+            }
+        }
+        for (FanoutBaselineService.TableLoad load : loads) {
+            for (FanoutBaselineService.Target target : targets) {
+                com.qqmu.jync.model.FanoutProgress progress = progressStore.loadOrCreate(
+                        sourceCtx.projectId(), target.targetDbId(), load.table());
+                progress.setInitialLoadDone(true);
+                progress.setRowsSyncedTotal(load.rows());
+                progress.setLastSyncTime(java.time.Instant.now());
+                progressStore.save(progress);
+            }
+        }
     }
 
     public EventTransport transport() {
@@ -67,6 +148,9 @@ public final class FanoutRuntime implements AutoCloseable {
 
     @Override
     public void close() {
+        if (supervisor != null) {
+            supervisor.shutdownNow();
+        }
         for (FanoutTargetWorker worker : workers) {
             worker.close();
         }

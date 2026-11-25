@@ -23,9 +23,9 @@ public final class FanoutTargetWorker implements AutoCloseable {
     private final Consumer<String> onCommit;
     private final Thread thread;
     private volatile boolean running = true;
-    private volatile String lastAppliedPosition;
     @Getter private volatile Throwable lastError;
     @Getter private volatile long appliedTransactions;
+    @Getter private volatile String lastAppliedPosition;
 
     public FanoutTargetWorker(String name, EventTransport.Subscription subscription,
                               EventApplier applier) {
@@ -43,6 +43,10 @@ public final class FanoutTargetWorker implements AutoCloseable {
 
     public void start() {
         thread.start();
+    }
+
+    public boolean isAlive() {
+        return thread.isAlive();
     }
 
     private void run() {
