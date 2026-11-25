@@ -124,6 +124,19 @@ public class SyncConfig {
      */
     private List<Long> fanoutTargetDbIds = new ArrayList<>();
 
+    /**
+     * Where this project buffers fan-out events: {@code SPOOL} (default when blank),
+     * {@code REDIS}, or blank to follow {@code sync.fanout.transport}. Chosen per project so
+     * an HA deployment can use Redis while a single-node one keeps the local spool.
+     */
+    private String fanoutTransport;
+
+    /**
+     * Redis URI override for this project; blank follows {@code sync.fanout.redis-uri}.
+     * Do not put credentials here — the value is stored with the task configuration.
+     */
+    private String fanoutRedisUri;
+
     /** Table name mapping source -> target; unmapped tables keep their name. */
     private Map<String, String> tableNameMapping = new HashMap<>();
 

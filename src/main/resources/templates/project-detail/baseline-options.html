@@ -45,7 +45,14 @@
             <input type="checkbox" name="allowDrop" value="true" th:checked="${config.allowDrop}">
             <span class="track"></span>
             <span class="switch-text">
-                <strong style="color:var(--warn)" th:text="#{option.allowDrop}">Allow drops</strong>
+                <strong style="color:var(--warn)">
+                    <span th:text="#{option.allowDrop}">Auto-sync table drops</span>
+                    <span class="tip-icon" tabindex="0" role="img"
+                          th:attr="aria-label=#{option.allowDropTip},
+                                   data-tip=#{option.allowDropTip}">
+                        <svg class="ico" aria-hidden="true"><use href="#question-circle"/></svg>
+                    </span>
+                </strong>
                 <span class="help" th:text="#{option.allowDropHelp}">help</span>
             </span>
         </label>

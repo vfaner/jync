@@ -70,10 +70,21 @@ public class FanoutRuntimeFactory {
                     targetContexts.build(project, targetId, lockOwner, lockRenewer)));
         }
         EventTransport transport;
-        if (properties.getFanout().getTransport()
-                == SyncProperties.Fanout.Transport.REDIS) {
-            transport = new RedisStreamEventTransport(
-                    properties.getFanout().getRedisUri(),
+        SyncProperties.Fanout.Transport kind = properties.getFanout().getTransport();
+        String configured = sourceCtx.getConfig() == null ? null
+                : sourceCtx.getConfig().getFanoutTransport();
+        if ("REDIS".equalsIgnoreCase(configured)) {
+            kind = SyncProperties.Fanout.Transport.REDIS;
+        } else if ("SPOOL".equalsIgnoreCase(configured)) {
+            kind = SyncProperties.Fanout.Transport.SPOOL;
+        }
+        if (kind == SyncProperties.Fanout.Transport.REDIS) {
+            String uri = sourceCtx.getConfig() == null ? null
+                    : sourceCtx.getConfig().getFanoutRedisUri();
+            if (uri == null || uri.isBlank()) {
+                uri = properties.getFanout().getRedisUri();
+            }
+            transport = new RedisStreamEventTransport(uri,
                     "jync:fanout:" + project.getId() + ":events");
         } else {
             Path spool = Path.of("data", "fanout", String.valueOf(project.getId()));

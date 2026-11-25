@@ -57,10 +57,38 @@
                    th:checked="${config.autoSyncNewTables}">
             <span class="track"></span>
             <span class="switch-text">
-                <strong th:text="#{option.autoSyncNewTables}">Auto-sync new tables</strong>
+                <strong>
+                    <span th:text="#{option.autoSyncNewTables}">Auto-sync new tables</span>
+                    <!--/* 逐引擎的差异放进悬停提示：开关旁边只留一句概括。 */-->
+                    <span class="tip-icon" tabindex="0" role="img"
+                          th:attr="aria-label=#{option.autoSyncNewTablesTip},
+                                   data-tip=#{option.autoSyncNewTablesTip}">
+                        <svg class="ico" aria-hidden="true"><use href="#question-circle"/></svg>
+                    </span>
+                </strong>
                 <span class="help" th:text="#{option.autoSyncNewTablesHelp}">help</span>
             </span>
         </label>
+        <!-- 一源多目标的事件中转：按项目选择，留空跟随服务端默认值。目标选择在新建/编辑页
+             维护；这里只读展示位点/积压并 5 秒刷新。 -->
+        <div class="field" th:if="${fanoutStatuses != null and !#lists.isEmpty(fanoutStatuses)}">
+            <label for="fanoutTransport" th:text="#{option.fanoutTransport}">Event transport</label>
+            <select class="select" id="fanoutTransport" name="fanoutTransport">
+                <option value=""
+                        th:selected="${config.fanoutTransport == null
+                                       or #strings.isEmpty(config.fanoutTransport)}"
+                        th:text="#{option.fanoutTransport.default}">Follow server</option>
+                <option value="SPOOL" th:selected="${config.fanoutTransport == 'SPOOL'}"
+                        th:text="#{option.fanoutTransport.spool}">Local spool</option>
+                <option value="REDIS" th:selected="${config.fanoutTransport == 'REDIS'}"
+                        th:text="#{option.fanoutTransport.redis}">Redis Stream</option>
+            </select>
+            <input type="text" class="input mono" id="fanoutRedisUri" name="fanoutRedisUri"
+                   maxlength="512" spellcheck="false"
+                   th:value="${config.fanoutRedisUri}"
+                   th:placeholder="#{option.fanoutTransport.uriPlaceholder}">
+            <div class="help" th:text="#{option.fanoutTransportHelp}">help</div>
+        </div>
         <!-- 一源多目标：目标选择在新建/编辑页维护；这里只读展示并 5 秒刷新位点/积压。 -->
         <div id="fanout-status" th:if="${fanoutStatuses != null and !#lists.isEmpty(fanoutStatuses)}"
              style="margin-top:12px"

@@ -68,9 +68,11 @@ class ProjectDetailCursorIndexViewTest {
 
         // Two attributes on that one row: aria-label for screen readers and data-tip for
         // the hover bubble. The hint belongs to the flagged row, not to the table that
-        // already has its index, so it appears exactly on one icon.
+        // already has its index, so it appears exactly on one icon. Count the hint's own
+        // attributes rather than every data-tip on the page — other options carry tips too.
         assertThat(occurrences(page, "该游标列在源库没有索引")).isEqualTo(2);
-        assertThat(occurrences(page, "data-tip=\"")).isEqualTo(1);
+        assertThat(occurrences(page, "aria-label=\"该游标列在源库没有索引")).isEqualTo(1);
+        assertThat(occurrences(page, "data-tip=\"该游标列在源库没有索引")).isEqualTo(1);
         assertThat(page).contains("EVENTS");
     }
 

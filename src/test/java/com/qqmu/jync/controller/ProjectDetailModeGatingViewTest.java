@@ -58,6 +58,7 @@ class ProjectDetailModeGatingViewTest {
     @MockitoBean private CdcConsumerManager cdcConsumerManager;
     @MockitoBean private CdcPositionStore cdcPositionStore;
     @MockitoBean private RedisTargetService redisTargetService;
+    @MockitoBean private com.qqmu.jync.service.fanout.FanoutPositionStore fanoutPositionStore;
 
     private Project stubProject(SyncTargetKind kind, CaptureStrategy strategy, boolean withProgress) {
         Project project = new Project();
@@ -103,6 +104,23 @@ class ProjectDetailModeGatingViewTest {
         return mvc.perform(get("/projects/1").locale(Locale.ENGLISH))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void aFanoutProjectOffersTheEventTransportChoice() throws Exception {
+        Project project = stubProject(SyncTargetKind.JDBC, CaptureStrategy.PG_LOGICAL_CDC, false);
+        SyncConfig fanout = new SyncConfig();
+        fanout.setCaptureStrategy(CaptureStrategy.PG_LOGICAL_CDC);
+        fanout.getTables().add("orders");
+        fanout.setObjectSelectionExplicit(true);
+        fanout.setFanoutTargetDbIds(new java.util.ArrayList<>(List.of(4L)));
+        when(projectService.loadConfig(project)).thenReturn(fanout);
+
+        String page = renderDetail();
+
+        assertThat(page).contains("name=\"fanoutTransport\"", "name=\"fanoutRedisUri\"");
+        assertThat(page).contains("value=\"REDIS\"", "value=\"SPOOL\"");
     }
 
     @Test

@@ -1101,6 +1101,43 @@ public class ProjectController {
                     }
                     config.setFanoutTargetDbIds(clean);
                 }
+                // Per-project transport choice. A change moves where UNDELIVERED events
+                // live: the capture anchor has already advanced past events sitting in the
+                // old place, so the safe move is the same as a target-list change — refuse
+                // while running, and drop the anchor so the next start re-baselines every
+                // target instead of silently skipping that window.
+                String requestedTransport = form.getFanoutTransport();
+                if (requestedTransport != null) {
+                    String cleanTransport = requestedTransport.trim();
+                    if (cleanTransport.isEmpty()) {
+                        cleanTransport = null;
+                    } else if (!"SPOOL".equalsIgnoreCase(cleanTransport)
+                            && !"REDIS".equalsIgnoreCase(cleanTransport)) {
+                        return ConfigSaveOutcome.error(
+                                "error.project.fanout.transport.invalid");
+                    } else {
+                        cleanTransport = cleanTransport.toUpperCase(java.util.Locale.ROOT);
+                    }
+                    String requestedUri = form.getFanoutRedisUri() == null
+                            ? null : form.getFanoutRedisUri().trim();
+                    if (requestedUri != null && requestedUri.isEmpty()) {
+                        requestedUri = null;
+                    }
+                    boolean transportChanged = !java.util.Objects.equals(
+                            config.getFanoutTransport(), cleanTransport)
+                            || !java.util.Objects.equals(
+                                    config.getFanoutRedisUri(), requestedUri);
+                    if (transportChanged && config.getFanoutTargetDbIds() != null
+                            && !config.getFanoutTargetDbIds().isEmpty()) {
+                        if (projectService.isRunning(project)) {
+                            return ConfigSaveOutcome.error(
+                                    "error.project.stop.before.config");
+                        }
+                        cdcPositionStore.delete(project.getId());
+                    }
+                    config.setFanoutTransport(cleanTransport);
+                    config.setFanoutRedisUri(requestedUri);
+                }
                 // A strategy switch away from binlog leaves no fan-out to run; stale extra
                 // targets would otherwise sit in the config and surprise a later switch back.
                 CaptureStrategy effectiveForFanout = strategyParam != null
