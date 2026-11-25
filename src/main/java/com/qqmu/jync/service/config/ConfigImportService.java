@@ -295,7 +295,7 @@ public class ConfigImportService {
                 project.setTargetDbId(map(databaseIds, dto.targetDbId()));
                 project.setTargetRedisId(null);
             }
-            project.setSyncConfig(dto.syncConfig());
+            project.setSyncConfig(remapFanoutTargets(dto.syncConfig(), databaseIds));
             project.setEnabled(dto.enabled());
             project.setOwnerUsername(dto.ownerUsername());
             projectIds.put(dto.id(), projects.save(project).getId());
@@ -470,6 +470,37 @@ public class ConfigImportService {
             ids.add(id.apply(item));
         }
         return ids;
+    }
+
+    /**
+     * Target connection ids inside the project's sync JSON are not project columns, so the
+     * normal source/target remap above does not touch them. A fan-out project imported into
+     * an installation with different connection ids would otherwise point at unrelated (or
+     * missing) targets.
+     */
+    private String remapFanoutTargets(String syncConfig, Map<Long, Long> databaseIds) {
+        if (syncConfig == null || syncConfig.isBlank()) {
+            return syncConfig;
+        }
+        try {
+            tools.jackson.databind.JsonNode root = objectMapper.readTree(syncConfig);
+            tools.jackson.databind.JsonNode fanout = root.get("fanoutTargetDbIds");
+            if (fanout == null || !fanout.isArray() || fanout.isEmpty()) {
+                return syncConfig;
+            }
+            tools.jackson.databind.node.ArrayNode mapped =
+                    objectMapper.createArrayNode();
+            for (tools.jackson.databind.JsonNode id : fanout) {
+                mapped.add(map(databaseIds, id.asLong()));
+            }
+            ((tools.jackson.databind.node.ObjectNode) root)
+                    .set("fanoutTargetDbIds", mapped);
+            return objectMapper.writeValueAsString(root);
+        } catch (ConfigPackageException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new ConfigPackageException("error.config.import.referenceMissing");
+        }
     }
 
     private static Long map(Map<Long, Long> ids, Long oldId) {

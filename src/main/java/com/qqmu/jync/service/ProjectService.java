@@ -44,6 +44,7 @@ import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.dto.meta.ViewMeta;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.CaptureStrategy;
+import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
@@ -123,6 +124,12 @@ public class ProjectService {
     private final CdcConsumerManager cdcManager;
     private final SyncStateWriter stateWriter;
     private final CdcPositionStore positionStore;
+
+    /** Optional so hand-built service tests keep the old constructor. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.repository.FanoutPositionRepository fanoutPositions;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.repository.FanoutProgressRepository fanoutProgress;
     private final TaskMetricSampleRepository taskMetricSampleRepository;
     private final AlertStateRepository alertStateRepository;
     private final SyncProperties properties;
@@ -1238,11 +1245,25 @@ public class ProjectService {
         // button; this is the server-side backstop for a stale page or a direct API call.
         // Bare keys: ApiExceptionHandler returns them as-is and the browser localizes them.
         SyncConfig config = loadConfig(project);
-        if (config.getFanoutTargetDbIds() != null && !config.getFanoutTargetDbIds().isEmpty()
-                && config.getCaptureStrategyOrDefault() != CaptureStrategy.BINLOG_CDC) {
+        if (config.getFanoutTargetDbIds() != null && !config.getFanoutTargetDbIds().isEmpty()) {
             // The fan-out runner is a binlog consumer; starting polling with extra targets
             // would silently write only the primary target.
-            throw new IllegalStateException("error.project.fanout.requires.binlog");
+            if (config.getCaptureStrategyOrDefault() != CaptureStrategy.BINLOG_CDC) {
+                throw new IllegalStateException("error.project.fanout.requires.binlog");
+            }
+            java.util.Set<Long> seen = new java.util.HashSet<>();
+            for (Long targetId : config.getFanoutTargetDbIds()) {
+                if (targetId == null || !seen.add(targetId)
+                        || java.util.Objects.equals(targetId, project.getSourceDbId())
+                        || java.util.Objects.equals(targetId, project.getTargetDbId())) {
+                    throw new IllegalStateException("error.project.fanout.invalid");
+                }
+                DatabaseConfig target = databaseConfigRepository.findById(targetId)
+                        .orElse(null);
+                if (target == null || target.getRole() != ConnectionRole.TARGET) {
+                    throw new IllegalStateException("error.project.fanout.invalid");
+                }
+            }
         }
         // Switching an existing polling project's target to Redis leaves its stored config
         // untouched, and the detail page no longer offers POLLING for a cache target — so a
@@ -1565,6 +1586,13 @@ public class ProjectService {
             // Alert state carries a project id but no foreign key. Left behind, a new project
             // that reuses the id inherits the old silence/cooldown and may never alert again.
             alertStateRepository.deleteByProjectId(projectId);
+            if (fanoutPositions != null) {
+                fanoutPositions.deleteByProjectId(projectId);
+            }
+            if (fanoutProgress != null) {
+                fanoutProgress.deleteByProjectId(projectId);
+            }
+            deleteFanoutSpool(projectId);
             projectRepository.deleteById(projectId);
             // Drop the runner's per-project state (queued rerun, attempt count, stop epoch,
             // heartbeat marker) so a reused id cannot inherit a ghost cycle.
@@ -1573,6 +1601,26 @@ public class ProjectService {
                     AuditDetail.of("audit.detail.projectDelete", project.getName()));
         }
         log.info("Deleted project '{}' and all its sync state", project.getName());
+    }
+
+    /** Best-effort removal of the project's fan-out spool directory. */
+    private static void deleteFanoutSpool(Long projectId) {
+        java.nio.file.Path spool = java.nio.file.Path.of("data", "fanout",
+                String.valueOf(projectId));
+        if (!java.nio.file.Files.exists(spool)) {
+            return;
+        }
+        try (var paths = java.nio.file.Files.walk(spool)) {
+            paths.sorted(java.util.Comparator.reverseOrder()).forEach(path -> {
+                try {
+                    java.nio.file.Files.deleteIfExists(path);
+                } catch (java.io.IOException e) {
+                    log.debug("Could not delete fan-out spool file {}: {}", path, e.toString());
+                }
+            });
+        } catch (java.io.IOException e) {
+            log.debug("Could not walk fan-out spool directory {}: {}", spool, e.toString());
+        }
     }
 
     /**
