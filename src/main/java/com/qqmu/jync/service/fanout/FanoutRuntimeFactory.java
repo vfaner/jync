@@ -35,13 +35,18 @@ public class FanoutRuntimeFactory {
     private final com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair;
     private final ObjectMapper mapper;
     private final SyncProperties properties;
+    private final com.qqmu.jync.service.projection.redis.RedisTargetService redisTargets;
+    private final com.qqmu.jync.util.CryptoUtil cryptoUtil;
 
     public FanoutRuntimeFactory(FanoutTargetContextFactory targetContexts,
                                 StructureSyncService structureSync,
                                 FanoutProgressStore progressStore,
                                 FanoutPositionStore positionStore,
                                 com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
-                                ObjectMapper mapper, SyncProperties properties) {
+                                ObjectMapper mapper, SyncProperties properties,
+                                com.qqmu.jync.service.projection.redis.RedisTargetService
+                                        redisTargets,
+                                com.qqmu.jync.util.CryptoUtil cryptoUtil) {
         this.targetContexts = targetContexts;
         this.structureSync = structureSync;
         this.progressStore = progressStore;
@@ -49,6 +54,8 @@ public class FanoutRuntimeFactory {
         this.targetRepair = targetRepair;
         this.mapper = mapper;
         this.properties = properties;
+        this.redisTargets = redisTargets;
+        this.cryptoUtil = cryptoUtil;
     }
 
     public FanoutRuntime create(Project project, SyncContext sourceCtx, String lockOwner,
@@ -79,13 +86,30 @@ public class FanoutRuntimeFactory {
             kind = SyncProperties.Fanout.Transport.SPOOL;
         }
         if (kind == SyncProperties.Fanout.Transport.REDIS) {
-            String uri = sourceCtx.getConfig() == null ? null
-                    : sourceCtx.getConfig().getFanoutRedisUri();
-            if (uri == null || uri.isBlank()) {
-                uri = properties.getFanout().getRedisUri();
+            Long targetId = sourceCtx.getConfig() == null ? null
+                    : sourceCtx.getConfig().getFanoutRedisTargetId();
+            com.qqmu.jync.model.RedisTarget target = targetId == null ? null
+                    : redisTargets.find(targetId).orElse(null);
+            String streamKey = "jync:fanout:" + project.getId() + ":events";
+            if (target != null) {
+                // Same entity (and encrypted password) the cache projection uses: a jar
+                // deployment needs no extra server-side URI for the event transport.
+                String password = target.getPasswordEnc() == null ? null
+                        : cryptoUtil.decrypt(target.getPasswordEnc());
+                transport = new RedisStreamEventTransport(
+                        com.qqmu.jync.service.projection.redis.RedisUris.from(target, password),
+                        streamKey);
+            } else {
+                // Legacy: a server-wide Redis URI still works for projects saved before the
+                // per-project target picker existed.
+                String uri = properties.getFanout().getRedisUri();
+                if (uri == null || uri.isBlank()) {
+                    throw new IllegalStateException("Fan-out Redis transport for project "
+                            + project.getId() + " has no Redis target selected");
+                }
+                transport = new RedisStreamEventTransport(io.lettuce.core.RedisURI.create(uri),
+                        streamKey);
             }
-            transport = new RedisStreamEventTransport(uri,
-                    "jync:fanout:" + project.getId() + ":events");
         } else {
             Path spool = Path.of("data", "fanout", String.valueOf(project.getId()));
             transport = new SpoolingEventTransport(spool, SPOOL_MAX_BYTES, mapper);

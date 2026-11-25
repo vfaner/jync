@@ -336,8 +336,10 @@ sync:
   # 关闭 streaming-enabled 即回到 1.7.7 的整块读取行为。
   # 一源多目标的事件中转。SPOOL=每个目标一个追加文件(默认,无外部依赖);
   # REDIS=每项目一条 Redis Stream、每个目标一个消费组(需要在 redis-uri 上可用的 Redis)。
-  # 这里只是服务端默认值:任务详情页可以为单个 fan-out 项目选择 SPOOL/REDIS 并覆盖 redis-uri
-  # (切换会清空共享锚点,下次启动重建基线)。
+  # 这里只是老项目/无任务级配置时的默认值:任务详情页为 fan-out 项目选择本地队列或
+  # Redis Stream 时,Redis 连接直接复用已配置的「Redis 目标」(含加密口令),不需要在这里
+  # 填 URI;只有任务级没有选目标时才回退到这个 redis-uri(旧配置兼容)。
+  # 切换中转会清空共享锚点,项目下次启动时对所有目标重建基线。
   # 两者都是 at-least-once,重复由目标侧幂等 upsert 吸收。
   fanout:
     transport: SPOOL

@@ -1766,6 +1766,19 @@
    */
   // 目标选择器：整块输入区就是一个下拉。点框内任意处（或用键盘回车/下箭头）展开
   // 可选的 TARGET 连接，选中即变成标签；不再单独放「+ 添加目标」下拉控件。
+  // 事件中转：选 Redis Stream 时才露出「Redis 目标」下拉。目标就是缓存投影用的那套
+  // 连接配置（含加密口令），jar 直接运行也不再需要额外的服务端 URI 配置。
+  function bindFanoutTransport(select) {
+    var form = select.closest('form');
+    var target = form ? form.querySelector('[data-role="fanout-redis-target"]') : null;
+    if (!target) return;
+    function apply() {
+      target.classList.toggle('is-hidden', select.value !== 'REDIS');
+    }
+    select.addEventListener('change', apply);
+    apply();
+  }
+
   function bindTargetPicker(picker) {
     var chips = picker.querySelector('[data-role="target-chips"]');
     var menu = picker.querySelector('[data-role="target-menu"]');
@@ -5635,6 +5648,7 @@
     document.querySelectorAll('[data-role="column-rule-table"]').forEach(bindColumnRuleFilter);
     document.querySelectorAll('[data-role="cursor-priority-open"]').forEach(bindCursorPriority);
     document.querySelectorAll('[data-role="target-picker"]').forEach(bindTargetPicker);
+    document.querySelectorAll('[data-role="fanout-transport"]').forEach(bindFanoutTransport);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
     document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);

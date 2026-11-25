@@ -426,6 +426,15 @@ public class ProjectController {
         List<Map<String, Object>> fanoutStatuses = buildFanoutStatuses(id, project, config);
         if (!fanoutStatuses.isEmpty()) {
             model.addAttribute("fanoutStatuses", fanoutStatuses);
+            // Candidate Redis endpoints for the fan-out event transport: the same targets
+            // the cache projection uses. Cluster targets are excluded — the stream
+            // transport is single-node (XAUTOCLAIM/XREADGROUP on a cluster would need a
+            // different client and key routing).
+            model.addAttribute("fanoutRedisTargets", redisTargetService == null
+                    ? java.util.List.of()
+                    : redisTargetService.findAll().stream()
+                            .filter(target -> !target.isClusterMode())
+                            .toList());
         }
         // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
         // lets the page show chunk progress and the resume promise per table.
@@ -1110,7 +1119,9 @@ public class ProjectController {
                 if (requestedTransport != null) {
                     String cleanTransport = requestedTransport.trim();
                     if (cleanTransport.isEmpty()) {
-                        cleanTransport = null;
+                        // A jar-only deployment has two choices: the local queue or a
+                        // configured Redis target. Absent means the local queue.
+                        cleanTransport = "SPOOL";
                     } else if (!"SPOOL".equalsIgnoreCase(cleanTransport)
                             && !"REDIS".equalsIgnoreCase(cleanTransport)) {
                         return ConfigSaveOutcome.error(
@@ -1118,15 +1129,30 @@ public class ProjectController {
                     } else {
                         cleanTransport = cleanTransport.toUpperCase(java.util.Locale.ROOT);
                     }
-                    String requestedUri = form.getFanoutRedisUri() == null
-                            ? null : form.getFanoutRedisUri().trim();
-                    if (requestedUri != null && requestedUri.isEmpty()) {
-                        requestedUri = null;
+                    Long requestedRedisTarget = "REDIS".equals(cleanTransport)
+                            ? form.getFanoutRedisTargetId() : null;
+                    if ("REDIS".equals(cleanTransport)) {
+                        // The value is a Redis *target* id: same connection entity (and
+                        // encrypted password) the cache projection uses, so a jar-only
+                        // deployment configures nothing extra on the server.
+                        com.qqmu.jync.model.RedisTarget redisTarget =
+                                redisTargetService == null || requestedRedisTarget == null
+                                        ? null
+                                        : redisTargetService.find(requestedRedisTarget)
+                                                .orElse(null);
+                        if (redisTarget == null) {
+                            return ConfigSaveOutcome.error(
+                                    "error.project.fanout.redisTarget.invalid");
+                        }
+                        if (redisTarget.isClusterMode()) {
+                            return ConfigSaveOutcome.error(
+                                    "error.project.fanout.redisTarget.cluster");
+                        }
                     }
                     boolean transportChanged = !java.util.Objects.equals(
                             config.getFanoutTransport(), cleanTransport)
                             || !java.util.Objects.equals(
-                                    config.getFanoutRedisUri(), requestedUri);
+                                    config.getFanoutRedisTargetId(), requestedRedisTarget);
                     if (transportChanged && config.getFanoutTargetDbIds() != null
                             && !config.getFanoutTargetDbIds().isEmpty()) {
                         if (projectService.isRunning(project)) {
@@ -1136,7 +1162,7 @@ public class ProjectController {
                         cdcPositionStore.delete(project.getId());
                     }
                     config.setFanoutTransport(cleanTransport);
-                    config.setFanoutRedisUri(requestedUri);
+                    config.setFanoutRedisTargetId(requestedRedisTarget);
                 }
                 // A strategy switch away from binlog leaves no fan-out to run; stale extra
                 // targets would otherwise sit in the config and surprise a later switch back.

@@ -119,7 +119,7 @@ class ProjectDetailModeGatingViewTest {
 
         String page = renderDetail();
 
-        assertThat(page).contains("name=\"fanoutTransport\"", "name=\"fanoutRedisUri\"");
+        assertThat(page).contains("name=\"fanoutTransport\"", "name=\"fanoutRedisTargetId\"");
         assertThat(page).contains("value=\"REDIS\"", "value=\"SPOOL\"");
     }
 

@@ -1628,7 +1628,7 @@ public class ProjectService {
             }
             deleteFanoutSpool(projectId);
             if (fanoutStreamCleanup != null) {
-                fanoutStreamCleanup.delete(projectId);
+                fanoutStreamCleanup.delete(project, loadConfig(project));
             }
             projectRepository.deleteById(projectId);
             // Drop the runner's per-project state (queued rerun, attempt count, stop epoch,

@@ -58,8 +58,7 @@ public final class RedisStreamEventTransport implements EventTransport {
     private final List<Sub> subscriptions = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
-    public RedisStreamEventTransport(String redisUri, String streamKey) {
-        RedisURI uri = RedisURI.create(redisUri);
+    public RedisStreamEventTransport(RedisURI uri, String streamKey) {
         this.client = RedisClient.create(uri);
         // A blocking XREADGROUP parks the command for the poll timeout; the command timeout
         // has to sit above it or an idle stream would be cancelled as a failure.

@@ -37,9 +37,9 @@ public class SyncConfigForm {
     /** Additional target connection ids for a fan-out project. */
     private List<Long> fanoutTargetIds;
 
-    /** Fan-out transport override: blank follows the server default, else SPOOL or REDIS. */
+    /** Fan-out transport: blank/SPOOL is the local queue, REDIS uses a configured target. */
     private String fanoutTransport;
-    private String fanoutRedisUri;
+    private Long fanoutRedisTargetId;
 
     private Long pollIntervalMs;
     private String cronExpression;

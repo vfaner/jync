@@ -132,10 +132,12 @@ public class SyncConfig {
     private String fanoutTransport;
 
     /**
-     * Redis URI override for this project; blank follows {@code sync.fanout.redis-uri}.
-     * Do not put credentials here — the value is stored with the task configuration.
+     * The configured Redis target used as the event transport when
+     * {@link #fanoutTransport} is {@code REDIS}. Reusing a Redis target keeps the connection
+     * details (and the encrypted password) in the same place as the cache projection — no
+     * separate server-side URI to maintain for a jar-only deployment.
      */
-    private String fanoutRedisUri;
+    private Long fanoutRedisTargetId;
 
     /** Table name mapping source -> target; unmapped tables keep their name. */
     private Map<String, String> tableNameMapping = new HashMap<>();

@@ -73,20 +73,27 @@
              维护；这里只读展示位点/积压并 5 秒刷新。 -->
         <div class="field" th:if="${fanoutStatuses != null and !#lists.isEmpty(fanoutStatuses)}">
             <label for="fanoutTransport" th:text="#{option.fanoutTransport}">Event transport</label>
-            <select class="select" id="fanoutTransport" name="fanoutTransport">
-                <option value=""
+            <select class="select" id="fanoutTransport" name="fanoutTransport"
+                    data-role="fanout-transport">
+                <option value="SPOOL"
                         th:selected="${config.fanoutTransport == null
-                                       or #strings.isEmpty(config.fanoutTransport)}"
-                        th:text="#{option.fanoutTransport.default}">Follow server</option>
-                <option value="SPOOL" th:selected="${config.fanoutTransport == 'SPOOL'}"
+                                       or #strings.isEmpty(config.fanoutTransport)
+                                       or config.fanoutTransport == 'SPOOL'}"
                         th:text="#{option.fanoutTransport.spool}">Local spool</option>
                 <option value="REDIS" th:selected="${config.fanoutTransport == 'REDIS'}"
                         th:text="#{option.fanoutTransport.redis}">Redis Stream</option>
             </select>
-            <input type="text" class="input mono" id="fanoutRedisUri" name="fanoutRedisUri"
-                   maxlength="512" spellcheck="false"
-                   th:value="${config.fanoutRedisUri}"
-                   th:placeholder="#{option.fanoutTransport.uriPlaceholder}">
+            <!--/* Redis 中转直接复用已配置的 Redis 目标（缓存目标那套连接、加密口令），
+                   不再让用户去服务端配置里找 URI。集群目标不在候选里。 */-->
+            <select class="select fanout-redis-target" id="fanoutRedisTargetId"
+                    name="fanoutRedisTargetId" data-role="fanout-redis-target"
+                    th:classappend="${config.fanoutTransport == 'REDIS'} ? '' : 'is-hidden'">
+                <option value="" th:text="#{option.fanoutTransport.target}">Choose a Redis target</option>
+                <option th:each="rt : ${fanoutRedisTargets}" th:value="${rt.id}"
+                        th:selected="${config.fanoutRedisTargetId != null
+                                       and config.fanoutRedisTargetId == rt.id}"
+                        th:text="|${rt.name} · ${rt.host}:${rt.port}|">redis</option>
+            </select>
             <div class="help" th:text="#{option.fanoutTransportHelp}">help</div>
         </div>
         <!-- 一源多目标：目标选择在新建/编辑页维护；这里只读展示并 5 秒刷新位点/积压。 -->
