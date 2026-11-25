@@ -75,6 +75,9 @@ public class ProjectController {
     /** Optional so slice tests without the fan-out beans still load the controller. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.qqmu.jync.service.fanout.FanoutPositionStore fanoutPositionStore;
+    /** Optional for the same reason: the status fragment also shows live worker state. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutRuntimeRegistry fanoutRuntimes;
     private final CdcOperationsService cdcOperationsService;
     private final CdcConsumerManager cdcConsumerManager;
     private final CdcPositionStore cdcPositionStore;
@@ -823,7 +826,49 @@ public class ProjectController {
             }
             statuses.add(row);
         }
+        attachWorkerStates(projectId, statuses);
         return statuses;
+    }
+
+    /**
+     * Adds the live worker state of this node (alive / last error / applied transactions).
+     * On another node the registry has no runtime and the DB position is all the page can
+     * show — the same split the single-target CDC card already has.
+     */
+    private void attachWorkerStates(Long projectId, List<Map<String, Object>> statuses) {
+        // The keys must exist even when this node runs no runtime: Thymeleaf's map lookup
+        // throws on a missing key, which would 500 the whole status fragment.
+        for (Map<String, Object> row : statuses) {
+            row.put("workerAlive", null);
+            row.put("workerError", null);
+            row.put("appliedTransactions", null);
+        }
+        com.qqmu.jync.service.fanout.FanoutRuntime runtime =
+                fanoutRuntimes == null ? null : fanoutRuntimes.get(projectId);
+        if (runtime == null) {
+            return;
+        }
+        Map<Long, com.qqmu.jync.service.fanout.FanoutRuntime.TargetState> live =
+                new java.util.HashMap<>();
+        try {
+            for (com.qqmu.jync.service.fanout.FanoutRuntime.TargetState state
+                    : runtime.workerStates()) {
+                live.put(state.targetDbId(), state);
+            }
+        } catch (RuntimeException e) {
+            // A runtime closing between the registry lookup and this read must not turn the
+            // status fragment into a 500; the DB-backed columns still render.
+            return;
+        }
+        for (Map<String, Object> row : statuses) {
+            com.qqmu.jync.service.fanout.FanoutRuntime.TargetState state =
+                    live.get((Long) row.get("targetId"));
+            if (state != null) {
+                row.put("workerAlive", state.alive());
+                row.put("workerError", state.lastError());
+                row.put("appliedTransactions", state.appliedTransactions());
+            }
+        }
     }
 
     @GetMapping("/{id}/cdc-card")

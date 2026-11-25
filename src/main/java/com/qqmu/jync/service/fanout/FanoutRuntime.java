@@ -2,6 +2,7 @@ package com.qqmu.jync.service.fanout;
 
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Map;
@@ -126,6 +127,28 @@ public final class FanoutRuntime implements AutoCloseable {
         String group = String.valueOf(target.targetDbId());
         return new FanoutTargetWorker(group, subscription, applierFor(target),
                 position -> onTargetCommit(target.targetDbId(), position));
+    }
+
+    /** Live state of one target's worker, for the polled status fragment. */
+    public record TargetState(Long targetDbId, boolean alive, long appliedTransactions,
+                              String lastError, String lastAppliedPosition) {
+    }
+
+    /**
+     * One entry per target, in target order. Read from the worker threads' volatile fields;
+     * a worker replaced by the supervisor shows up as the new instance at the same index.
+     */
+    public List<TargetState> workerStates() {
+        List<FanoutTargetWorker> snapshot = List.copyOf(workers);
+        List<TargetState> states = new ArrayList<>();
+        for (int i = 0; i < snapshot.size() && i < targets.size(); i++) {
+            FanoutTargetWorker worker = snapshot.get(i);
+            Throwable error = worker.getLastError();
+            states.add(new TargetState(targets.get(i).targetDbId(), worker.isAlive(),
+                    worker.getAppliedTransactions(), error == null ? null : error.toString(),
+                    worker.getLastAppliedPosition()));
+        }
+        return states;
     }
 
     /** Runs the shared baseline; returns the per-table loads (empty when nothing to load). */

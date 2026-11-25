@@ -33,6 +33,8 @@ import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.fanout.FanoutPositionStore;
+import com.qqmu.jync.service.fanout.FanoutRuntime;
+import com.qqmu.jync.service.fanout.FanoutRuntimeRegistry;
 import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
 /**
@@ -53,6 +55,7 @@ class ProjectDetailFanoutStatusViewTest {
     @MockitoBean private CdcPositionStore cdcPositionStore;
     @MockitoBean private RedisTargetService redisTargetService;
     @MockitoBean private FanoutPositionStore fanoutPositionStore;
+    @MockitoBean private FanoutRuntimeRegistry fanoutRuntimes;
 
     private static RequestPostProcessor asAdmin() {
         AppUser user = new AppUser();
@@ -97,6 +100,27 @@ class ProjectDetailFanoutStatusViewTest {
         assertThat(html).contains("#2", "#3");
         assertThat(html).contains("mysql-bin.000007:1024");
         assertThat(html).contains("fanout-status-list");
+    }
+
+    @Test
+    void liveWorkerStateIsShownNextToThePersistedPosition() throws Exception {
+        projectWithFanout();
+        when(fanoutPositionStore.find(1L, 2L)).thenReturn(Optional.empty());
+        when(fanoutPositionStore.find(1L, 3L)).thenReturn(Optional.empty());
+        FanoutRuntime runtime = org.mockito.Mockito.mock(FanoutRuntime.class);
+        when(fanoutRuntimes.get(1L)).thenReturn(runtime);
+        when(runtime.workerStates()).thenReturn(List.of(
+                new FanoutRuntime.TargetState(2L, true, 12L, null, null),
+                new FanoutRuntime.TargetState(3L, false, 0L, "table 'orders' is gone", null)));
+
+        String html = mvc.perform(get("/projects/1/fanout-status").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The stopped worker's error is the actionable bit; the applied count proves the
+        // healthy target is moving even when the persisted position has not changed yet.
+        assertThat(html).contains("table &#39;orders&#39; is gone");
+        assertThat(html).contains("12");
     }
 
     @Test

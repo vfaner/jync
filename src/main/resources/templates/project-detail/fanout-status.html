@@ -21,6 +21,10 @@
                   th:text="#{option.fanoutNoPosition}">not consumed yet</span>
             <span th:if="${s.ageSeconds != null}" th:text="#{option.fanoutAge(${s.ageSeconds})}">age</span>
             <span th:text="#{option.fanoutSpool(${s.spoolBytes})}">spool</span>
+            <span th:if="${s.appliedTransactions != null}"
+                  th:text="#{option.fanoutApplied(${s.appliedTransactions})}">applied</span>
+            <span th:if="${s.workerError != null}" class="fanout-worker-error"
+                  th:text="#{option.fanoutWorkerStopped(${s.workerError})}">stopped</span>
         </li>
     </ul>
 </div>
