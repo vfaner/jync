@@ -115,15 +115,35 @@
                         <label for="fanoutTargetIds">
                             <span th:text="#{project.fanoutTargets}">Extra targets</span>
                         </label>
-                        <div class="fanout-target-list"
-                             th:if="${fanoutTargets != null and !#lists.isEmpty(fanoutTargets)}">
-                            <label class="fanout-target-option" th:each="db : ${fanoutTargets}">
-                                <input type="checkbox" name="fanoutTargetIds" th:value="${db.id}"
-                                       th:checked="${fanoutSelected != null and fanoutSelected.contains(db.id)}">
-                                <span class="fanout-target-name" th:text="${db.name}">db</span>
-                                <span class="fanout-target-type"
-                                      th:text="#{${'db.type.' + db.type.name()}}">MySQL</span>
-                            </label>
+                        <div class="tag-editor fanout-target-picker" data-role="fanout-picker"
+                             data-max="8"
+                             th:attr="data-label-max=#{project.fanoutTargets.max},
+                                      data-label-remove=#{project.fanoutTargets.remove}">
+                            <div class="tag-input" data-role="fanout-chips">
+                                <span class="tag-chip" th:each="db : ${fanoutTargets}"
+                                      th:if="${fanoutSelected != null and fanoutSelected.contains(db.id)}"
+                                      th:attr="data-id=${db.id}">
+                                    <span th:text="${db.name}">db</span>
+                                    <span class="fanout-chip-type"
+                                          th:text="#{${'db.type.' + db.type.name()}}">MySQL</span>
+                                    <button type="button" data-remove
+                                            th:attr="aria-label=#{project.fanoutTargets.remove}">×</button>
+                                </span>
+                                <select class="tag-input-field fanout-add-select"
+                                        data-role="fanout-add"
+                                        th:attr="aria-label=#{project.fanoutTargets.add}">
+                                    <option value="" th:text="#{project.fanoutTargets.add}">+ Add target</option>
+                                    <option th:each="db : ${fanoutTargets}" th:value="${db.id}"
+                                            th:disabled="${fanoutSelected != null and fanoutSelected.contains(db.id)}"
+                                            th:attr="data-name=${db.name},
+                                                     data-type=#{${'db.type.' + db.type.name()}}"
+                                            th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
+                                </select>
+                            </div>
+                            <div data-role="fanout-hidden" hidden>
+                                <input type="hidden" name="fanoutTargetIds"
+                                       th:each="id : ${fanoutSelected}" th:value="${id}">
+                            </div>
                         </div>
                         <div class="help" th:if="${fanoutTargets == null or #lists.isEmpty(fanoutTargets)}"
                              th:text="#{project.fanoutTargets.empty}">No extra target connections.</div>

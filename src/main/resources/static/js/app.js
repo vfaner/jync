@@ -1765,6 +1765,87 @@
    * 项目级游标优先级标签输入。标签顺序就是匹配顺序；Enter/失焦生成标签，× 删除，
    * 拖动或 Alt+←/→ 调整顺序。保存只提交这组列名，不在这里读取源库。
    */
+  /**
+   * 额外目标选择：已选目标显示为可移除的标签，下拉只负责“添加”。提交仍走
+   * 同名 hidden input，表单没有 JS 时服务端渲染的标签也能直接提交。
+   */
+  function bindFanoutPicker(picker) {
+    var chips = picker.querySelector('[data-role="fanout-chips"]');
+    var add = picker.querySelector('[data-role="fanout-add"]');
+    var hidden = picker.querySelector('[data-role="fanout-hidden"]');
+    if (!chips || !add || !hidden) return;
+    var max = parseInt(picker.getAttribute('data-max'), 10) || 8;
+
+    function hiddenInputs() {
+      return Array.prototype.slice.call(hidden.querySelectorAll('input'));
+    }
+    function has(id) {
+      return hiddenInputs().some(function (input) { return input.value === id; });
+    }
+    function setOption(id, disabled) {
+      Array.prototype.slice.call(add.options).forEach(function (option) {
+        if (option.value === id) option.disabled = disabled;
+      });
+    }
+    function removeChip(chip) {
+      var id = chip.getAttribute('data-id');
+      chip.remove();
+      hiddenInputs().forEach(function (input) {
+        if (input.value === id) input.remove();
+      });
+      setOption(id, false);
+    }
+    function addChip(id, name, type) {
+      if (has(id)) return;
+      if (hiddenInputs().length >= max) {
+        toast(picker.getAttribute('data-label-max'), 'warn');
+        return;
+      }
+      var chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.setAttribute('data-id', id);
+      var label = document.createElement('span');
+      label.textContent = name;
+      chip.appendChild(label);
+      if (type) {
+        var typeLabel = document.createElement('span');
+        typeLabel.className = 'fanout-chip-type';
+        typeLabel.textContent = type;
+        chip.appendChild(typeLabel);
+      }
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.setAttribute('data-remove', '');
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', picker.getAttribute('data-label-remove'));
+      chip.appendChild(remove);
+      chips.insertBefore(chip, add);
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'fanoutTargetIds';
+      input.value = id;
+      hidden.appendChild(input);
+      setOption(id, true);
+    }
+
+    chips.addEventListener('click', function (event) {
+      var button = event.target.closest ? event.target.closest('button[data-remove]') : null;
+      if (!button) return;
+      var chip = button.closest('.tag-chip');
+      if (chip) {
+        removeChip(chip);
+        add.focus();
+      }
+    });
+    add.addEventListener('change', function () {
+      var option = add.options[add.selectedIndex];
+      if (!option || !option.value) return;
+      addChip(option.value, option.getAttribute('data-name') || option.textContent,
+        option.getAttribute('data-type') || '');
+      add.value = '';
+    });
+  }
+
   function bindCursorPriority(btn) {
     var modal = document.getElementById('cursor-priority-modal');
     if (!modal || !btn || !modal.dataset.action) { return; }
@@ -5439,6 +5520,7 @@
     document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
     document.querySelectorAll('[data-role="column-rule-table"]').forEach(bindColumnRuleFilter);
     document.querySelectorAll('[data-role="cursor-priority-open"]').forEach(bindCursorPriority);
+    document.querySelectorAll('[data-role="fanout-picker"]').forEach(bindFanoutPicker);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
     document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);
