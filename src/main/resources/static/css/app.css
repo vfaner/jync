@@ -1221,7 +1221,30 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .fanout-target-picker { margin-top: 0; }
 .fanout-target-picker .tag-input { min-height: 42px; cursor: default; }
-.fanout-add-select { flex: 1 1 220px; min-width: 180px; font-family: inherit; font-size: 13px; }
+.target-picker { position: relative; }
+/* 整块输入区即下拉：点框内任意处展开可选连接，选中后变成标签。 */
+.tag-editor .target-input[tabindex="0"] { cursor: pointer; }
+.target-input[aria-expanded="true"] {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent);
+}
+.target-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 60;
+  max-height: 260px; overflow: auto; padding: 4px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .14);
+}
+.target-menu-item {
+  display: flex; width: 100%; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 7px 9px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--ink); font: inherit; font-size: 13px;
+  text-align: left; cursor: pointer;
+}
+.target-menu-item:hover, .target-menu-item:focus-visible {
+  background: var(--bg-tint); outline: none;
+}
+.target-menu-type { color: var(--ink-mute); font-size: 11px; }
+.target-menu-empty { padding: 8px 9px; color: var(--ink-mute); font-size: 12.5px; }
 .fanout-chip-type { color: var(--ink-mute); font-size: 10.5px; }
 .fanout-target-picker .tag-chip { font-family: inherit; font-size: 12.5px; cursor: default; }
 .fanout-target-list {

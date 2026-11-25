@@ -344,6 +344,11 @@ class ProjectFormViewTest {
         assertThat(page).contains("data-id=\"2\"", "data-id=\"3\"");
         assertThat(page).contains("name=\"fanoutTargetIds\"");
         assertThat(page).doesNotContain("id=\"fanout-target-field\"");
+        // The box itself is the dropdown: the menu is rendered empty and filled by the script,
+        // and no separate 「+ 添加目标」 select sits next to the chips any more.
+        assertThat(page).contains("data-role=\"target-menu\"");
+        assertThat(page).doesNotContain("data-role=\"target-add\"");
+        assertThat(page).contains("data-label-empty=");
     }
 
     private static RedisTarget redisTarget(long id, String name) {

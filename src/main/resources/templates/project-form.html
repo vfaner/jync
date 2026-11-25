@@ -104,8 +104,16 @@
                              data-max="9"
                              th:attr="data-label-max=#{project.targets.max},
                                       data-label-remove=#{project.targets.remove},
+                                      data-label-empty=#{project.targets.empty},
                                       data-locked=${topologyLocked}">
-                            <div class="tag-input" data-role="target-chips">
+                            <!--/* 整块就是选择器：点框内任意空白处（或按回车）直接展开下拉，
+                                   选中的连接变成标签；不再单独放一个「+ 添加目标」下拉。 */-->
+                            <div class="tag-input target-input" data-role="target-chips"
+                                 th:attr="tabindex=${topologyLocked} ? null : '0',
+                                          role=${topologyLocked} ? null : 'button',
+                                          aria-haspopup=${topologyLocked} ? null : 'listbox',
+                                          aria-expanded=${topologyLocked} ? null : 'false',
+                                          aria-label=#{project.targets.add}">
                                 <span class="tag-chip" th:each="db : ${targetDatabases}"
                                       th:if="${db.id == project.targetDbId
                                                or (fanoutSelected != null and fanoutSelected.contains(db.id))}"
@@ -116,24 +124,17 @@
                                     <button type="button" data-remove th:unless="${topologyLocked}"
                                             th:attr="aria-label=#{project.targets.remove}">×</button>
                                 </span>
-                                <select class="tag-input-field fanout-add-select"
-                                        data-role="target-add" th:unless="${topologyLocked}"
-                                        th:attr="aria-label=#{project.targets.add}">
-                                    <option value="" th:text="#{project.targets.add}">+ 添加目标</option>
-                                    <option th:each="db : ${targetDatabases}" th:value="${db.id}"
-                                            th:disabled="${db.id == project.targetDbId
-                                                          or (fanoutSelected != null and fanoutSelected.contains(db.id))}"
-                                            th:attr="data-name=${db.name},
-                                                     data-type=#{${'db.type.' + db.type.name()}}"
-                                            th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
-                                </select>
                             </div>
+                            <div class="target-menu" data-role="target-menu" hidden
+                                 th:attr="role='listbox', aria-label=#{project.targets.add}"></div>
                             <select class="target-primary-select" id="targetDbId" th:field="*{targetDbId}"
                                     data-role="target-primary"
                                     th:attr="required=${project.targetKindOrDefault.name() == 'JDBC'} ? 'required' : null,
                                              disabled=${topologyLocked} ? 'disabled' : null">
                                 <option value=""></option>
                                 <option th:each="db : ${targetDatabases}" th:value="${db.id}"
+                                        th:attr="data-name=${db.name},
+                                                 data-type=#{${'db.type.' + db.type.name()}}"
                                         th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
                             </select>
                             <input type="hidden" name="targetDbId" data-role="target-primary-hidden"

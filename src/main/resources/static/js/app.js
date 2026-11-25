@@ -1769,9 +1769,11 @@
    * 目标数据库多选：第一枚标签是主目标，其余写入 fanoutTargetIds。标签和 hidden
    * input 同时提交，禁用 JS 时服务端渲染的标签也能正常工作。
    */
+  // 目标选择器：整块输入区就是一个下拉。点框内任意处（或用键盘回车/下箭头）展开
+  // 可选的 TARGET 连接，选中即变成标签；不再单独放「+ 添加目标」下拉控件。
   function bindTargetPicker(picker) {
     var chips = picker.querySelector('[data-role="target-chips"]');
-    var add = picker.querySelector('[data-role="target-add"]');
+    var menu = picker.querySelector('[data-role="target-menu"]');
     var primary = picker.querySelector('[data-role="target-primary"]');
     var primaryHidden = picker.querySelector('[data-role="target-primary-hidden"]');
     var extras = picker.querySelector('[data-role="target-extras"]');
@@ -1781,6 +1783,13 @@
 
     function chipNodes() {
       return Array.prototype.slice.call(chips.querySelectorAll('.tag-chip'));
+    }
+    function selectedIds() {
+      var selected = {};
+      chipNodes().forEach(function (chip) {
+        selected[chip.getAttribute('data-id')] = true;
+      });
+      return selected;
     }
     function sync() {
       var nodes = chipNodes();
@@ -1795,18 +1804,12 @@
         input.value = chip.getAttribute('data-id');
         extras.appendChild(input);
       });
-      if (add) {
-        var selected = {};
-        nodes.forEach(function (chip) { selected[chip.getAttribute('data-id')] = true; });
-        Array.prototype.slice.call(add.options).forEach(function (option) {
-          if (option.value) option.disabled = !!selected[option.value];
-        });
-      }
     }
     function addChip(id, name, type) {
       if (!id || chipNodes().some(function (c) { return c.getAttribute('data-id') === id; })) return;
       if (chipNodes().length >= max) {
         toast(picker.getAttribute('data-label-max'), 'warn');
+        closeMenu();
         return;
       }
       var chip = document.createElement('span');
@@ -1827,38 +1830,105 @@
       remove.textContent = '×';
       remove.setAttribute('aria-label', picker.getAttribute('data-label-remove'));
       chip.appendChild(remove);
-      chips.insertBefore(chip, add);
+      chips.appendChild(chip);
       sync();
+    }
+    // Rebuilt on every open: options the user already picked are not offered again, and a
+    // removed chip becomes selectable immediately (no second source of truth to keep in sync).
+    function renderMenu() {
+      if (!menu) return;
+      menu.innerHTML = '';
+      var selected = selectedIds();
+      Array.prototype.slice.call(primary.options).forEach(function (option) {
+        if (!option.value || selected[option.value]) return;
+        var item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'target-menu-item';
+        item.setAttribute('role', 'option');
+        item.setAttribute('data-id', option.value);
+        var label = document.createElement('span');
+        label.textContent = option.getAttribute('data-name') || option.textContent;
+        item.appendChild(label);
+        var type = option.getAttribute('data-type');
+        if (type) {
+          var typeLabel = document.createElement('span');
+          typeLabel.className = 'target-menu-type';
+          typeLabel.textContent = type;
+          item.appendChild(typeLabel);
+        }
+        item.addEventListener('click', function (event) {
+          event.stopPropagation();
+          addChip(option.value, option.getAttribute('data-name') || option.textContent, type || '');
+          closeMenu();
+          chips.focus();
+        });
+        menu.appendChild(item);
+      });
+      if (!menu.children.length) {
+        var empty = document.createElement('div');
+        empty.className = 'target-menu-empty';
+        empty.textContent = picker.getAttribute('data-label-empty') || '';
+        menu.appendChild(empty);
+      }
+    }
+    function openMenu() {
+      if (locked || !menu) return;
+      renderMenu();
+      menu.hidden = false;
+      picker.classList.add('is-open');
+      chips.setAttribute('aria-expanded', 'true');
+    }
+    function closeMenu() {
+      if (!menu || menu.hidden) return;
+      menu.hidden = true;
+      picker.classList.remove('is-open');
+      chips.setAttribute('aria-expanded', 'false');
     }
 
     chips.addEventListener('click', function (event) {
       if (locked) return;
       var button = event.target.closest ? event.target.closest('button[data-remove]') : null;
-      if (!button) return;
-      var chip = button.closest('.tag-chip');
-      if (chip) {
-        chip.remove();
-        sync();
-        if (add) add.focus();
+      if (button) {
+        var chip = button.closest('.tag-chip');
+        if (chip) {
+          chip.remove();
+          sync();
+        }
+        return;
       }
+      if (menu && menu.contains(event.target)) return;
+      if (menu && menu.hidden) { openMenu(); } else { closeMenu(); }
+    });
+    chips.addEventListener('keydown', function (event) {
+      if (locked) return;
+      if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        openMenu();
+        var first = menu && menu.querySelector('.target-menu-item');
+        if (first) first.focus();
+      } else if (event.key === 'Escape') {
+        closeMenu();
+      }
+    });
+    if (menu) {
+      menu.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          closeMenu();
+          chips.focus();
+        }
+      });
+    }
+    document.addEventListener('click', function (event) {
+      if (!picker.contains(event.target)) closeMenu();
     });
     // Preserve the stored primary target: the template renders chips in option order, but
     // the first chip is what sync() treats as primary.
     var initialPrimary = primary.value;
     if (initialPrimary) {
       var primaryChip = chips.querySelector('.tag-chip[data-id="'
-        + initialPrimary.replace(/"/g, '\"') + '"]');
+        + initialPrimary.replace(/"/g, '\\"') + '"]');
       if (primaryChip) chips.insertBefore(primaryChip, chips.firstChild);
-    }
-    sync();
-    if (add) {
-      add.addEventListener('change', function () {
-        var option = add.options[add.selectedIndex];
-        if (!option || !option.value) return;
-        addChip(option.value, option.getAttribute('data-name') || option.textContent,
-          option.getAttribute('data-type') || '');
-        add.value = '';
-      });
     }
     sync();
   }
