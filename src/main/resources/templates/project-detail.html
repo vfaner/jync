@@ -64,7 +64,6 @@
                 <th:block th:unless="${isRedisTarget}">
                     <th:block th:replace="~{project-detail/options :: card}"/>
                     <th:block th:replace="~{project-detail/schedule :: card}"/>
-                    <th:block th:replace="~{project-detail/cdc-schedule-hint :: card}"/>
                     <th:block th:replace="~{project-detail/performance :: card}"/>
                 </th:block>
                 <th:block th:replace="~{project-detail/cdc-idle-poll :: card}"/>

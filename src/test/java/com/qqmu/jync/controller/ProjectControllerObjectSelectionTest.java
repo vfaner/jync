@@ -222,8 +222,6 @@ class ProjectControllerObjectSelectionTest {
         for (String name : List.of("syncViews", "syncProcedures")) {
             assertThat(labelTag(page, name)).doesNotContain("polling-only").doesNotContain("is-hidden");
         }
-        // The note explaining the disappearance must be shown in CDC mode.
-        assertThat(cdcHiddenHintTag(page)).doesNotContain("is-hidden");
     }
 
     @Test
@@ -238,8 +236,6 @@ class ProjectControllerObjectSelectionTest {
                 "syncViews", "syncProcedures")) {
             assertThat(labelTag(page, name)).doesNotContain("is-hidden");
         }
-        // The CDC-only note stays in the DOM but is hidden, so it cannot flash on switch.
-        assertThat(cdcHiddenHintTag(page)).contains("is-hidden");
     }
 
     @Test
@@ -351,18 +347,6 @@ class ProjectControllerObjectSelectionTest {
         int at = page.indexOf(action);
         assertThat(at).as("button for " + action).isPositive();
         int start = page.lastIndexOf("<button", at);
-        int end = page.indexOf(">", at);
-        return page.substring(start, end + 1);
-    }
-
-    /** The <p> tag carrying the CDC-mode note about the hidden polling switches. */
-    private static String cdcHiddenHintTag(String page) {
-        // 锚在元素自身的结构标记上（这行内联样式只此一处），而非某一版文案：
-        // 复制改动不该让结构性断言失效；也不能用 class 属性，因为它的值随 CDC 状态变。
-        int at = page.indexOf("style=\"margin:0 0 10px\"");
-        assertThat(at).as("CDC hidden-options note").isPositive();
-        assertThat(page.substring(page.lastIndexOf('<', at), at)).contains("data-cdc-visibility=\"cdc\"");
-        int start = page.lastIndexOf("<p", at);
         int end = page.indexOf(">", at);
         return page.substring(start, end + 1);
     }

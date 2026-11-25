@@ -121,6 +121,8 @@ class ProjectDetailModeGatingViewTest {
 
         assertThat(page).contains("name=\"fanoutTransport\"", "name=\"fanoutRedisTargetId\"");
         assertThat(page).contains("value=\"REDIS\"", "value=\"SPOOL\"");
+        // The save path reads this reason and shows it instead of a generic failure toast.
+        assertThat(page).contains("data-required-message=");
     }
 
     @Test

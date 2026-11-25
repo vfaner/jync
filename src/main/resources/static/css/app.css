@@ -1221,6 +1221,10 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .fanout-target-picker { margin-top: 0; }
 .fanout-target-picker .tag-input { min-height: 42px; cursor: default; }
+.fanout-transport-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.fanout-transport-row .select { flex: 1 1 220px; min-width: 180px; }
 .target-picker { position: relative; }
 /* 整块输入区即下拉：点框内任意处展开可选连接，选中后变成标签。 */
 .tag-editor .target-input[tabindex="0"] { cursor: pointer; }
@@ -1246,6 +1250,7 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .target-menu-type { color: var(--ink-mute); font-size: 11px; }
 .target-menu-empty { padding: 8px 9px; color: var(--ink-mute); font-size: 12.5px; }
 .fanout-worker-error { color: var(--danger); }
+.fanout-transport-badge { color: var(--brand); }
 .fanout-chip-type { color: var(--ink-mute); font-size: 10.5px; }
 .fanout-target-picker .tag-chip { font-family: inherit; font-size: 12.5px; cursor: default; }
 .fanout-target-list {

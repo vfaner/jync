@@ -22,7 +22,7 @@
 
     <!-- 批次：同源同目标的表共享一对连接和一条调度，组内按顺序执行。 -->
     <div data-role="etl-batches">
-        <div th:if="${#lists.isEmpty(batches)}" class="card">
+        <div th:if="${#lists.isEmpty(batches)}" class="card" style="margin-bottom:16px">
             <div class="card-body tight">
                 <div class="empty">
                     <div class="empty-ico"><svg class="ico"><use href="#diagram-3"/></svg></div>

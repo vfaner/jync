@@ -33,7 +33,6 @@ class ProjectDetailTemplateAssemblyTest {
                 .contains("project-detail/objects :: card")
                 .contains("project-detail/options :: card")
                 .contains("project-detail/schedule :: card")
-                .contains("project-detail/cdc-schedule-hint :: card")
                 .contains("project-detail/performance :: card")
                 .contains("project-detail/cdc-status :: cdc-card")
                 .contains("project-detail/cdc-idle-poll :: card")
@@ -86,7 +85,6 @@ class ProjectDetailTemplateAssemblyTest {
         assertFragment("options.html", "card");
         assertFragment("baseline-options.html", "group");
         assertFragment("schedule.html", "card");
-        assertFragment("cdc-schedule-hint.html", "card");
         assertFragment("performance.html", "card");
         assertFragment("cdc-status.html", "cdc-card");
         assertFragment("cdc-idle-poll.html", "card");
@@ -101,8 +99,6 @@ class ProjectDetailTemplateAssemblyTest {
         assertThat(read(DETAIL.resolve("schedule.html")))
                 .contains("data-role=\"polling-only\"")
                 .doesNotContain("data-cdc-visibility=\"polling-cdc\"");
-        assertThat(read(DETAIL.resolve("cdc-schedule-hint.html")))
-                .contains("data-role=\"cdc-schedule-hint\"");
         assertThat(read(DETAIL.resolve("cdc-status.html")))
                 .contains("id=\"cdc-card\"")
                 .doesNotContain("id=\"cronExpression\"");

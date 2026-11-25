@@ -68,7 +68,7 @@ class ProjectDetailFanoutStatusViewTest {
                 principal, null, principal.getAuthorities()));
     }
 
-    private Project projectWithFanout() {
+    private SyncConfig projectWithFanout() {
         Project project = new Project();
         project.setId(1L);
         project.setName("fan");
@@ -78,7 +78,7 @@ class ProjectDetailFanoutStatusViewTest {
         when(projectService.findById(1L)).thenReturn(Optional.of(project));
         when(projectService.loadConfig(project)).thenReturn(config);
         when(databaseConfigService.findById(anyLong())).thenReturn(Optional.empty());
-        return project;
+        return config;
     }
 
     @Test
@@ -100,6 +100,21 @@ class ProjectDetailFanoutStatusViewTest {
         assertThat(html).contains("#2", "#3");
         assertThat(html).contains("mysql-bin.000007:1024");
         assertThat(html).contains("fanout-status-list");
+    }
+
+    @Test
+    void aRedisTransportProjectShowsTheQueueInsteadOfASpoolSize() throws Exception {
+        SyncConfig config = projectWithFanout();
+        config.setFanoutTransport("REDIS");
+        when(fanoutPositionStore.find(1L, 2L)).thenReturn(Optional.empty());
+        when(fanoutPositionStore.find(1L, 3L)).thenReturn(Optional.empty());
+
+        String html = mvc.perform(get("/projects/1/fanout-status").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(html).contains("Redis Stream");
+        assertThat(html).doesNotContain("spool");
     }
 
     @Test

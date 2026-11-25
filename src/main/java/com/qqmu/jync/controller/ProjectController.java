@@ -828,10 +828,15 @@ public class ProjectController {
             ids.add(project.getTargetDbId());
         }
         ids.addAll(config.getFanoutTargetDbIds());
+        String transport = config.getFanoutTransport();
+        if (transport == null || transport.isBlank()) {
+            transport = properties.getFanout().getTransport().name();
+        }
         List<Map<String, Object>> statuses = new ArrayList<>();
         for (Long targetId : ids) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("targetId", targetId);
+            row.put("transport", transport);
             row.put("name", databaseConfigService.findById(targetId)
                     .map(DatabaseConfig::getName).orElse("#" + targetId));
             row.put("ageSeconds", null);

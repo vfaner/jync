@@ -437,7 +437,16 @@
       btn.disabled = false;
       btn.innerHTML = original;
     }
-    return task().then(restore, restore);
+    // Restore the button but PROPAGATE the failure: returning restore() in the rejection
+    // handler turned every failed save into a resolved promise, so the caller's
+    // promise.catch (the error dialog) never ran — the button just blinked and did nothing.
+    return task().then(function (value) {
+      restore();
+      return value;
+    }, function (error) {
+      restore();
+      throw error;
+    });
   }
 
   /** 加载态按钮 HTML：spinner + data-busy-text（无文案时不留尾随空格） */
@@ -652,6 +661,10 @@
 
   /** 配置表单以 AJAX 方式提交，解析服务端 JSON；会话/非 JSON 响应直接整页重载。 */
   function postConfigForm() {
+    var transportProblem = fanoutTransportProblem();
+    if (transportProblem) {
+      return Promise.reject(new Error(transportProblem));
+    }
     var headers = {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
@@ -1768,6 +1781,20 @@
   // 可选的 TARGET 连接，选中即变成标签；不再单独放「+ 添加目标」下拉控件。
   // 事件中转：选 Redis Stream 时才露出「Redis 目标」下拉。目标就是缓存投影用的那套
   // 连接配置（含加密口令），jar 直接运行也不再需要额外的服务端 URI 配置。
+  /**
+   * The one client-side check the server would otherwise reject after a round-trip:
+   * "Redis Stream" without a target. Returning the reason here lets the save paths show
+   * it directly instead of a generic failure toast.
+   */
+  function fanoutTransportProblem() {
+    var transport = document.querySelector('[data-role="fanout-transport"]');
+    if (!transport || transport.value !== 'REDIS') { return null; }
+    var target = document.querySelector('[data-role="fanout-redis-target"]');
+    if (!target || target.value) { return null; }
+    return target.getAttribute('data-required-message')
+      || t('option.fanoutTransport.required');
+  }
+
   function bindFanoutTransport(select) {
     var form = select.closest('form');
     var target = form ? form.querySelector('[data-role="fanout-redis-target"]') : null;
@@ -5768,17 +5795,13 @@
     });
 
     // 策略联动隐藏：日志 CDC 模式下，轮询专属字段（调度卡片、每表游标列）是死配置，
-    // 直接藏掉避免用户改了却不生效。data-role="polling-only" 标记这些字段；
-    // data-role="cdc-schedule-hint" 是 CDC 模式下的占位说明卡，两者镜像切换。
+    // 直接藏掉避免用户改了却不生效。data-role="polling-only" 标记这些字段。
     // 初始状态由服务端按 data-cdc-active 渲染的 is-hidden 类决定，这里同步点击后即时联动。
     var syncPollingOnlyVisibility = function () {
       var picked = document.querySelector('input[name=captureStrategy]:checked');
       var isCdc = picked && isLogCdcStrategy(picked.value);
       document.querySelectorAll('[data-role="polling-only"]').forEach(function (el) {
         el.classList.toggle('is-hidden', !!isCdc);
-      });
-      document.querySelectorAll('[data-role="cdc-schedule-hint"]').forEach(function (el) {
-        el.classList.toggle('is-hidden', !isCdc);
       });
     };
     syncPollingOnlyVisibility();
