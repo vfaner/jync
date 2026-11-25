@@ -181,6 +181,14 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 - 该判断依赖驱动把值折叠成布尔这一运行时事实，不读列精度——MySQL 元数据里 `TINYINT(1)` 与真 `BIT(1)` 无法区分（两者都是 jdbc=BIT、typeName=BIT、precision=1）。因此跨库族建表时，MySQL 协议的 `TINYINT(1)` 在非 MySQL 协议目标上一律按整数宽一档建立（PostgreSQL 系 `SMALLINT`、Oracle `NUMBER(5)`），数值 2..127 可以原样落库；只有用户**自建**的 `BOOLEAN` 目标列仍存不了 2 及以上，这是目标列类型本身的限制。ETL 的占位符类型跟随同一套映射，不会出现建了 `SMALLINT` 却按布尔绑定。
 - 其余数据库不存在同样的折叠：PostgreSQL 的 `bool`、`bit(1)`，SQL Server 的 `bit`，H2 的 `BOOLEAN`，Oracle 23c 的 `BOOLEAN`，HANA、达梦、崖山等的布尔类型本身只容纳 0/1，驱动也按布尔返回；它们的 `TINYINT`/`NUMBER(1)` 等数值列不会被驱动转成布尔。MariaDB 驱动（默认 `tinyInt1isBit`）与 Doris（经 Connector/J 访问，方言族为 GENERIC）同样会折叠 `TINYINT(1)`，已按 MySQL 协议一并处理。
 
+### 4.9 自动同步新增表的引擎差异
+
+- **轮询**：每轮发现新表即加入并首次全量，所有数据库可用。
+- **MySQL binlog**：启动 / 重连时检测新表，按表补基线，不动位点。
+- **PostgreSQL 逻辑解码**：每分钟扫描一次源端目录（`test_decoding` 本身解码整库，无 publication 步骤），按表补基线。
+- **Oracle / 达梦 LogMiner**：同样每分钟扫描。Oracle 的新表在加载前会自动执行 `ALTER TABLE "OWNER"."TABLE" ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`——没有这个组，UPDATE 未修改的列不会出现在 redo 里，目标会悄悄漂移；执行失败（账号没有 ALTER 权限、表上有 LONG 列等）时该表本次不会加入，日志给出失败原因与可手工执行的语句，下一次扫描重试。达梦由系统参数覆盖全部表，无需逐表开启。
+- **SQL Server / YStream**：捕获实例（`sp_cdc_enable_table`）与 YStream 服务需要先做表级启用，自动同步暂不代执行，开关对这两种引擎不生效。
+
 ---
 
 ## 5. 大字段与内存

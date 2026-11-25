@@ -380,12 +380,14 @@ public class CdcBaselineService {
                 || !ctx.getConfig().isAutoSyncNewTables()
                 // Engines whose stream already carries any table of the schema: binlog and
                 // PG test_decoding (which decodes the whole database, no publication or
-                // enablement step). SQL Server capture instances, YStream services and
-                // LogMiner supplemental logging stay manual (and are reported by their own
-                // probes); enabling auto-sync there would look successful while the new
-                // table never streams.
+                // enablement step), and LogMiner — whose Oracle side needs per-table ALL
+                // COLUMN LOGGING, added below before the load. SQL Server capture instances
+                // and YStream services stay manual (and are reported by their own probes);
+                // enabling auto-sync there would look successful while the new table never
+                // streams.
                 || (strategy != CaptureStrategy.BINLOG_CDC
-                        && strategy != CaptureStrategy.PG_LOGICAL_CDC)
+                        && strategy != CaptureStrategy.PG_LOGICAL_CDC
+                        && strategy != CaptureStrategy.LOGMINER_CDC)
                 || ctx.getProject().getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             return false;
         }
@@ -408,6 +410,9 @@ public class CdcBaselineService {
             return false;
         }
         try {
+            if (strategy == CaptureStrategy.LOGMINER_CDC) {
+                enableMiningLogging(ctx, added);
+            }
             SyncResult result = engine.runCycle(ctx.toBuilder()
                     .repairTables(new LinkedHashSet<>(added))
                     .cdcRepairRun(true)
@@ -422,7 +427,49 @@ public class CdcBaselineService {
         } catch (RuntimeException | Error e) {
             autoSync.rollback(ctx.getProject(), ctx.getConfig(), added);
             throw e;
+        } catch (SQLException e) {
+            autoSync.rollback(ctx.getProject(), ctx.getConfig(), added);
+            throw new IllegalStateException("auto-sync: cannot prepare the new table(s) "
+                    + added + " for LogMiner: " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Oracle logs only the columns a table's supplemental group names. A table created after
+     * the project started has no such group, and mining it would silently skip the columns an
+     * UPDATE did not change — the target would drift instead of failing. DM covers every table
+     * through its system parameter, so only the Oracle product gets the ALTER; a failure
+     * rolls the addition back and names the exact statement for the DBA.
+     */
+    private void enableMiningLogging(SyncContext ctx, List<String> tables) throws SQLException {
+        try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
+            String product = conn.getMetaData().getDatabaseProductName();
+            if (product != null && product.toUpperCase(java.util.Locale.ROOT).contains("DM")) {
+                return;
+            }
+            String schema = ctx.getSourceSchema();
+            if (schema == null || schema.isBlank()) {
+                throw new SQLException("the source schema is unknown, so ALL COLUMN LOGGING"
+                        + " cannot be added to " + tables + "; run it manually before the next"
+                        + " scan");
+            }
+            for (String table : tables) {
+                String sql = "ALTER TABLE " + quoted(schema) + "." + quoted(table)
+                        + " ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS";
+                try (Statement st = conn.createStatement()) {
+                    st.execute(sql);
+                } catch (SQLException e) {
+                    throw new SQLException("cannot enable ALL COLUMN LOGGING on " + schema + "."
+                            + table + " (" + e.getMessage() + "); run manually: " + sql, e);
+                }
+            }
+            log.info("Auto-sync: enabled ALL COLUMN LOGGING on {} new LogMiner table(s): {}",
+                    tables.size(), tables);
+        }
+    }
+
+    private static String quoted(String identifier) {
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }
 
     public void runBaseline(SyncContext ctx, BooleanSupplier lockRenewer) {

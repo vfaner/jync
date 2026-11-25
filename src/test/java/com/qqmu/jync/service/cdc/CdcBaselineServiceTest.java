@@ -764,9 +764,92 @@ class CdcBaselineServiceTest {
                 redisBaseline, autoSync);
 
         assertThat(lmService.reconcileAutoSync(autoSyncCtx(22L,
-                com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC))).isFalse();
+                com.qqmu.jync.model.CaptureStrategy.SQLSERVER_CDC))).isFalse();
 
         verify(autoSync, never()).reconcile(any(), any(), any(), any());
+    }
+
+    private SyncContext logMinerAutoSyncCtx(String schema, String product,
+                                            Connection conn) throws SQLException {
+        com.qqmu.jync.model.Project project = new com.qqmu.jync.model.Project();
+        project.setId(31L);
+        project.setName("lm-auto-sync");
+        project.setTargetDbId(2L);
+        com.qqmu.jync.dto.SyncConfig cfg = autoSyncConfig(
+                com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC);
+        MetadataReader reader = mock(MetadataReader.class);
+        when(reader.listTableNames(any(Connection.class), any()))
+                .thenReturn(java.util.List.of("orders", "orders2"));
+        java.sql.DatabaseMetaData meta = mock(java.sql.DatabaseMetaData.class);
+        when(meta.getDatabaseProductName()).thenReturn(product);
+        when(conn.getMetaData()).thenReturn(meta);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        return SyncContext.builder().project(project).sourceConfig(source())
+                .config(cfg).sourceReader(reader).sourceSchema(schema).build();
+    }
+
+    @Test
+    void oracleNewTablesGetAllColumnLoggingBeforeTheLoad() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService svc = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any()))
+                .thenReturn(java.util.List.of("orders2"));
+        SyncResult ok = successResult();
+        when(engine.runCycle(any())).thenReturn(ok);
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+
+        svc.reconcileAutoSync(logMinerAutoSyncCtx("OWNER", "Oracle", conn));
+
+        verify(st).execute("ALTER TABLE \"OWNER\".\"orders2\""
+                + " ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS");
+    }
+
+    @Test
+    void dmNeedsNoAlterBecauseTheSystemParameterCoversNewTables() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService svc = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any()))
+                .thenReturn(java.util.List.of("orders2"));
+        SyncResult ok = successResult();
+        when(engine.runCycle(any())).thenReturn(ok);
+        Connection conn = mock(Connection.class);
+
+        svc.reconcileAutoSync(logMinerAutoSyncCtx("SYSDBA", "DM DBMS", conn));
+
+        verify(conn, never()).createStatement();
+    }
+
+    @Test
+    void aFailedSupplementalLoggingAttemptRollsTheAdditionBack() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService svc = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any()))
+                .thenReturn(java.util.List.of("orders2"));
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        when(conn.createStatement()).thenReturn(st);
+        doThrow(new SQLException("ORA-01031: insufficient privileges"))
+                .when(st).execute(any(String.class));
+
+        assertThatThrownBy(() -> svc.reconcileAutoSync(
+                logMinerAutoSyncCtx("OWNER", "Oracle", conn)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ORA-01031");
+        verify(autoSync).rollback(any(), any(), eq(java.util.List.of("orders2")));
+    }
+
+    private SyncResult successResult() {
+        SyncResult result = mock(SyncResult.class);
+        when(result.isSuccess()).thenReturn(true);
+        return result;
     }
 
     @Test

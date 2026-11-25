@@ -85,6 +85,13 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     private final BindingSupplier supplier = new BindingSupplier();
 
     private volatile boolean running = true;
+
+    /**
+     * Last source-catalog scan for tables created after auto-sync was enabled. The redo
+     * stream carries other tables' rows only once mining starts on them, so the catalog is
+     * asked once a minute instead.
+     */
+    private volatile long lastAutoSyncCheckMs;
     private volatile Connection currentSource;
     /** P0-2: second connection to CDB$ROOT when mining via a common user; null otherwise. */
     private volatile Connection currentMining;
@@ -230,6 +237,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                 lastFailure.set(null);
                 purgeFloorScn = null;
                 connectedAtNs.set(0L);
+                // Between mining sessions is the only safe point: the targeted load opens
+                // its own source connection and writes the target.
+                reconcileAutoSync(projectId);
                 // F-12 counts APPLY failures only. drain marks this when a target flush
                 // fails; a source read/stream failure mid-mining leaves it false, so it
                 // retries with backoff (the same rule as "source unreachable"). Counting
@@ -721,6 +731,31 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
      * watermark — data-first at-least-once: a crash between commit and advanceScn replays
      * the same CSCN against idempotent upserts.
      */
+    /**
+     * Adds source tables created after auto-sync was enabled. On Oracle the new table first
+     * gets ALL COLUMN LOGGING (a table without it would mine only changed columns); DM's
+     * system parameter covers every table. Runs between mining sessions; a failure leaves the
+     * existing tables streaming and is retried on the next scan.
+     */
+    private void reconcileAutoSync(long projectId) {
+        if (!ctx.getConfig().isAutoSyncNewTables()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAutoSyncCheckMs < 60_000L) {
+            return;
+        }
+        lastAutoSyncCheckMs = now;
+        try {
+            baselineService.reconcileAutoSync(ctx);
+        } catch (Exception e) {
+            log.warn("Project {}: auto-sync reconciliation failed; existing tables keep"
+                    + " streaming and the new ones are retried on a later scan: {}",
+                    projectId, e.toString());
+            stats.setLastError("auto-sync: " + CdcFailureClassifier.describe(e));
+        }
+    }
+
     private void flushTransaction(long projectId, long csn, CdcTransactionBuffer tx)
             throws Exception {
         try (CdcTargetTransaction target = targetTransactions.open(project, ctx)) {
