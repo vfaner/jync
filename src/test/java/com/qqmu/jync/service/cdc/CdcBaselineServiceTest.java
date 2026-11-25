@@ -26,6 +26,8 @@ import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.service.connection.DataSourceManager;
+import com.qqmu.jync.service.metadata.MetadataReader;
+import com.qqmu.jync.service.sync.AutoSyncService;
 import com.qqmu.jync.service.projection.redis.RedisBaselineService;
 import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
@@ -715,6 +717,56 @@ class CdcBaselineServiceTest {
         verify(positionStore, never()).delete(anyLong());
         verify(taskStore).recordCdcFailure(eq(12L), contains("ORA-01031"));
         verify(positionStore, never()).markBaselineDone(anyLong());
+    }
+
+    private com.qqmu.jync.dto.SyncConfig autoSyncConfig(
+            com.qqmu.jync.model.CaptureStrategy strategy) {
+        com.qqmu.jync.dto.SyncConfig cfg = new com.qqmu.jync.dto.SyncConfig();
+        cfg.setCaptureStrategy(strategy);
+        cfg.setAutoSyncNewTables(true);
+        return cfg;
+    }
+
+    private SyncContext autoSyncCtx(long projectId,
+                                    com.qqmu.jync.model.CaptureStrategy strategy)
+            throws SQLException {
+        com.qqmu.jync.model.Project project = new com.qqmu.jync.model.Project();
+        project.setId(projectId);
+        project.setName("auto-sync-test");
+        project.setTargetDbId(2L);
+        MetadataReader reader = mock(MetadataReader.class);
+        when(reader.listTableNames(any(Connection.class), any())).thenReturn(java.util.List.of());
+        Connection conn = mock(Connection.class);
+        when(dataSourceManager.getConnection(any(DatabaseConfig.class))).thenReturn(conn);
+        return SyncContext.builder().project(project).sourceConfig(source())
+                .config(autoSyncConfig(strategy)).sourceReader(reader).build();
+    }
+
+    @Test
+    void pgLogicalProjectsScanTheCatalogForNewTables() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService pgService = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any())).thenReturn(java.util.List.of());
+
+        assertThat(pgService.reconcileAutoSync(autoSyncCtx(21L,
+                com.qqmu.jync.model.CaptureStrategy.PG_LOGICAL_CDC))).isFalse();
+
+        verify(autoSync).reconcile(any(), any(), any(), any());
+    }
+
+    @Test
+    void enginesWithoutATableEnablementStepStayManual() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService lmService = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+
+        assertThat(lmService.reconcileAutoSync(autoSyncCtx(22L,
+                com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC))).isFalse();
+
+        verify(autoSync, never()).reconcile(any(), any(), any(), any());
     }
 
     @Test

@@ -1,7 +1,9 @@
 package com.qqmu.jync.service.fanout;
 
 import java.util.List;
+import java.util.function.Supplier;
 
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.service.cdc.CdcTargetRepairService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -22,12 +24,20 @@ public final class RepairingEventApplier implements EventApplier {
     private final EventApplier delegate;
     private final CdcTargetRepairService repair;
     private final com.qqmu.jync.service.sync.SyncContext targetCtx;
+    /**
+     * The capture run's live config. Auto-sync adds tables to that instance mid-run, so a
+     * repair must select from it rather than from the copy the target context was built
+     * with; otherwise the new table is reported as still missing after a successful cycle.
+     */
+    private final Supplier<SyncConfig> liveConfig;
 
     public RepairingEventApplier(EventApplier delegate, CdcTargetRepairService repair,
-                                 com.qqmu.jync.service.sync.SyncContext targetCtx) {
+                                 com.qqmu.jync.service.sync.SyncContext targetCtx,
+                                 Supplier<SyncConfig> liveConfig) {
         this.delegate = delegate;
         this.repair = repair;
         this.targetCtx = targetCtx;
+        this.liveConfig = liveConfig;
     }
 
     @Override
@@ -40,7 +50,10 @@ public final class RepairingEventApplier implements EventApplier {
             if (repair == null) {
                 throw e;
             }
-            CdcTargetRepairService.Outcome outcome = repair.repair(targetCtx, e);
+            com.qqmu.jync.service.sync.SyncContext effective = liveConfig == null
+                    ? targetCtx
+                    : targetCtx.toBuilder().config(liveConfig.get()).build();
+            CdcTargetRepairService.Outcome outcome = repair.repair(effective, e);
             if (!outcome.repaired()) {
                 if (outcome.status() != CdcTargetRepairService.Status.NOT_APPLICABLE) {
                     log.warn("Fan-out target repair for project {} did not succeed ({}): {}",

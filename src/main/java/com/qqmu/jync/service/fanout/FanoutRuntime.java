@@ -77,7 +77,8 @@ public final class FanoutRuntime implements AutoCloseable {
     private EventApplier applierFor(FanoutBaselineService.Target target) {
         EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
         return targetRepair == null ? applier
-                : new RepairingEventApplier(applier, targetRepair, target.context());
+                : new RepairingEventApplier(applier, targetRepair, target.context(),
+                        sourceCtx::getConfig);
     }
 
     /** Must run before the baseline so published rows are consumed immediately. */

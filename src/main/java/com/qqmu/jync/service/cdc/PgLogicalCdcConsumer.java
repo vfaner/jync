@@ -133,6 +133,13 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
      * overlap by design, but a sampler that overruns its stop join must not corrupt a read.
      */
     private volatile long lastWalSampleNs;
+
+    /**
+     * Last source-catalog scan for tables created after auto-sync was enabled. The slot
+     * stream carries row changes only, so a new table is invisible until the catalog is
+     * asked; one scan a minute keeps that cost negligible.
+     */
+    private volatile long lastAutoSyncCheckMs;
     private static final long WAL_SAMPLE_INTERVAL_NS = 30_000_000_000L;
     /**
      * Cadence of the baseline-time sampler. `sampleRetainedWal` applies the same 30 s gate
@@ -294,6 +301,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
+                // Between cycles is the only safe point: the targeted load opens its own
+                // source connection and writes the target, so it must not run mid-drain.
+                reconcileAutoSync(projectId);
                 // F-10 counts APPLY failures only. drain marks this when a target flush
                 // fails; a source read/stream failure mid-drain leaves it false, so it
                 // retries with backoff (the same rule as "source unreachable"). Counting
@@ -825,6 +835,32 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                             + " — the slot did not advance");
                 }
             }
+        }
+    }
+
+    /**
+     * Adds source tables created after auto-sync was enabled: the config gains them and each
+     * one gets a per-table baseline at the current LSN, without touching the stream's
+     * position. PG test_decoding already emits rows for every table in the database, so no
+     * engine-side enablement step is needed. Runs between cycles only; a failure leaves the
+     * existing tables streaming and is retried on the next scan.
+     */
+    private void reconcileAutoSync(long projectId) {
+        if (!ctx.getConfig().isAutoSyncNewTables()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAutoSyncCheckMs < 60_000L) {
+            return;
+        }
+        lastAutoSyncCheckMs = now;
+        try {
+            baselineService.reconcileAutoSync(ctx);
+        } catch (Exception e) {
+            log.warn("Project {}: auto-sync reconciliation failed; existing tables keep"
+                    + " streaming and the new ones are retried on a later scan: {}",
+                    projectId, e.toString());
+            stats.setLastError("auto-sync: " + CdcFailureClassifier.describe(e));
         }
     }
 

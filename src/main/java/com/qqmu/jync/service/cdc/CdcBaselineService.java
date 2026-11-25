@@ -374,14 +374,18 @@ public class CdcBaselineService {
      * @return true when at least one table was added and loaded
      */
     public boolean reconcileAutoSync(SyncContext ctx) throws Exception {
+        CaptureStrategy strategy = ctx.getConfig() == null
+                ? CaptureStrategy.POLLING : ctx.getConfig().getCaptureStrategyOrDefault();
         if (autoSync == null || ctx.getConfig() == null
                 || !ctx.getConfig().isAutoSyncNewTables()
-                // First version: only the binlog stream can start tracking a table without
-                // an engine-specific enablement step. SQL Server capture instances, YStream
-                // services and LogMiner prerequisites stay manual (and are reported by their
-                // own probes); enabling auto-sync there would look successful while the new
+                // Engines whose stream already carries any table of the schema: binlog and
+                // PG test_decoding (which decodes the whole database, no publication or
+                // enablement step). SQL Server capture instances, YStream services and
+                // LogMiner supplemental logging stay manual (and are reported by their own
+                // probes); enabling auto-sync there would look successful while the new
                 // table never streams.
-                || ctx.getConfig().getCaptureStrategyOrDefault() != CaptureStrategy.BINLOG_CDC
+                || (strategy != CaptureStrategy.BINLOG_CDC
+                        && strategy != CaptureStrategy.PG_LOGICAL_CDC)
                 || ctx.getProject().getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             return false;
         }

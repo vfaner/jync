@@ -40,7 +40,7 @@ class RepairingEventApplierTest {
                 .when(delegate).applyTransaction(any(), any(), any());
         when(repair.repair(ctx, fault)).thenReturn(
                 outcome(CdcTargetRepairService.Status.REPAIRED));
-        RepairingEventApplier applier = new RepairingEventApplier(delegate, repair, ctx);
+        RepairingEventApplier applier = new RepairingEventApplier(delegate, repair, ctx, null);
 
         applier.applyTransaction("tx", "lsn:1", List.of());
 
@@ -56,7 +56,7 @@ class RepairingEventApplierTest {
                 .applyTransaction(any(), any(), any());
         when(repair.repair(ctx, fault)).thenReturn(
                 outcome(CdcTargetRepairService.Status.NOT_APPLICABLE));
-        RepairingEventApplier applier = new RepairingEventApplier(delegate, repair, ctx);
+        RepairingEventApplier applier = new RepairingEventApplier(delegate, repair, ctx, null);
 
         assertThatThrownBy(() -> applier.applyTransaction("tx", "lsn:1", List.of()))
                 .isSameAs(fault);
@@ -68,7 +68,7 @@ class RepairingEventApplierTest {
         SQLException fault = new SQLException("boom");
         org.mockito.Mockito.doThrow(fault).when(delegate)
                 .applyTransaction(any(), any(), any());
-        RepairingEventApplier applier = new RepairingEventApplier(delegate, null, ctx);
+        RepairingEventApplier applier = new RepairingEventApplier(delegate, null, ctx, null);
 
         assertThatThrownBy(() -> applier.applyTransaction("tx", "lsn:1", List.of()))
                 .isSameAs(fault);
