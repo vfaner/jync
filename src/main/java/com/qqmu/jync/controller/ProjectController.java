@@ -797,6 +797,7 @@ public class ProjectController {
             row.put("targetId", targetId);
             row.put("name", databaseConfigService.findById(targetId)
                     .map(DatabaseConfig::getName).orElse("#" + targetId));
+            row.put("ageSeconds", null);
             fanoutPositionStore.find(projectId, targetId).ifPresentOrElse(position -> {
                 row.put("file", position.getBinlogFile());
                 row.put("pos", position.getBinlogPos());

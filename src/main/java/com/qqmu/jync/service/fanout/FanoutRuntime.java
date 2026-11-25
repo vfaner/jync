@@ -176,6 +176,9 @@ public final class FanoutRuntime implements AutoCloseable {
     }
 
     private void onTargetCommit(Long targetDbId, String position) {
+        // A successful transaction proves the target is healthy again; a later outage gets
+        // a fresh restart budget instead of inheriting an old count.
+        restartAttempts.remove(targetDbId);
         if (position != null && position.equals(baselineMarker)) {
             barrierAcked.add(targetDbId);
             return;
