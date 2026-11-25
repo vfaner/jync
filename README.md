@@ -17,7 +17,7 @@
 
 Jync 是面向**信创迁移与异构数据集成**的开源同步工具：单个 jar 启动，浏览器完成建连接、选表、配调度与启动；在 **35 种数据库（另支持自定义 JDBC 类型）** 之间持续同步**结构与数据**，另有三条不走 JDBC 的专属迁移链路（Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES）。
 
-不需要 Kafka、Flink、ZooKeeper，也不需要编写作业代码；Apache-2.0 协议，可完全私有化部署、内网离线运行。当前 **v2.4.6** 集中修复轮询全量与日志 CDC 的稳定性问题，并让同步进度卡实时更新。
+不需要 Kafka、Flink、ZooKeeper，也不需要编写作业代码；Apache-2.0 协议，可完全私有化部署、内网离线运行。当前 **v2.4.6** 让 AI 运维助手可查询逐表状态并通过确认卡调整任务参数，同时增强大表全量、行数核对与 CDC 基线续跑。
 
 ## 核心亮点
 

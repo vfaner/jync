@@ -22,9 +22,9 @@ start one jar, open the browser, and build continuous **schema + data** synchron
 Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB, and MongoDB → KingbaseES.
 
 No Kafka, Flink or ZooKeeper, and no job code to write. Apache-2.0 licensed and fully
-self-hostable, including air-gapped networks. **v2.4.6** fixes polling and CDC stability —
-case-insensitive resume, no duplicate rows from keyless windows, truthful SQL Server lag — and keeps
-the table-progress card live without a reload.
+self-hostable, including air-gapped networks. **v2.4.6** lets the AI operations assistant inspect
+per-table state and change task parameters through confirmation cards, and strengthens large-table
+full loads, row-count checks and CDC baseline resume.
 
 ## Highlights
 
