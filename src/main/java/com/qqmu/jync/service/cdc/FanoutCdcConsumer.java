@@ -154,6 +154,13 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             });
             try {
                 current.connect(properties.getCdc().getConnectTimeoutMs());
+                // connect(timeout) only waits for the handshake; the stream lives in the
+                // client's own thread. Keep this consumer parked here until a disconnect or
+                // stop request, exactly like the single-target consumer's awaitStreamEnd.
+                while (running && current.isConnected()
+                        && !Thread.currentThread().isInterrupted()) {
+                    Thread.sleep(200L);
+                }
             } catch (Exception e) {
                 log.warn("Fan-out capture for project {} disconnected: {}", projectId,
                         e.toString());
