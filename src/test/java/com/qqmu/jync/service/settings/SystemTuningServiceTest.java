@@ -58,7 +58,7 @@ class SystemTuningServiceTest {
 
     @Test
     void baseValuesComeFromApplicationYmlAndAreNotOverriddenByDefault() {
-        assertThat(tuning.items()).hasSize(9)
+        assertThat(tuning.items()).hasSize(10)
                 .anySatisfy(item -> {
                     assertThat(item.key()).isEqualTo("sync.batch-size");
                     assertThat(item.value()).isEqualTo("500");

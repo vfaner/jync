@@ -434,9 +434,13 @@ public class CdcBaselineService {
                     .repairTables(new LinkedHashSet<>(added))
                     .cdcRepairRun(true)
                     .build());
-            if (!result.isSuccess()) {
-                throw new IllegalStateException("auto-sync baseline did not succeed for "
-                        + added + ": " + result.getErrors());
+            if (!result.isSuccess() || result.isDeferred()) {
+                // A deferred round read nothing (the pool was busy). The tables are already
+                // in the selection; treating this as success would leave them permanently
+                // "known" without any history on the target.
+                throw new IllegalStateException("auto-sync baseline did not run for "
+                        + added + ": " + (result.isDeferred() ? "deferred"
+                                : String.valueOf(result.getErrors())));
             }
             log.info("Project '{}': auto-sync baseline loaded {} new table(s): {}",
                     ctx.projectId(), added.size(), added);
@@ -706,6 +710,12 @@ public class CdcBaselineService {
             return fanout.baseline();
         } catch (RuntimeException | Error e) {
             throw e;
+        } catch (InterruptedException e) {
+            // ensureStopped interrupts a baseline parked on the target barrier. Restoring
+            // the flag is what tells runBaseline this was a stop request, not a failure —
+            // wrapping it without the flag would park the project in ERROR.
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Fan-out baseline stopped by request", e);
         } catch (Exception e) {
             throw new IllegalStateException("Fan-out baseline failed: " + e.getMessage(), e);
         }

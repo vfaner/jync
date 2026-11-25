@@ -668,6 +668,28 @@ public class ProjectService {
     }
 
     /**
+     * Saves the project and applies its fan-out target list in one transaction. The
+     * separate calls the controller used to make meant a refused fan-out configuration
+     * (a source with no log engine, a running project whose targets changed) committed the
+     * project edit anyway — for a create that left an orphan the user never saw saved.
+     */
+    @Transactional
+    public Project saveWithFanout(Project project, java.util.List<Long> extraTargets,
+                                  AccessGuard actor) {
+        Project saved = save(project, actor);
+        configureFanout(saved.getId(), extraTargets);
+        return saved;
+    }
+
+    @Transactional
+    public Project saveCloneWithFanout(Project clone, Long sourceProjectId,
+                                       java.util.List<Long> extraTargets, AccessGuard actor) {
+        Project saved = saveAsClone(clone, sourceProjectId, actor);
+        configureFanout(saved.getId(), extraTargets);
+        return saved;
+    }
+
+    /**
      * Creates a new project carrying the stored sync settings of {@code sourceProjectId}.
      *
      * <p>One save in one transaction: the row and its settings commit together, so a failure

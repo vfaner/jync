@@ -46,6 +46,8 @@ import com.qqmu.jync.service.sync.DataSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncContextFactory;
+import com.qqmu.jync.service.fanout.FanoutRuntime;
+import com.qqmu.jync.service.fanout.FanoutRuntimeRegistry;
 import com.qqmu.jync.service.fanout.FanoutTargetContextFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -194,6 +196,67 @@ class CdcDdlTaskServiceTest {
         }
         assertThat(log.getErrorDetail()).isNull();
         verify(changeLogRepository).save(log);
+    }
+
+    @Test
+    void droppingAColumnAnExtraTargetNeverHadIsSuccessThere() throws Exception {
+        ChangeLog log = ChangeLog.of(3L, ObjectType.PROJECT, "source_db", ChangeType.ERROR,
+                SyncStateWriter.SKIPPED_DDL_PREFIX + "ALTER TABLE t DROP COLUMN c");
+        log.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+        log.setDdlExecuted(false);
+        log.setTargetDdlSql("ALTER TABLE t DROP COLUMN c");
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig primary = target();
+        primary.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(primary));
+        DatabaseConfig extra = new DatabaseConfig();
+        extra.setId(13L);
+        extra.setName("extra-db");
+        extra.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(13L)).thenReturn(Optional.of(extra));
+        SyncConfig cfg = new SyncConfig();
+        cfg.setFanoutTargetDbIds(new java.util.ArrayList<>(List.of(13L)));
+        when(contextFactory.parseConfig(any(Project.class))).thenReturn(cfg);
+        Connection primaryConn = connectionExecuting(true);
+        Connection extraConn = mock(Connection.class);
+        Statement extraStatement = mock(Statement.class);
+        when(extraConn.createStatement()).thenReturn(extraStatement);
+        when(extraStatement.execute(anyString())).thenThrow(new SQLException(
+                "Can't DROP 'c'; check that column/key exists", "HY000", 1091));
+        when(dataSourceManager.getConnection(primary)).thenReturn(primaryConn);
+        when(dataSourceManager.getConnection(extra)).thenReturn(extraConn);
+        SyncContext extraCtx = mock(SyncContext.class);
+        when(extraCtx.getTargetConfig()).thenReturn(extra);
+        FanoutTargetContextFactory factory = mock(FanoutTargetContextFactory.class);
+        when(factory.build(any(Project.class), eq(13L), any(), any())).thenReturn(extraCtx);
+        ReflectionTestUtils.setField(service, "fanoutTargetContexts", factory);
+
+        service.executeDdl(9L, "ALTER TABLE t DROP COLUMN c", AccessGuard.system());
+
+        assertThat(log.getErrorDetail()).isNull();
+        assertThat(log.getDdlExecuted()).isTrue();
+    }
+
+    @Test
+    void aSuccessfulDdlDropsTheFanoutBindingCache() throws Exception {
+        ChangeLog log = pendingLog();
+        when(changeLogRepository.findById(9L)).thenReturn(Optional.of(log));
+        when(projectRepository.findById(3L)).thenReturn(Optional.of(project()));
+        DatabaseConfig primary = target();
+        primary.setType(DatabaseType.H2);
+        when(databaseConfigRepository.findById(11L)).thenReturn(Optional.of(primary));
+        when(contextFactory.parseConfig(any(Project.class))).thenReturn(new SyncConfig());
+        Connection primaryConn = connectionExecuting(true);
+        when(dataSourceManager.getConnection(primary)).thenReturn(primaryConn);
+        FanoutRuntime runtime = mock(FanoutRuntime.class);
+        FanoutRuntimeRegistry registry = mock(FanoutRuntimeRegistry.class);
+        when(registry.get(3L)).thenReturn(runtime);
+        ReflectionTestUtils.setField(service, "fanoutRuntimes", registry);
+
+        service.executeDdl(9L, "ALTER TABLE t ADD COLUMN c INT", AccessGuard.system());
+
+        verify(runtime).invalidateBindings();
     }
 
     @Test

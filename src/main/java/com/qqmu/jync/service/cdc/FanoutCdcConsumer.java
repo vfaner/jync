@@ -12,6 +12,7 @@ import com.qqmu.jync.service.fanout.FanoutRuntime;
 import com.qqmu.jync.service.fanout.FanoutRuntimeFactory;
 import com.qqmu.jync.service.sync.AutoSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
+import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
@@ -36,7 +37,9 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
     private final CdcRuntimeStats stats;
     private final SyncProperties properties;
     private final FanoutRuntimeFactory runtimes;
+    private final com.qqmu.jync.service.fanout.FanoutRuntimeRegistry registry;
     private final AutoSyncService autoSync;
+    private final SyncStateWriter stateWriter;
 
     private volatile boolean running = true;
     private volatile boolean rebaselineRequested;
@@ -47,7 +50,9 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                              BinlogClientFactory clientFactory, CdcPositionStore positionStore,
                              CdcBaselineService baselineService, SyncTaskStore taskStore,
                              CdcRuntimeStats stats, SyncProperties properties,
-                             FanoutRuntimeFactory runtimes, AutoSyncService autoSync) {
+                             FanoutRuntimeFactory runtimes,
+                             com.qqmu.jync.service.fanout.FanoutRuntimeRegistry registry,
+                             AutoSyncService autoSync, SyncStateWriter stateWriter) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -58,7 +63,9 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
         this.stats = stats;
         this.properties = properties;
         this.runtimes = runtimes;
+        this.registry = registry;
         this.autoSync = autoSync;
+        this.stateWriter = stateWriter;
     }
 
     @Override
@@ -69,6 +76,10 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
         try {
             runtime = runtimes.create(project, ctx, "fanout-" + projectId, lock::renew, stats);
             runtime.startWorkers();
+            // Registered like the engine-backed fan-out consumers: an administrator DDL
+            // reaches this runtime through the registry and drops the workers' cached
+            // column layouts.
+            registry.register(projectId, runtime);
             while (running && !Thread.currentThread().isInterrupted()) {
                 reconcileAutoSync(projectId);
                 ensureBaseline(runtime, projectId);
@@ -97,6 +108,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 taskStore.recordCdcFailure(projectId, detail);
             }
         } finally {
+            registry.remove(projectId, runtime);
             if (runtime != null) {
                 runtime.close();
             }
@@ -188,7 +200,9 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                     current::getGtidSet, sink, lobSpillStore.get(properties),
                     properties.getLob().getCdcSpillThresholdBytes(),
                     CdcTransactionBudget.from(properties),
-                    (db, sql, file, position) -> { }, null,
+                    (db, sql, file, position) -> stateWriter.recordSkippedDdl(
+                            projectId, db, sql, file, position),
+                    null,
                     (db, table, sql) -> {
                         if (ctx.getConfig().isAutoSyncNewTables()) {
                             rebaselineRequested = true;

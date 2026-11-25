@@ -423,6 +423,13 @@ public class SyncProperties {
 
         /** Redis URI for the REDIS transport; ignored for SPOOL. */
         private String redisUri = "redis://127.0.0.1:6379/0";
+
+        /**
+         * Total targets allowed on one fan-out project (primary included), 2..100.
+         * Administrator-adjustable through the system-tuning knobs when a deployment
+         * genuinely needs more than the default twenty.
+         */
+        private int maxTargets = 20;
     }
 
     /** MySQL binlog CDC settings (v1.5.0, task book 阶段 B). Bound from {@code sync.cdc.*}. */

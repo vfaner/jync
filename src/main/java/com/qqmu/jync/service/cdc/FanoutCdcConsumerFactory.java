@@ -7,6 +7,7 @@ import com.qqmu.jync.model.Project;
 import com.qqmu.jync.service.fanout.FanoutRuntimeFactory;
 import com.qqmu.jync.service.sync.AutoSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
+import com.qqmu.jync.service.sync.SyncStateWriter;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
@@ -22,6 +23,7 @@ public class FanoutCdcConsumerFactory {
     private final FanoutRuntimeFactory runtimes;
     private final com.qqmu.jync.service.fanout.FanoutRuntimeRegistry registry;
     private final AutoSyncService autoSync;
+    private final SyncStateWriter stateWriter;
 
     public FanoutCdcConsumerFactory(BinlogClientFactory clientFactory,
                                     CdcPositionStore positionStore,
@@ -29,7 +31,7 @@ public class FanoutCdcConsumerFactory {
                                     SyncTaskStore taskStore, SyncProperties properties,
                                     FanoutRuntimeFactory runtimes,
                                     com.qqmu.jync.service.fanout.FanoutRuntimeRegistry registry,
-                                    AutoSyncService autoSync) {
+                                    AutoSyncService autoSync, SyncStateWriter stateWriter) {
         this.clientFactory = clientFactory;
         this.positionStore = positionStore;
         this.baselineService = baselineService;
@@ -38,12 +40,14 @@ public class FanoutCdcConsumerFactory {
         this.runtimes = runtimes;
         this.registry = registry;
         this.autoSync = autoSync;
+        this.stateWriter = stateWriter;
     }
 
     public ManagedCdcConsumer create(Project project, SyncLockService.LockHandle lock,
                                      SyncContext ctx, CdcRuntimeStats stats) {
         return new FanoutCdcConsumer(project, lock, ctx, clientFactory, positionStore,
-                baselineService, taskStore, stats, properties, runtimes, autoSync);
+                baselineService, taskStore, stats, properties, runtimes, registry, autoSync,
+                stateWriter);
     }
 
     /**

@@ -179,6 +179,7 @@ public class ProjectController {
             model.addAttribute("copyFrom", source.getId());
         }
         model.addAttribute("project", project);
+        model.addAttribute("fanoutMaxTargets", properties.getFanout().getMaxTargets());
         model.addAttribute("fanoutSelected", java.util.List.of());
         addDatabaseOptions(model, project);
         addRedisOptions(model, project);
@@ -189,7 +190,7 @@ public class ProjectController {
         if (ids == null || ids.isEmpty()) {
             return;
         }
-        if (ids.size() > 8) {
+        if (ids.size() > properties.getFanout().getMaxTargets() - 1) {
             throw new IllegalArgumentException("error.project.fanout.tooMany");
         }
         Set<Long> seen = new java.util.HashSet<>();
@@ -203,6 +204,17 @@ public class ProjectController {
                     || java.util.Objects.equals(targetId, project.getTargetDbId())) {
                 throw new IllegalArgumentException("error.project.fanout.invalid");
             }
+        }
+        // Fail BEFORE anything is saved: configureFanout runs after the save and refuses a
+        // source with no log engine, which used to leave a committed, half-configured
+        // project behind while the browser showed only an error.
+        DatabaseConfig source = project.getSourceDbId() == null ? null
+                : databaseConfigService.findById(project.getSourceDbId()).orElse(null);
+        if (project.getSourceDbId() != null && source != null
+                && com.qqmu.jync.service.CaptureStrategyParser
+                        .supportedFor(source.getType(), source.resolvedFamily()).stream()
+                        .noneMatch(CaptureStrategy::isLogCdc)) {
+            throw new IllegalArgumentException("error.project.fanout.requires.binlog");
         }
     }
 
@@ -250,6 +262,7 @@ public class ProjectController {
             // verdict up front so the user does not fill in a whole edit that cannot save.
             model.addAttribute("topologyLocked", projectService.isRunning(project));
             SyncConfig editConfig = projectService.loadConfig(project);
+            model.addAttribute("fanoutMaxTargets", properties.getFanout().getMaxTargets());
             model.addAttribute("fanoutSelected",
                     editConfig == null || editConfig.getFanoutTargetDbIds() == null
                             ? java.util.List.of()
@@ -335,9 +348,10 @@ public class ProjectController {
             // The clone is created and its settings copied in one transaction; a failure
             // leaves neither an empty project nor a half-initialized one behind.
             Project saved = copyFrom != null
-                    ? projectService.saveAsClone(project, copyFrom, AccessGuard.current())
-                    : projectService.save(project, AccessGuard.current());
-            projectService.configureFanout(saved.getId(), fanoutTargetIds);
+                    ? projectService.saveCloneWithFanout(project, copyFrom, fanoutTargetIds,
+                            AccessGuard.current())
+                    : projectService.saveWithFanout(project, fanoutTargetIds,
+                            AccessGuard.current());
             flash.addFlashAttribute("message", "msg.project.saved");
             return "redirect:/projects/" + saved.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -1088,7 +1102,7 @@ public class ProjectController {
                     // One worker, one connection and one queue entry set per target; 19
                     // extras (20 in total) is the documented ceiling rather than a
                     // technical limit of the fan-out design.
-                    if (clean.size() > 19) {
+                    if (clean.size() > properties.getFanout().getMaxTargets() - 1) {
                         return ConfigSaveOutcome.error("error.project.fanout.tooMany");
                     }
                     if (!clean.isEmpty()) {
@@ -1152,10 +1166,19 @@ public class ProjectController {
                                     "error.project.fanout.redisTarget.cluster");
                         }
                     }
+                    // A project created before the picker existed stores null, which the
+                    // page renders as SPOOL. Comparing null with the submitted "SPOOL" made
+                    // every ordinary save look like a transport switch — refusing it while
+                    // running and dropping the anchor when stopped.
+                    String existingTransport = config.getFanoutTransport() == null
+                            || config.getFanoutTransport().isBlank()
+                                    ? "SPOOL" : config.getFanoutTransport();
+                    Long existingRedisTarget = "REDIS".equals(existingTransport)
+                            ? config.getFanoutRedisTargetId() : null;
                     boolean transportChanged = !java.util.Objects.equals(
-                            config.getFanoutTransport(), cleanTransport)
+                            existingTransport, cleanTransport)
                             || !java.util.Objects.equals(
-                                    config.getFanoutRedisTargetId(), requestedRedisTarget);
+                                    existingRedisTarget, requestedRedisTarget);
                     if (transportChanged && config.getFanoutTargetDbIds() != null
                             && !config.getFanoutTargetDbIds().isEmpty()) {
                         if (projectService.isRunning(project)) {

@@ -65,11 +65,9 @@ public class FanoutRuntimeFactory {
         if (project.getTargetDbId() != null) {
             targetIds.add(project.getTargetDbId());
         }
-        if (project.getSyncConfig() != null) {
-            List<Long> extras = sourceCtx.getConfig().getFanoutTargetDbIds();
-            if (extras != null) {
-                targetIds.addAll(extras);
-            }
+        if (sourceCtx.getConfig() != null
+                && sourceCtx.getConfig().getFanoutTargetDbIds() != null) {
+            targetIds.addAll(sourceCtx.getConfig().getFanoutTargetDbIds());
         }
         List<FanoutBaselineService.Target> targets = new ArrayList<>();
         for (Long targetId : targetIds) {

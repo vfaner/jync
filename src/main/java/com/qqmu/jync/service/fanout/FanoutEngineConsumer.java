@@ -66,7 +66,7 @@ public final class FanoutEngineConsumer implements ManagedCdcConsumer {
                 taskStore.recordCdcFailure(projectId, detail);
             }
         } finally {
-            registry.remove(projectId);
+            registry.remove(projectId, runtime);
             if (runtime != null) {
                 runtime.close();
             }

@@ -95,6 +95,35 @@ public final class SpoolingEventTransport implements EventTransport {
             long ack = readOffset();
             this.ackPosition = Math.min(ack, spool.length());
             this.readPosition = ackPosition;
+            truncateIncompleteTail();
+        }
+
+        /**
+         * A crash between the 4-byte length and the payload leaves a truncated record at the
+         * end of the file. Reading it again after restart fails forever (the supervisor
+         * restarts the worker onto the same bytes), so the tail is cut back to the last
+         * complete record when the spool is opened.
+         */
+        private void truncateIncompleteTail() throws IOException {
+            long length = spool.length();
+            long pos = ackPosition;
+            while (pos + 4L <= length) {
+                spool.seek(pos);
+                int size = spool.readInt();
+                if (size <= 0 || size > 64 * 1024 * 1024) {
+                    break;
+                }
+                long end = pos + 4L + size;
+                if (end > length) {
+                    break;
+                }
+                pos = end;
+            }
+            if (pos < length) {
+                log.warn("Truncating {} byte(s) of an incomplete fan-out record at the tail"
+                        + " of {}", length - pos, logPath);
+                spool.setLength(pos);
+            }
         }
 
         private long readOffset() {
@@ -124,6 +153,9 @@ public final class SpoolingEventTransport implements EventTransport {
                 spool.seek(size);
                 spool.writeInt(bytes.length);
                 spool.write(bytes);
+                // Wake a poller parked on the end of the file; without this every target
+                // worker would busy-spin at EOF instead of sleeping between records.
+                notifyAll();
             } catch (IOException e) {
                 throw new IllegalStateException("could not append to the fan-out spool for '"
                         + group, e);
@@ -146,18 +178,36 @@ public final class SpoolingEventTransport implements EventTransport {
                 try {
                     length = spool.readInt();
                 } catch (java.io.EOFException eof) {
+                    waitForData(timeout);
                     return null;
                 }
                 if (length <= 0 || length > 64 * 1024 * 1024) {
                     throw new IOException("invalid fan-out record length " + length);
                 }
                 byte[] bytes = new byte[length];
-                spool.readFully(bytes);
+                long recordStart = readPosition;
+                try {
+                    spool.readFully(bytes);
+                } catch (java.io.EOFException eof) {
+                    // The writer has not finished this record yet (or died mid-write and the
+                    // tail was not cut at open). Do not consume it: poll again later.
+                    spool.seek(recordStart);
+                    waitForData(timeout);
+                    return null;
+                }
                 readPosition = spool.getFilePointer();
                 return EventCodec.deserialize(bytes);
             } catch (IOException e) {
                 throw new IllegalStateException("could not read the fan-out spool for '"
                         + group, e);
+            }
+        }
+
+        /** Park on the subscription until an append notifies or the poll timeout elapses. */
+        private void waitForData(Duration timeout) throws InterruptedException {
+            long millis = timeout == null ? 0L : timeout.toMillis();
+            if (millis > 0L) {
+                wait(millis);
             }
         }
 

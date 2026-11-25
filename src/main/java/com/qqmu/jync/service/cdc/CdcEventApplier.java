@@ -199,7 +199,12 @@ public final class CdcEventApplier {
         if (ctx.getTargetType() == null) {
             return columns;
         }
-        String cacheKey = ctx.getTargetSchema() + "|" + binding.getTargetTable()
+        // The connection id is part of the key: every fan-out target has its own
+        // SyncContext (same schema/type) but a different target table layout, and one
+        // target's missing column must never be projected away on a healthy one.
+        String cacheKey = (ctx.getTargetConfig() == null ? ""
+                        : String.valueOf(ctx.getTargetConfig().getId()))
+                + "|" + ctx.getTargetSchema() + "|" + binding.getTargetTable()
                 + "|" + ctx.getTargetType();
         Map<String, String> targetNames = stats.cachedTargetColumns(cacheKey);
         if (targetNames == null) {

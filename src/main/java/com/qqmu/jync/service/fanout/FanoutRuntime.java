@@ -43,6 +43,15 @@ public final class FanoutRuntime implements AutoCloseable {
     private final com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair;
     private final CdcRuntimeStats stats;
     private final Map<Long, Integer> restartAttempts = new ConcurrentHashMap<>();
+    /**
+     * Last acknowledged position per target, written to the metadata store at most once a
+     * second. The position is display/ops state — a restart resumes from the transport's
+     * acknowledged offset, not from this column — so twenty targets no longer mean twenty
+     * H2 writes per source transaction.
+     */
+    private final Map<Long, String> pendingPositions = new ConcurrentHashMap<>();
+    private final Map<Long, Long> lastPositionWriteAt = new ConcurrentHashMap<>();
+    private static final long POSITION_WRITE_INTERVAL_MS = 1_000L;
     private final java.util.Set<Long> barrierAcked = ConcurrentHashMap.newKeySet();
     private volatile String baselineMarker;
     private ScheduledExecutorService supervisor;
@@ -168,7 +177,9 @@ public final class FanoutRuntime implements AutoCloseable {
             wanted.add(target.targetDbId());
         }
         long deadline = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(5);
-        while (!barrierAcked.containsAll(wanted) && System.currentTimeMillis() < deadline) {
+        while (!barrierAcked.containsAll(wanted)
+                && System.currentTimeMillis() < deadline
+                && !Thread.currentThread().isInterrupted()) {
             Thread.sleep(50L);
         }
         if (!barrierAcked.containsAll(wanted)) {
@@ -192,6 +203,16 @@ public final class FanoutRuntime implements AutoCloseable {
         return transport;
     }
 
+    /**
+     * Drops every cached source binding. An administrator-executed DDL changes the target
+     * columns the capture projects; the capture-side supplier has its own copy of this
+     * cache, and the workers would otherwise keep writing the pre-DDL column list until the
+     * project restarts.
+     */
+    public void invalidateBindings() {
+        bindings.invalidateAll();
+    }
+
     @Override
     public void close() {
         if (supervisor != null) {
@@ -199,6 +220,11 @@ public final class FanoutRuntime implements AutoCloseable {
         }
         for (FanoutTargetWorker worker : workers) {
             worker.close();
+        }
+        // The throttle may still hold the last transaction's position: write it before the
+        // runtime (and its metadata connection) goes away.
+        for (Long targetDbId : pendingPositions.keySet()) {
+            persistTargetPosition(targetDbId);
         }
         try {
             transport.close();
@@ -226,6 +252,27 @@ public final class FanoutRuntime implements AutoCloseable {
             barrierAcked.add(targetDbId);
             return;
         }
+        rememberTargetPosition(targetDbId, position);
+    }
+
+    private void rememberTargetPosition(Long targetDbId, String position) {
+        if (position == null) {
+            return;
+        }
+        pendingPositions.put(targetDbId, position);
+        long now = System.currentTimeMillis();
+        Long last = lastPositionWriteAt.get(targetDbId);
+        if (last == null || now - last >= POSITION_WRITE_INTERVAL_MS) {
+            persistTargetPosition(targetDbId);
+        }
+    }
+
+    private void persistTargetPosition(Long targetDbId) {
+        String position = pendingPositions.get(targetDbId);
+        if (position == null) {
+            return;
+        }
+        lastPositionWriteAt.put(targetDbId, System.currentTimeMillis());
         recordTargetPosition(positionStore, sourceCtx.projectId(), targetDbId, position);
     }
 

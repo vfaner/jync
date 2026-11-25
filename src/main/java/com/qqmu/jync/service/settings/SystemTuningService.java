@@ -53,7 +53,13 @@ public class SystemTuningService {
                 1_048_576L, 1_073_741_824L),
         ADAPTIVE_CHUNK_SIZE("sync.adaptive-chunk-size", Kind.BOOLEAN, 0, 1),
         MIN_ADAPTIVE_CHUNK_SIZE("sync.min-adaptive-chunk-size", Kind.INT, 100, 100_000),
-        MAX_RETRIES("sync.max-retries", Kind.INT, 0, 10);
+        MAX_RETRIES("sync.max-retries", Kind.INT, 0, 10),
+        /**
+         * Fan-out targets per project, primary included. A deployment with a genuine
+         * one-to-many topology (1 → 25) can raise it without a code change; each target
+         * costs one worker, one target pool seat and one queue/consumer group.
+         */
+        FANOUT_MAX_TARGETS("sync.fanout.max-targets", Kind.INT, 2, 100);
 
         private final String property;
         private final Kind kind;
@@ -109,6 +115,8 @@ public class SystemTuningService {
                 case MIN_ADAPTIVE_CHUNK_SIZE ->
                         String.valueOf(properties.getMinAdaptiveChunkSize());
                 case MAX_RETRIES -> String.valueOf(properties.getMaxRetries());
+                case FANOUT_MAX_TARGETS ->
+                        String.valueOf(properties.getFanout().getMaxTargets());
             };
         }
 
@@ -127,6 +135,8 @@ public class SystemTuningService {
                 case MIN_ADAPTIVE_CHUNK_SIZE ->
                         properties.setMinAdaptiveChunkSize(Integer.parseInt(value));
                 case MAX_RETRIES -> properties.setMaxRetries(Integer.parseInt(value));
+                case FANOUT_MAX_TARGETS -> properties.getFanout()
+                        .setMaxTargets(Integer.parseInt(value));
             }
         }
 

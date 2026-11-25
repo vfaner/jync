@@ -1,9 +1,15 @@
 package com.qqmu.jync.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.util.List;
@@ -349,6 +355,43 @@ class ProjectFormViewTest {
         assertThat(page).contains("data-role=\"target-menu\"");
         assertThat(page).doesNotContain("data-role=\"target-add\"");
         assertThat(page).contains("data-label-empty=");
+    }
+
+    @Test
+    void tooManyExtraTargetsAreRefusedBeforeAnythingIsSaved() throws Exception {
+        String[] extras = new String[20];
+        for (int i = 0; i < extras.length; i++) {
+            extras[i] = String.valueOf(3 + i);
+        }
+        org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request =
+                post("/projects/save").with(asAdmin()).with(csrf())
+                        .param("name", "fan")
+                        .param("sourceDbId", "1")
+                        .param("targetKind", "JDBC")
+                        .param("targetDbId", "2")
+                        .param("fanoutTargetIds", extras);
+
+        mvc.perform(request).andExpect(status().is3xxRedirection());
+
+        verify(projectService, never()).saveWithFanout(any(), anyList(), any());
+    }
+
+    @Test
+    void aSourceWithoutALogEngineIsRefusedBeforeAnythingIsSaved() throws Exception {
+        when(databaseConfigService.findById(1L)).thenReturn(Optional.of(
+                config(1L, "mongo", ConnectionRole.SOURCE, DatabaseType.MONGODB)));
+        when(databaseConfigService.findById(3L)).thenReturn(Optional.of(
+                config(3L, "tgt", ConnectionRole.TARGET)));
+
+        mvc.perform(post("/projects/save").with(asAdmin()).with(csrf())
+                        .param("name", "fan")
+                        .param("sourceDbId", "1")
+                        .param("targetKind", "JDBC")
+                        .param("targetDbId", "2")
+                        .param("fanoutTargetIds", "3"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(projectService, never()).saveWithFanout(any(), anyList(), any());
     }
 
     private static RedisTarget redisTarget(long id, String name) {

@@ -114,7 +114,14 @@ public final class RedisStreamEventTransport implements EventTransport {
          * pending forever and the PEL grew without bound.
          */
         private final List<String> deliveredIds = new java.util.ArrayList<>();
-        private boolean rewindPending;
+        /**
+         * Pending-entry drain. A restart starts on the PEL (the previous process may have
+         * read rows without committing them); {@code pendingCursor} advances past every
+         * batch so a transaction larger than READ_BATCH entries is not re-read from the
+         * same first entries forever.
+         */
+        private boolean rewindPending = true;
+        private String pendingCursor = "0";
         private volatile boolean closed;
 
         Sub(String group) {
@@ -176,9 +183,16 @@ public final class RedisStreamEventTransport implements EventTransport {
                 List<StreamMessage<String, byte[]>> pending = commands.xreadgroup(
                         Consumer.from(group, consumerName),
                         XReadArgs.Builder.count(READ_BATCH),
-                        XReadArgs.StreamOffset.from(streamKey, "0"));
+                        XReadArgs.StreamOffset.from(streamKey, pendingCursor));
                 if (pending != null && !pending.isEmpty()) {
                     buffer.addAll(pending);
+                    pendingCursor = pending.get(pending.size() - 1).getId();
+                    if (pending.size() < READ_BATCH) {
+                        // This was the tail of the PEL; switch to new entries after it is
+                        // consumed. An exactly-full batch is followed by one more read from
+                        // the advanced cursor, which then returns the tail (or nothing).
+                        rewindPending = false;
+                    }
                     return;
                 }
                 rewindPending = false;
@@ -216,6 +230,7 @@ public final class RedisStreamEventTransport implements EventTransport {
         public void rewindToAck() {
             buffer.clear();
             deliveredIds.clear();
+            pendingCursor = "0";
             rewindPending = true;
         }
 

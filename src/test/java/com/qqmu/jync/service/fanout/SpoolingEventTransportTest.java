@@ -69,6 +69,45 @@ class SpoolingEventTransportTest {
     }
 
     @Test
+    void anIdlePollParksInsteadOfSpinning(@TempDir Path dir) throws Exception {
+        SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000, mapper);
+        EventTransport.Subscription sub = transport.subscribe("idle");
+
+        long started = System.nanoTime();
+        assertThat(sub.poll(Duration.ofMillis(120))).isNull();
+        long elapsedMs = (System.nanoTime() - started) / 1_000_000L;
+
+        // Without the wait every worker looped seek+readInt at EOF and burned a core.
+        assertThat(elapsedMs).isGreaterThanOrEqualTo(90L);
+        transport.close();
+    }
+
+    @Test
+    void aCrashMidRecordDoesNotBrickTheTarget(@TempDir Path dir) throws Exception {
+        SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000, mapper);
+        EventTransport.Subscription sub = transport.subscribe("torn");
+        transport.publish(row("tx-1", 1L));
+        transport.close();
+
+        // The writer died after the 4-byte length but before the payload.
+        try (java.io.RandomAccessFile tail = new java.io.RandomAccessFile(
+                dir.resolve("torn.log").toFile(), "rw")) {
+            tail.seek(tail.length());
+            tail.writeInt(64);
+        }
+
+        SpoolingEventTransport reopened = new SpoolingEventTransport(dir, 1_000_000, mapper);
+        EventTransport.Subscription resumed = reopened.subscribe("torn");
+
+        ChangeEvent first = resumed.poll(Duration.ofSeconds(1));
+        assertThat(first).isNotNull();
+        assertThat(first.transactionId()).isEqualTo("tx-1");
+        // The torn tail was cut, so the next poll is empty instead of failing forever.
+        assertThat(resumed.poll(Duration.ofMillis(50))).isNull();
+        reopened.close();
+    }
+
+    @Test
     void exceedingThePerTargetCapIsAVisibleErrorNotASilentDrop(@TempDir Path dir)
             throws Exception {
         SpoolingEventTransport transport = new SpoolingEventTransport(dir, 64, mapper);

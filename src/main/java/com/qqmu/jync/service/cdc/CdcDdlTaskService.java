@@ -66,6 +66,9 @@ public class CdcDdlTaskService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.qqmu.jync.service.fanout.FanoutTargetContextFactory fanoutTargetContexts;
+    /** Optional: lets a successful DDL drop the fan-out capture's cached column layouts. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutRuntimeRegistry fanoutRuntimes;
 
     @Autowired
     public CdcDdlTaskService(ChangeLogRepository repository,
@@ -528,8 +531,16 @@ public class CdcDdlTaskService {
      * project's table mapping — so a MySQL primary and a same-family extra both accept it.
      * A cross-engine extra whose syntax differs fails visibly instead of being skipped.
      */
+    private void invalidateFanoutBindings(Long projectId) {
+        com.qqmu.jync.service.fanout.FanoutRuntime runtime =
+                fanoutRuntimes == null ? null : fanoutRuntimes.get(projectId);
+        if (runtime != null) {
+            runtime.invalidateBindings();
+        }
+    }
+
     private List<String> applyToFanoutTargets(Project project, String rawStatement,
-                                             SyncConfig config) {
+                                             SyncConfig config, boolean backslashEscapes) {
         if (fanoutTargetContexts == null || config == null
                 || config.getFanoutTargetDbIds() == null
                 || config.getFanoutTargetDbIds().isEmpty()) {
@@ -540,7 +551,8 @@ public class CdcDdlTaskService {
             String name = databaseConfigRepository.findById(targetId)
                     .map(DatabaseConfig::getName).orElse("#" + targetId);
             try {
-                executeOnFanoutTarget(project, targetId, rawStatement, config);
+                executeOnFanoutTarget(project, targetId, rawStatement, config,
+                        backslashEscapes);
             } catch (Exception e) {
                 log.warn("Fan-out target {} did not accept the DDL '{}': {}",
                         name, rawStatement, e.toString());
@@ -551,7 +563,8 @@ public class CdcDdlTaskService {
     }
 
     private void executeOnFanoutTarget(Project project, Long targetId, String rawStatement,
-                                       SyncConfig config) throws SQLException {
+                                       SyncConfig config, boolean backslashEscapes)
+            throws SQLException {
         SyncContext targetCtx = fanoutTargetContexts.build(project, targetId, "ddl-align",
                 () -> true);
         DatabaseConfig extra = targetCtx.getTargetConfig();
@@ -565,7 +578,22 @@ public class CdcDdlTaskService {
                         ? com.qqmu.jync.util.DdlIfExists.remove(statement)
                         : com.qqmu.jync.util.DdlIfExists.add(statement);
             }
-            new DdlExecutor(connection).executeIdempotentCreate(statement);
+            try {
+                new DdlExecutor(connection).executeIdempotentCreate(statement);
+            } catch (SQLException e) {
+                // Same end-state semantics as the primary: dropping something the extra
+                // target never had is success, not a failure that keeps the task red.
+                boolean dropStatement =
+                        com.qqmu.jync.util.DdlIfExists.isDropTableOrView(rawStatement);
+                boolean droppedColumnAbsent = !droppedColumns(rawStatement, backslashEscapes)
+                        .isEmpty() && isMissingObject(e);
+                if ((dropStatement && isMissingDropTarget(e)) || droppedColumnAbsent) {
+                    log.info("Fan-out target {} does not have the object of '{}' — the DDL"
+                            + " has nothing to remove there", extra.getName(), rawStatement);
+                } else {
+                    throw e;
+                }
+            }
         }
     }
 
@@ -580,27 +608,54 @@ public class CdcDdlTaskService {
      * Oracle/DM 942, SQL Server 3701, and the standard-state spellings of the same fact.
      */
     static boolean isMissingDropTarget(SQLException failure) {
-        for (SQLException current = failure; current != null;
-                current = current.getNextException() == current
-                        ? null : current.getNextException()) {
+        return anySqlFailure(failure, current -> {
             int code = current.getErrorCode();
             if (code == 1051 || code == 1091 || code == 942 || code == 3701) {
                 return true;
             }
             String state = current.getSQLState();
-            if ("42P01".equals(state) || "42S02".equals(state)) {
-                return true;
-            }
-        }
-        return false;
+            return "42P01".equals(state) || "42S02".equals(state);
+        });
     }
 
     static boolean isMissingObject(SQLException failure) {
-        for (SQLException current = failure; current != null;
-                current = current.getNextException() == current
-                        ? null : current.getNextException()) {
-            if (current.getErrorCode() == 1091) {
+        // A DROP COLUMN for a column the target never had: MySQL 1091, Oracle / Dameng
+        // ORA-00904 (904), SQL Server 4924, PostgreSQL 42703. Cross-engine extras are a
+        // documented fan-out shape, so the fallback must not be MySQL-only.
+        return anySqlFailure(failure, current -> {
+            int code = current.getErrorCode();
+            if (code == 1091 || code == 904 || code == 4924) {
                 return true;
+            }
+            return "42703".equals(current.getSQLState());
+        });
+    }
+
+    /**
+     * Walks both the next-exception chain and the cause chain. {@code DdlExecutor} wraps the
+     * driver failure in a new SQLException whose own code is 0 ("DDL failed: … -> …"); only
+     * following the cause reaches the real 1091/1051/942 that says "already gone".
+     */
+    private static boolean anySqlFailure(SQLException failure,
+                                         java.util.function.Predicate<SQLException> match) {
+        java.util.Set<Throwable> seen = java.util.Collections.newSetFromMap(
+                new java.util.IdentityHashMap<>());
+        java.util.Deque<Throwable> queue = new java.util.ArrayDeque<>();
+        queue.add(failure);
+        while (!queue.isEmpty()) {
+            Throwable current = queue.poll();
+            if (current == null || !seen.add(current)) {
+                continue;
+            }
+            if (current instanceof SQLException sql && match.test(sql)) {
+                return true;
+            }
+            if (current.getCause() != null && current.getCause() != current) {
+                queue.add(current.getCause());
+            }
+            if (current instanceof SQLException sql && sql.getNextException() != null
+                    && sql.getNextException() != current) {
+                queue.add(sql.getNextException());
             }
         }
         return false;
@@ -721,8 +776,16 @@ public class CdcDdlTaskService {
             }
         }
 
+        // The primary target changed underneath a live consumer. Invalidate its projected
+        // column list NOW — not after the fan-out targets are handled — or a failing extra
+        // target would leave the primary writing the old column layout until a retry.
+        CdcRuntimeStats liveStats = statsFor(entry.getProjectId());
+        if (liveStats != null) {
+            liveStats.invalidateTargetColumns();
+        }
+        invalidateFanoutBindings(entry.getProjectId());
         List<String> fanoutFailures = applyToFanoutTargets(project, originalStatement,
-                targetConfig);
+                targetConfig, backslashEscapes);
         if (!fanoutFailures.isEmpty()) {
             // The primary target IS aligned, but the project as a whole is not. Keep the row
             // retryable (ddlExecuted stays false): the primary side treats "duplicate column"
@@ -735,13 +798,6 @@ public class CdcDdlTaskService {
             repository.save(entry);
             throw new IllegalStateException("error.ddl.execute:"
                     + String.join("; ", fanoutFailures));
-        }
-        // The target structure just changed underneath a live consumer. Its cached
-        // target-column set survives up to 30 s and would keep projecting the new column
-        // away (values not replicated while the position advances) unless it is dropped now.
-        CdcRuntimeStats liveStats = statsFor(entry.getProjectId());
-        if (liveStats != null) {
-            liveStats.invalidateTargetColumns();
         }
         entry.setTargetDdlSql(statement);
         entry.setDdlExecuted(true);

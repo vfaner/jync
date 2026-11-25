@@ -42,6 +42,13 @@ public final class FanoutBaselineService {
 
     private static final int ROW_BATCH = 500;
 
+    /**
+     * Byte budget per published batch. A 500-row batch of 1 MB blobs used to materialize
+     * hundreds of megabytes (plus their serialized copies) before anything left the heap;
+     * flushing on bytes as well as rows keeps one batch bounded regardless of row size.
+     */
+    private static final long ROW_BATCH_BYTES = 8L * 1024 * 1024;
+
     private final StructureSyncService structureSync;
 
     public FanoutBaselineService(StructureSyncService structureSync) {
@@ -137,6 +144,7 @@ public final class FanoutBaselineService {
                 ResultSetMetaData md = rs.getMetaData();
                 int columns = md.getColumnCount();
                 List<Map<String, Object>> batch = new ArrayList<>(ROW_BATCH);
+                long batchBytes = 0L;
                 long batchIndex = 0;
                 while (rs.next()) {
                     Map<String, Object> row = new LinkedHashMap<>();
@@ -145,9 +153,11 @@ public final class FanoutBaselineService {
                     }
                     batch.add(row);
                     rows++;
-                    if (batch.size() >= ROW_BATCH) {
+                    batchBytes += estimateBytes(row);
+                    if (batch.size() >= ROW_BATCH || batchBytes >= ROW_BATCH_BYTES) {
                         publishBatch(transport, sourceCtx, table, batch, batchIndex++);
                         batch = new ArrayList<>(ROW_BATCH);
+                        batchBytes = 0L;
                     }
                 }
                 if (!batch.isEmpty()) {
@@ -156,6 +166,21 @@ public final class FanoutBaselineService {
             }
         }
         return rows;
+    }
+
+    /** Rough heap cost of one row; the exact wire size is a serialization detail. */
+    private static long estimateBytes(Map<String, Object> row) {
+        long bytes = 0L;
+        for (Object value : row.values()) {
+            if (value instanceof byte[] raw) {
+                bytes += raw.length;
+            } else if (value instanceof CharSequence text) {
+                bytes += text.length() * 2L;
+            } else {
+                bytes += 32L;
+            }
+        }
+        return bytes;
     }
 
     /** The spool is JSON: turn JDBC LOB handles into bytes/text before publishing. */

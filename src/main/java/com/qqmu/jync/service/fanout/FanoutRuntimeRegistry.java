@@ -34,4 +34,15 @@ public class FanoutRuntimeRegistry {
     public FanoutRuntime remove(Long projectId) {
         return projectId == null ? null : runtimes.remove(projectId);
     }
+
+    /**
+     * Removes the runtime only if it is still the registered one. A consumer whose stop
+     * overran the join budget can finish after its replacement registered; an unconditional
+     * remove would silently unregister the live runtime and hide it from DDL invalidation.
+     */
+    public void remove(Long projectId, FanoutRuntime runtime) {
+        if (projectId != null && runtime != null) {
+            runtimes.remove(projectId, runtime);
+        }
+    }
 }
