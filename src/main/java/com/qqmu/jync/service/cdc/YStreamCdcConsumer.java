@@ -115,6 +115,13 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     private LongSupplier clock = System::currentTimeMillis;
 
     private volatile boolean running = true;
+
+    /**
+     * Last source-catalog scan for tables created after auto-sync was enabled. A table the
+     * YStream service does not cover never produces a row, so the catalog is asked once a
+     * minute instead of waiting for a change that cannot arrive.
+     */
+    private volatile long lastAutoSyncCheckMs;
     /** The open stream; {@code requestStop()} closes it so a blocking poll returns at once. */
     private volatile YStreamClientAdapter currentAdapter;
 
@@ -243,6 +250,9 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
                 applyFailedThisCycle = false;
+                // Between attach cycles is the only safe point: the targeted load opens its
+                // own source connection and writes the target.
+                reconcileAutoSync(projectId, outcome.serviceName());
                 int applied;
                 YStreamClientAdapter adapter = null;
                 try {
@@ -409,9 +419,14 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
 
     /** {@code SCHEMA.TABLE} for every selected table, in configuration order. */
     private List<String> selectedTables() {
+        return qualifiedTables(ctx.getConfig().getTables());
+    }
+
+    /** {@code SCHEMA.TABLE} for the given names, in the order given. */
+    private List<String> qualifiedTables(java.util.Collection<String> tables) {
         String schema = ctx.getSourceSchema();
         List<String> qualified = new ArrayList<>();
-        for (String table : ctx.getConfig().getTables()) {
+        for (String table : tables) {
             if (table == null || table.isBlank()) {
                 continue;
             }
@@ -426,6 +441,57 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
             }
         }
         return qualified;
+    }
+
+    /**
+     * Adds source tables created after auto-sync was enabled: their ALL COLUMN LOGGING is
+     * enabled first (a table without it silently produces no change rows), then the running
+     * service's scope is extended — before the targeted load, so changes made between the
+     * snapshot and the attach are already inside the stream. Runs between attach cycles; a
+     * failure leaves the existing tables streaming and is retried on the next scan.
+     */
+    private void reconcileAutoSync(long projectId, String serviceName) {
+        if (!ctx.getConfig().isAutoSyncNewTables()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAutoSyncCheckMs < 60_000L) {
+            return;
+        }
+        lastAutoSyncCheckMs = now;
+        try {
+            baselineService.reconcileAutoSync(ctx, added -> extendService(serviceName, added));
+        } catch (Exception e) {
+            log.warn("Project {}: auto-sync reconciliation failed; existing tables keep"
+                    + " streaming and the new ones are retried on a later scan: {}",
+                    projectId, e.toString());
+            stats.setLastError("auto-sync: " + CdcFailureClassifier.describe(e));
+        }
+    }
+
+    void extendService(String serviceName, List<String> added) {
+        List<String> qualified = qualifiedTables(added);
+        try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
+            List<String> missing = missingSupplementalLogging(conn, qualified);
+            for (String table : missing) {
+                String sql = "ALTER TABLE " + YStreamServiceAdmin.quoteQualified(table)
+                        + " ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS";
+                try (Statement st = conn.createStatement()) {
+                    st.execute(sql);
+                } catch (SQLException e) {
+                    throw new IllegalStateException("auto-sync: cannot enable ALL COLUMN"
+                            + " LOGGING on " + table + " (" + e.getMessage()
+                            + "); run manually: " + sql, e);
+                }
+            }
+            opsFactory.create(conn).addTables(serviceName, qualified);
+            log.info("Auto-sync: YStream service {} now captures {} new table(s): {}",
+                    serviceName, qualified.size(), qualified);
+        } catch (SQLException e) {
+            throw new IllegalStateException("auto-sync: cannot extend YStream service "
+                    + serviceName + " with " + qualified + " (" + e.getMessage() + "); run"
+                    + " DBMS_YSTREAM_ADM.ADD_TABLES manually", e);
+        }
     }
 
     /**

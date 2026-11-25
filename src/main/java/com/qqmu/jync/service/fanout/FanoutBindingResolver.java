@@ -25,6 +25,13 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
     private final SyncContext sourceCtx;
     private final Connection sourceConn;
     private final Map<String, CdcTableBinding> cache = new ConcurrentHashMap<>();
+    /**
+     * One JDBC connection serves every target worker; JDBC connections are not thread-safe
+     * (SQL Server's driver corrupts its TDS stream outright when two threads read metadata
+     * concurrently, closing the connection and making both targets skip the table). Catalog
+     * reads are rare — once per table — so serializing them costs nothing.
+     */
+    private final Object readLock = new Object();
 
     public FanoutBindingResolver(SyncContext sourceCtx, Connection sourceConn) {
         this.sourceCtx = sourceCtx;
@@ -42,8 +49,11 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
             return cached == NULL_BINDING ? null : cached;
         }
         try {
-            TableMeta meta = sourceCtx.getSourceReader()
-                    .readTable(sourceConn, sourceCtx.getSourceSchema(), table);
+            TableMeta meta;
+            synchronized (readLock) {
+                meta = sourceCtx.getSourceReader()
+                        .readTable(sourceConn, sourceCtx.getSourceSchema(), table);
+            }
             if (meta == null || !meta.hasPrimaryKey()) {
                 cache.put(key, NULL_BINDING);
                 return null;
@@ -53,8 +63,10 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
             cache.put(key, binding);
             return binding;
         } catch (SQLException | RuntimeException e) {
-            log.debug("Fan-out binding for {}.{} unavailable: {}", schema, table, e.toString());
-            cache.put(key, NULL_BINDING);
+            // NOT cached: a failed catalog read (a throttled pool, a driver hiccup) must be
+            // retried by the next event, not turned into "this table is unsyncable" forever.
+            log.warn("Fan-out binding for {}.{} unavailable (will retry): {}",
+                    schema, table, e.toString());
             return null;
         }
     }

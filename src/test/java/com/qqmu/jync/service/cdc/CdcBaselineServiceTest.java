@@ -757,14 +757,14 @@ class CdcBaselineServiceTest {
     }
 
     @Test
-    void enginesWithoutATableEnablementStepStayManual() throws Exception {
+    void pollingProjectsDoNotScanTheCatalogForNewTables() throws Exception {
         AutoSyncService autoSync = mock(AutoSyncService.class);
         CdcBaselineService lmService = new CdcBaselineService(
                 positionStore, clientFactory, taskStore, dataSourceManager, engine,
                 redisBaseline, autoSync);
 
         assertThat(lmService.reconcileAutoSync(autoSyncCtx(22L,
-                com.qqmu.jync.model.CaptureStrategy.YSTREAM_CDC))).isFalse();
+                com.qqmu.jync.model.CaptureStrategy.POLLING))).isFalse();
 
         verify(autoSync, never()).reconcile(any(), any(), any(), any());
     }
@@ -947,6 +947,25 @@ class CdcBaselineServiceTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("SQL Server Agent is not running");
         verify(autoSync).rollback(any(), any(), eq(java.util.List.of("orders2")));
+    }
+
+    @Test
+    void theYStreamHookRunsWithTheTablesAddedInThisScan() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService svc = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any()))
+                .thenReturn(java.util.List.of("orders2"));
+        SyncResult ok = successResult();
+        when(engine.runCycle(any())).thenReturn(ok);
+        Connection conn = mock(Connection.class);
+        java.util.List<java.util.List<String>> seen = new java.util.ArrayList<>();
+
+        svc.reconcileAutoSync(autoSyncCtxFor(com.qqmu.jync.model.CaptureStrategy.YSTREAM_CDC,
+                "APP", "YashanDB", conn), seen::add);
+
+        assertThat(seen).containsExactly(java.util.List.of("orders2"));
     }
 
     private SyncResult successResult() {

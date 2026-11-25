@@ -25,6 +25,21 @@ class SqlServerCdcConsumerTest {
      * 重新解释 UTC datetime)。刻意不把映射表 join 进变更拉取。
      */
     @Test
+    void bothDocumentedLsnRejectionErrorsTakeTheClampPath() {
+        // SQL Server 2022 CU27 answers 313 ("insufficient arguments") when @from_lsn is
+        // below a capture instance's min_lsn — the message names no LSN at all. Gating the
+        // clamp on 22054 alone left a mid-flight capture instance retrying forever.
+        assertThat(SqlServerCdcConsumer.lsnRejectedFault(
+                new java.sql.SQLException("invalid LSN", "S0001", 22054))).isTrue();
+        assertThat(SqlServerCdcConsumer.lsnRejectedFault(new java.sql.SQLException(
+                "An insufficient number of arguments were supplied for the procedure",
+                "S0001", 313))).isTrue();
+        assertThat(SqlServerCdcConsumer.lsnRejectedFault(
+                new java.sql.SQLException("Login failed", "S0001", 18456))).isFalse();
+        assertThat(SqlServerCdcConsumer.lsnRejectedFault(null)).isFalse();
+    }
+
+    @Test
     void theCommitLagIsASingleMappingLookupPerWindow() {
         assertThat(SqlServerCdcConsumer.TX_LAG_SQL)
                 .contains("cdc.lsn_time_mapping")

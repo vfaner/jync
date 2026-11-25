@@ -476,6 +476,29 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * "no verdict": it must still reach SQL Server and fail visibly (Msg 8114) rather than be
      * misread as a backwards timeline and park a healthy project.
      */
+    /**
+     * SQL Server rejects a change-function call for two different reasons with two different
+     * errors: error 22054 ("invalid LSN for the capture instance") on some builds, and the
+     * famously misleading error 313 ("An insufficient number of arguments were supplied…")
+     * on others — SQL Server 2022 CU27 answers 313 when @from_lsn sits BELOW the instance's
+     * min_lsn. Both mean the same thing here and must take the same clamp/purge/empty path;
+     * gating on 22054 alone left a new capture instance retrying 313 forever.
+     */
+    static boolean lsnRejectedFault(SQLException e) {
+        if (e == null) {
+            return false;
+        }
+        if (e.getErrorCode() == 22054) {
+            return true;
+        }
+        if (e.getErrorCode() != 313) {
+            return false;
+        }
+        String message = e.getMessage();
+        return message != null && message.toLowerCase(Locale.ROOT)
+                .contains("insufficient number of arguments");
+    }
+
     static boolean watermarkBeyondSource(String fromLsn, String maxLsn) {
         String from = canonicalLsn(fromLsn);
         String max = canonicalLsn(maxLsn);
@@ -649,13 +672,17 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 // never risk the silent data loss of a blind clamp.
                 // Anything else — permission, network, column drift — aborts the whole
                 // drain so we retry instead of silently skipping this ci.
-                if (e.getErrorCode() == 22054) {
+                if (lsnRejectedFault(e)) {
                     String minLsn = readMinLsn(conn, ci.captureInstance);
-                    if (ci.startLsn != null && ci.startLsn.compareTo(fromLsn) > 0) {
+                    String fromCanonical = canonicalLsn(fromLsn);
+                    String startCanonical = canonicalLsn(ci.startLsn);
+                    if (startCanonical != null && fromCanonical != null
+                            && startCanonical.compareTo(fromCanonical) > 0) {
                         // ① new CI. min_lsn is NULL while its change table holds no rows
                         // yet — start_lsn is then the lowest LSN the function accepts.
-                        String clampTo = minLsn != null ? minLsn : ci.startLsn;
-                        if (clampTo.compareTo(maxLsn) > 0) {
+                        String clampTo = canonicalLsn(minLsn != null ? minLsn : ci.startLsn);
+                        String maxCanonical = canonicalLsn(maxLsn);
+                        if (clampTo.compareTo(maxCanonical) > 0) {
                             // The capture job has not yet processed this CI's enable
                             // transaction, so fn_cdc_get_max_lsn() still sits BELOW its
                             // first readable LSN (min_lsn is NULL while the change table is
@@ -689,6 +716,23 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                                 clampTo, maxLsn, fold, out);
                         boundedTo = earlierLsn(boundedTo, scanEnd);
                         continue;
+                    }
+                    if (minLsn == null) {
+                        // An empty change table has no lower bound, so EVERY call is
+                        // rejected — and there is nothing to read anyway. Skipping it is
+                        // not a gap: the moment the capture job writes its first row the
+                        // next cycle scans it normally.
+                        log.debug("SQLServer CDC: capture instance {} has no captured rows"
+                                + " yet (min_lsn is NULL); skipping it this cycle",
+                                ci.captureInstance);
+                        continue;
+                    }
+                    if (minLsn != null && fromCanonical != null
+                            && canonicalLsn(minLsn).compareTo(fromCanonical) <= 0) {
+                        // The rejection names neither a clamp point nor a purge; retrying
+                        // with the same bindings cannot help, but parking on a guess is
+                        // worse. Propagate and let the caller classify.
+                        throw e;
                     }
                     // ② purged past the watermark — unrecoverable; park as PURGED. No
                     // cause chain: describe() reports the ROOT message and the remedy
@@ -1176,7 +1220,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 String schema = rs.getString(1);
                 String table = rs.getString(2);
                 String ci = rs.getString(3);
-                String startLsn = rs.getString(4); // canonical — lexicographic == LSN order
+                // Canonical (lower-case) — SQL Server hands the hex back upper-case through
+                // some paths and lower-case through others, and the clamp decision below is
+                // a plain lexicographic compare: 'B' < 'b' made a new capture instance look
+                // older than the watermark, turning the self-heal into a bogus PURGED park.
+                String startLsn = canonicalLsn(rs.getString(4));
                 if (!matchesProjectTable(schema, table)) continue;
                 if (!isUsableCaptureInstanceName(ci)) {
                     // Only an empty or NUL-bearing name is unquotable; it cannot be a

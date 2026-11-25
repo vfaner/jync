@@ -85,6 +85,8 @@ class YStreamCdcConsumerTest {
     private YStreamCdcConsumer consumer;
     private final java.util.concurrent.atomic.AtomicLong clock =
             new java.util.concurrent.atomic.AtomicLong(1_700_000_000_000L);
+    /** Tables the consumer added to a running service, for the auto-sync test. */
+    private final java.util.List<String> serviceAdded = new java.util.ArrayList<>();
 
     @BeforeEach
     void setUp() throws SQLException {
@@ -138,7 +140,7 @@ class YStreamCdcConsumerTest {
         consumer = new YStreamCdcConsumer(project(), lock, ctx, positionStore, baselineService,
                 taskStore, stateWriter, dataSourceManager,
                 stats, new SyncProperties(), clientFactory, lifecycle,
-                conn -> new FakeOps());
+                conn -> new FakeOps(serviceAdded));
     }
 
     @AfterEach
@@ -147,6 +149,27 @@ class YStreamCdcConsumerTest {
             st.execute("DROP ALL OBJECTS");
         }
         target.close();
+    }
+
+    @Test
+    void autoSyncAddsTheNewTableToTheRunningService() throws Exception {
+        try (Statement st = target.createStatement()) {
+            st.execute("INSERT INTO all_log_groups VALUES ('APP', 'ORDERS2', 'ALL')");
+        }
+
+        consumer.extendService(SERVICE, List.of("ORDERS2"));
+
+        assertThat(serviceAdded).containsExactly("APP.ORDERS2");
+    }
+
+    @Test
+    void autoSyncRefusesATableWithoutSupplementalLogging() {
+        // H2 rejects Oracle syntax, so this also proves the ALTER runs before ADD_TABLES and
+        // its failure carries the statement a DBA can run by hand.
+        assertThatThrownBy(() -> consumer.extendService(SERVICE, List.of("ORDERS2")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS");
+        assertThat(serviceAdded).isEmpty();
     }
 
     @Test
@@ -481,7 +504,7 @@ class YStreamCdcConsumerTest {
         YStreamCdcConsumer budgeted = new YStreamCdcConsumer(project(), lock, ctx,
                 positionStore, baselineService, taskStore, mock(SyncStateWriter.class),
                 dataSourceManager, new CdcRuntimeStats(), small, clientFactory, lifecycle,
-                conn -> new FakeOps());
+                conn -> new FakeOps(serviceAdded));
 
         budgeted.handle(YStreamEvent.begin(pos(1)));
         budgeted.handle(insert("ORDERS", row(1, "a"), pos(1)));
@@ -655,7 +678,7 @@ class YStreamCdcConsumerTest {
         props.getCdc().setReconnectBackoffMaxMs(1L);
         YStreamCdcConsumer looping = new YStreamCdcConsumer(project(), lock, ctx,
                 positionStore, baselineService, taskStore, stateWriter, dataSourceManager,
-                stats, props, clientFactory, lifecycle, conn -> new FakeOps());
+                stats, props, clientFactory, lifecycle, conn -> new FakeOps(null));
         when(lifecycle.ensure(eq(PROJECT), anyList(), any()))
                 .thenReturn(new Outcome(SERVICE, ANCHOR, false));
 
@@ -772,6 +795,12 @@ class YStreamCdcConsumerTest {
 
     /** The lifecycle port is not under test here; the consumer's call to it is. */
     private static final class FakeOps implements YStreamServiceOps {
+        private final java.util.List<String> added;
+
+        FakeOps(java.util.List<String> added) {
+            this.added = added;
+        }
+
         @Override
         public java.util.List<YStreamServiceAdmin.Service> services(long projectId) {
             return java.util.List.of();
@@ -783,6 +812,9 @@ class YStreamCdcConsumerTest {
 
         @Override
         public void addTables(String serviceName, java.util.List<String> qualifiedTables) {
+            if (added != null) {
+                added.addAll(qualifiedTables);
+            }
         }
 
         @Override

@@ -188,7 +188,7 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 - **PostgreSQL 逻辑解码**：每分钟扫描一次源端目录（`test_decoding` 本身解码整库，无 publication 步骤），按表补基线。
 - **Oracle / 达梦 LogMiner**：同样每分钟扫描。Oracle 的新表在加载前会自动执行 `ALTER TABLE "OWNER"."TABLE" ADD SUPPLEMENTAL LOG DATA (ALL) COLUMNS`——没有这个组，UPDATE 未修改的列不会出现在 redo 里，目标会悄悄漂移；执行失败（账号没有 ALTER 权限、表上有 LONG 列等）时该表本次不会加入，日志给出失败原因与可手工执行的语句，下一次扫描重试。达梦由系统参数覆盖全部表，无需逐表开启。
 - **SQL Server**：每分钟扫描。新表会自动执行 `sys.sp_cdc_enable_table`，`@role_name` 沿用已有捕获实例的角色（否则 NULL 意味着只有 db_owner 能读，同步账号会被自己锁在门外）；已存在捕获实例的表不重复创建。启用失败（账号权限不足、SQL Agent 未运行）时该表本次不加入，日志给出原因与可手工执行的语句。
-- **YStream**：服务包含的表清单由 YStream 生命周期维护，自动同步暂不代执行 `ADD_TABLES`，开关对该引擎不生效。
+- **YStream**：每分钟扫描。新表先补 ALL COLUMN LOGGING（Yashan 表级补充日志，缺了行变更不会进流），再对运行中的服务执行 `ADD_TABLES`，最后才做全量——先加入服务再加载，加载期间产生的变更不会漏。失败时回滚本次加入并给出可手工执行的语句。
 
 ---
 

@@ -374,6 +374,17 @@ public class CdcBaselineService {
      * @return true when at least one table was added and loaded
      */
     public boolean reconcileAutoSync(SyncContext ctx) throws Exception {
+        return reconcileAutoSync(ctx, null);
+    }
+
+    /**
+     * @param beforeLoad runs after the new tables were added to the config and before their
+     *     full load; the YStream engine uses it to extend the service's table list first, so
+     *     changes made after the snapshot are already inside the stream.
+     */
+    public boolean reconcileAutoSync(SyncContext ctx,
+                                     java.util.function.Consumer<List<String>> beforeLoad)
+            throws Exception {
         CaptureStrategy strategy = ctx.getConfig() == null
                 ? CaptureStrategy.POLLING : ctx.getConfig().getCaptureStrategyOrDefault();
         if (autoSync == null || ctx.getConfig() == null
@@ -381,14 +392,14 @@ public class CdcBaselineService {
                 // Engines whose stream already carries any table of the schema: binlog and
                 // PG test_decoding (which decodes the whole database, no publication or
                 // enablement step), LogMiner — whose Oracle side needs per-table ALL
-                // COLUMN LOGGING — and SQL Server CDC — whose capture instance is created
-                // below with the role an existing instance already uses. Only YStream is
-                // left manual: its service table list is maintained by the YStream
-                // lifecycle, not by a statement this path can run safely mid-stream.
+                // COLUMN LOGGING — SQL Server CDC — whose capture instance is created
+                // below with the role an existing instance already uses — and YStream,
+                // whose service table list is extended by the consumer's beforeLoad hook.
                 || (strategy != CaptureStrategy.BINLOG_CDC
                         && strategy != CaptureStrategy.PG_LOGICAL_CDC
                         && strategy != CaptureStrategy.LOGMINER_CDC
-                        && strategy != CaptureStrategy.SQLSERVER_CDC)
+                        && strategy != CaptureStrategy.SQLSERVER_CDC
+                        && strategy != CaptureStrategy.YSTREAM_CDC)
                 || ctx.getProject().getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             return false;
         }
@@ -415,6 +426,9 @@ public class CdcBaselineService {
                 enableMiningLogging(ctx, added);
             } else if (strategy == CaptureStrategy.SQLSERVER_CDC) {
                 enableSqlServerCapture(ctx, added);
+            }
+            if (beforeLoad != null) {
+                beforeLoad.accept(added);
             }
             SyncResult result = engine.runCycle(ctx.toBuilder()
                     .repairTables(new LinkedHashSet<>(added))
