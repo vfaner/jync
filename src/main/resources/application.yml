@@ -120,6 +120,8 @@ app:
   # 设置页「项目与作者」栏：Gitee 镜像地址、官网与作者联系方式，留空则对应行不显示。
   # 多个 QQ 号可用 / 、英文逗号或空格分隔，页面自动拆成独立行并生成 tencent:// 唤起会话链接。
   gitee-url: https://gitee.com/super_rgh/jync
+  # Docker Hub 官方镜像仓库（Docker Sponsored OSS 认证）；留空则设置页不显示该行。
+  docker-url: https://hub.docker.com/r/vfaner/jync
   site-url: https://jync.qqmu.com
   contact-qq: 817094/2912167928
   contact-qq-group: 426669837

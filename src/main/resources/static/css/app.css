@@ -1413,8 +1413,9 @@ table.tbl a.truncate { display: block; }
 /* github.svg 用 fill="currentColor"，但 <img> 里 currentColor 解析不到，
    于是走滤镜：浅色模式压成墨色，深色模式再反相。 */
 .gh-ico { display: block; filter: brightness(0) opacity(.62); transition: filter .2s; }
-/* Gitee 图标自带品牌红，不走墨色滤镜；深浅色下都显示原色 */
+/* Gitee / Docker 图标自带品牌色，不走墨色滤镜；深浅色下都显示原色 */
 .gitee-ico { display: block; }
+.docker-ico { display: block; }
 [data-theme="dark"] .gh-ico { filter: brightness(0) invert(1) opacity(.75); }
 /* 主色按钮上是白字，图标也得是纯白 */
 .gh-ico-on-brand,

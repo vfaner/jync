@@ -37,6 +37,7 @@ public class SettingsController {
     private final SyncLockService lockService;
     private final VersionService versionService;
     private final String giteeUrl;
+    private final String dockerUrl;
     private final String siteUrl;
     private final List<String> contactQqs;
     private final String contactQqGroup;
@@ -54,6 +55,7 @@ public class SettingsController {
                               @Value("${spring.datasource.url:}") String datasourceUrl,
                               @Value("${spring.datasource.username:}") String datasourceUsername,
                               @Value("${app.gitee-url:}") String giteeUrl,
+                              @Value("${app.docker-url:}") String dockerUrl,
                               @Value("${app.site-url:}") String siteUrl,
                               @Value("${app.contact-qq:}") String contactQq,
                               @Value("${app.contact-qq-group:}") String contactQqGroup,
@@ -66,6 +68,7 @@ public class SettingsController {
         this.lockService = lockService;
         this.versionService = versionService;
         this.giteeUrl = giteeUrl;
+        this.dockerUrl = dockerUrl;
         this.siteUrl = siteUrl;
         this.contactQqs = splitHandles(contactQq);
         this.contactQqGroup = contactQqGroup;
@@ -115,6 +118,7 @@ public class SettingsController {
         model.addAttribute("startedAt", startedAt());
         model.addAttribute("versionInfo", versionService.snapshot());
         model.addAttribute("giteeUrl", giteeUrl);
+        model.addAttribute("dockerUrl", dockerUrl);
         model.addAttribute("siteUrl", siteUrl);
         model.addAttribute("contactQqs", contactQqs);
         model.addAttribute("contactQqGroup", contactQqGroup);

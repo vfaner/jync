@@ -87,9 +87,9 @@
                     <h2><svg class="ico"><use href="#code-square"/></svg>
                         <span th:text="#{settings.projectAuthor}">Project &amp; author</span></h2>
                 </div>
-                <!-- 双列 dl：(GitHub,Gitee) / (QQ①,QQ②) / (QQ群,邮箱) / (微信,官网)；
+                <!-- 双列 dl：(GitHub,Gitee) / Docker Hub 通栏 / (QQ①,QQ②) / (QQ群,邮箱) / (微信,官网)；
                      kv 值列 minmax(0,1fr) 允许收缩，长 URL 走省略号而不是撑爆轨道；
-                     application.yml 中留空的行不显示，QQ 号可配多个（/ , 空格分隔） -->
+                     application.yml 中留空的行不显示（含 docker-url），QQ 号可配多个（/ , 空格分隔） -->
                 <div class="card-body">
                     <dl class="dl pairs authors">
                         <!-- 仓库行：dt 用品牌图标代替文字标签（alt 仍取 i18n 键），dd 只放超链接 -->
@@ -109,6 +109,19 @@
                                 <a class="repo-link" th:href="${giteeUrl}" target="_blank" rel="noopener noreferrer">
                                     <span class="mono" th:text="${giteeUrl}">https://gitee.com/…</span>
                                 </a>
+                            </dd>
+                        </div>
+                        <!-- Docker Hub 官方镜像（Docker Sponsored OSS）：通栏一行，
+                             图标作标签，认证以 chip 标出，链接与仓库行同样新标签页打开 -->
+                        <div class="kv wide" th:if="${not #strings.isEmpty(dockerUrl)}">
+                            <dt><img th:src="@{/assets/docker.svg}" th:alt="#{settings.dockerUrl}"
+                                     alt="Docker" width="15" height="15" class="docker-ico"></dt>
+                            <dd>
+                                <a class="repo-link" th:href="${dockerUrl}" target="_blank" rel="noopener noreferrer">
+                                    <span class="mono" th:text="${dockerUrl}">https://hub.docker.com/r/vfaner/jync</span>
+                                </a>
+                                <span class="chip chip-ok" th:title="#{settings.dockerSponsoredHint}"
+                                      th:text="#{settings.dockerSponsored}">Docker Sponsored OSS</span>
                             </dd>
                         </div>
                         <!-- 个人 QQ：tencent 消息深链唤起本机 QQ 并打开与该号的临时会话；

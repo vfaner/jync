@@ -40,6 +40,7 @@ import com.qqmu.jync.util.CryptoUtil;
 @TestPropertySource(properties = {
         "app.github-url=https://github.com/vfaner/jync",
         "app.gitee-url=https://gitee.com/super_rgh/jync",
+        "app.docker-url=https://hub.docker.com/r/vfaner/jync",
         "app.contact-qq=817094/2912167928",
         "app.contact-qq-group=426669837",
         "app.contact-email=vfaner@88.com",
@@ -164,12 +165,23 @@ class SettingsAuthorCardViewTest {
     }
 
     @Test
+    void dockerHubIsShownAsAWideRowWithItsSponsoredOssCertification() throws Exception {
+        String page = render();
+
+        // 图标作标签、链接与仓库行同样新标签页打开，Sponsored OSS 认证以 chip 标出。
+        assertThat(page).containsPattern("<div class=\"kv wide\">\\s*<dt><img[^>]*/assets/docker\\.svg");
+        assertThat(page).contains("https://hub.docker.com/r/vfaner/jync");
+        assertThat(page).containsPattern("class=\"chip chip-ok\"[^>]*>Docker Sponsored OSS<");
+    }
+
+    @Test
     void repoLinksOpenInANewTab() throws Exception {
         String page = render();
 
         // Same convention as the nav GitHub icon: new tab, no referrer leakage.
         for (String url : List.of("https://github.com/vfaner/jync",
-                "https://gitee.com/super_rgh/jync")) {
+                "https://gitee.com/super_rgh/jync",
+                "https://hub.docker.com/r/vfaner/jync")) {
             assertThat(page).containsPattern("class=\"repo-link\"\\s+href=\""
                     + java.util.regex.Pattern.quote(url)
                     + "\"\\s+target=\"_blank\"\\s+rel=\"noopener noreferrer\"");

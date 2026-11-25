@@ -40,6 +40,7 @@ import com.qqmu.jync.util.CryptoUtil;
 @TestPropertySource(properties = {
         "app.github-url=https://github.com/vfaner/jync",
         "app.gitee-url=",
+        "app.docker-url=",
         "app.contact-qq=",
         "app.contact-qq-group=",
         "app.contact-email=",
@@ -90,6 +91,7 @@ class SettingsAuthorCardBlankViewTest {
         assertThat(page).contains("项目与作者");
         assertThat(page).contains("https://github.com/vfaner/jync");
         assertThat(page).doesNotContain("/assets/gitee.ico");
+        assertThat(page).doesNotContain("/assets/docker.svg");
         // Match the dt tags: the donate dialog has its own 微信/QQ pay tabs.
         assertThat(page).doesNotContain(">Gitee</dt>");
         assertThat(page).doesNotContain(">QQ</dt>");
