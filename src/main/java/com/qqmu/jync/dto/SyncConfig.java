@@ -118,6 +118,12 @@ public class SyncConfig {
     /** Tables the operator removed from auto-sync; they are never added again. */
     private List<String> autoSyncIgnoredTables = new ArrayList<>();
 
+    /**
+     * Additional target connections for a fan-out project (the primary target stays in
+     * {@code project.targetDbId}). Empty means an ordinary single-target project.
+     */
+    private List<Long> fanoutTargetDbIds = new ArrayList<>();
+
     /** Table name mapping source -> target; unmapped tables keep their name. */
     private Map<String, String> tableNameMapping = new HashMap<>();
 
