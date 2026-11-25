@@ -380,14 +380,15 @@ public class CdcBaselineService {
                 || !ctx.getConfig().isAutoSyncNewTables()
                 // Engines whose stream already carries any table of the schema: binlog and
                 // PG test_decoding (which decodes the whole database, no publication or
-                // enablement step), and LogMiner — whose Oracle side needs per-table ALL
-                // COLUMN LOGGING, added below before the load. SQL Server capture instances
-                // and YStream services stay manual (and are reported by their own probes);
-                // enabling auto-sync there would look successful while the new table never
-                // streams.
+                // enablement step), LogMiner — whose Oracle side needs per-table ALL
+                // COLUMN LOGGING — and SQL Server CDC — whose capture instance is created
+                // below with the role an existing instance already uses. Only YStream is
+                // left manual: its service table list is maintained by the YStream
+                // lifecycle, not by a statement this path can run safely mid-stream.
                 || (strategy != CaptureStrategy.BINLOG_CDC
                         && strategy != CaptureStrategy.PG_LOGICAL_CDC
-                        && strategy != CaptureStrategy.LOGMINER_CDC)
+                        && strategy != CaptureStrategy.LOGMINER_CDC
+                        && strategy != CaptureStrategy.SQLSERVER_CDC)
                 || ctx.getProject().getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             return false;
         }
@@ -412,6 +413,8 @@ public class CdcBaselineService {
         try {
             if (strategy == CaptureStrategy.LOGMINER_CDC) {
                 enableMiningLogging(ctx, added);
+            } else if (strategy == CaptureStrategy.SQLSERVER_CDC) {
+                enableSqlServerCapture(ctx, added);
             }
             SyncResult result = engine.runCycle(ctx.toBuilder()
                     .repairTables(new LinkedHashSet<>(added))
@@ -465,6 +468,67 @@ public class CdcBaselineService {
             }
             log.info("Auto-sync: enabled ALL COLUMN LOGGING on {} new LogMiner table(s): {}",
                     tables.size(), tables);
+        }
+    }
+
+    /**
+     * SQL Server captures only tables whose CDC capture instance was created with
+     * {@code sp_cdc_enable_table}. The role is copied from an existing instance so the
+     * project's account keeps read access: NULL means "db_owner only", which is exactly the
+     * lock-out the probe's advice (a dedicated role) exists to avoid. An instance that
+     * already exists is left alone — enabling again would create a second one.
+     */
+    private void enableSqlServerCapture(SyncContext ctx, List<String> tables)
+            throws SQLException {
+        try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
+            String schema = ctx.getSourceSchema();
+            if (schema == null || schema.isBlank()) {
+                throw new SQLException("the source schema is unknown, so a capture instance"
+                        + " cannot be created for " + tables);
+            }
+            String role = existingCdcRole(conn);
+            for (String table : tables) {
+                if (captureInstanceExists(conn, schema, table)) {
+                    continue;
+                }
+                String sql = "EXEC sys.sp_cdc_enable_table @source_schema = ?,"
+                        + " @source_name = ?, @role_name = ?, @supports_net_changes = 1";
+                try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+                    ps.setString(1, schema);
+                    ps.setString(2, table);
+                    ps.setString(3, role);
+                    ps.execute();
+                } catch (SQLException e) {
+                    throw new SQLException("cannot enable CDC on " + schema + "." + table
+                            + " (" + e.getMessage() + "); enable it manually with:"
+                            + " EXEC sys.sp_cdc_enable_table @source_schema=N'" + schema
+                            + "', @source_name=N'" + table + "', @role_name="
+                            + (role == null ? "NULL" : "N'" + role + "'")
+                            + ", @supports_net_changes=1", e);
+                }
+            }
+            log.info("Auto-sync: created SQL Server capture instance(s) for {} new table(s):"
+                    + " {} (role {})", tables.size(), tables, role == null ? "db_owner" : role);
+        }
+    }
+
+    private static String existingCdcRole(Connection conn) throws SQLException {
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery("SELECT TOP 1 role_name FROM cdc.change_tables")) {
+            return rs.next() ? rs.getString(1) : null;
+        }
+    }
+
+    private static boolean captureInstanceExists(Connection conn, String schema, String table)
+            throws SQLException {
+        String sql = "SELECT COUNT(*) FROM cdc.change_tables WHERE"
+                + " OBJECT_SCHEMA_NAME(source_object_id) = ? AND OBJECT_NAME(source_object_id) = ?";
+        try (java.sql.PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, schema);
+            ps.setString(2, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() && rs.getLong(1) > 0L;
+            }
         }
     }
 

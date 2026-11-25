@@ -133,6 +133,13 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private long lastNoInstanceWarnMs;
 
     private volatile boolean running = true;
+
+    /**
+     * Last source-catalog scan for tables created after auto-sync was enabled. A table
+     * without a capture instance produces no change rows at all, so the catalog is asked
+     * once a minute instead of waiting for a row that will never come.
+     */
+    private volatile long lastAutoSyncCheckMs;
     private volatile Connection currentSource;
     /**
      * The change-function statement currently executing. {@code requestStop()} cancels it so
@@ -260,6 +267,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);
+                // Between windows is the only safe point: the targeted load opens its own
+                // source connection and writes the target.
+                reconcileAutoSync(projectId);
                 // F-13 counts APPLY failures only. drain marks this when a target flush
                 // fails; a source read/stream failure mid-window leaves it false, so it
                 // retries with backoff (the same rule as "source unreachable"). Counting
@@ -1033,6 +1043,30 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     /** The LOB spill store, or {@code null} when streaming is switched off. */
     private LobSpillStore spillStore() {
         return lobSpillStore.get(properties);
+    }
+
+    /**
+     * Adds source tables created after auto-sync was enabled and creates their capture
+     * instance (copying the role an existing instance uses). Runs between drain windows; a
+     * failure leaves the existing tables streaming and is retried on the next scan.
+     */
+    private void reconcileAutoSync(long projectId) {
+        if (!ctx.getConfig().isAutoSyncNewTables()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAutoSyncCheckMs < 60_000L) {
+            return;
+        }
+        lastAutoSyncCheckMs = now;
+        try {
+            baselineService.reconcileAutoSync(ctx);
+        } catch (Exception e) {
+            log.warn("Project {}: auto-sync reconciliation failed; existing tables keep"
+                    + " streaming and the new ones are retried on a later scan: {}",
+                    projectId, e.toString());
+            stats.setLastError("auto-sync: " + CdcFailureClassifier.describe(e));
+        }
     }
 
     private void flushTransaction(long projectId, String txLsn,

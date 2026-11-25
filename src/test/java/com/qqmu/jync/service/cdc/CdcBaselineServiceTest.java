@@ -764,19 +764,25 @@ class CdcBaselineServiceTest {
                 redisBaseline, autoSync);
 
         assertThat(lmService.reconcileAutoSync(autoSyncCtx(22L,
-                com.qqmu.jync.model.CaptureStrategy.SQLSERVER_CDC))).isFalse();
+                com.qqmu.jync.model.CaptureStrategy.YSTREAM_CDC))).isFalse();
 
         verify(autoSync, never()).reconcile(any(), any(), any(), any());
     }
 
     private SyncContext logMinerAutoSyncCtx(String schema, String product,
                                             Connection conn) throws SQLException {
+        return autoSyncCtxFor(com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC, schema,
+                product, conn);
+    }
+
+    private SyncContext autoSyncCtxFor(com.qqmu.jync.model.CaptureStrategy strategy,
+                                       String schema, String product, Connection conn)
+            throws SQLException {
         com.qqmu.jync.model.Project project = new com.qqmu.jync.model.Project();
         project.setId(31L);
         project.setName("lm-auto-sync");
         project.setTargetDbId(2L);
-        com.qqmu.jync.dto.SyncConfig cfg = autoSyncConfig(
-                com.qqmu.jync.model.CaptureStrategy.LOGMINER_CDC);
+        com.qqmu.jync.dto.SyncConfig cfg = autoSyncConfig(strategy);
         MetadataReader reader = mock(MetadataReader.class);
         when(reader.listTableNames(any(Connection.class), any()))
                 .thenReturn(java.util.List.of("orders", "orders2"));
@@ -843,6 +849,103 @@ class CdcBaselineServiceTest {
                 logMinerAutoSyncCtx("OWNER", "Oracle", conn)))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("ORA-01031");
+        verify(autoSync).rollback(any(), any(), eq(java.util.List.of("orders2")));
+    }
+
+    private SyncContext sqlServerAutoSyncCtx(Connection conn) throws SQLException {
+        return autoSyncCtxFor(com.qqmu.jync.model.CaptureStrategy.SQLSERVER_CDC, "dbo",
+                "Microsoft SQL Server", conn);
+    }
+
+    @Test
+    void sqlServerNewTablesGetACaptureInstanceWithTheExistingRole() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService svc = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any()))
+                .thenReturn(java.util.List.of("orders2"));
+        SyncResult ok = successResult();
+        when(engine.runCycle(any())).thenReturn(ok);
+        Connection conn = mock(Connection.class);
+        Statement roleSt = mock(Statement.class);
+        ResultSet roleRs = mock(ResultSet.class);
+        when(conn.createStatement()).thenReturn(roleSt);
+        when(roleSt.executeQuery(any(String.class))).thenReturn(roleRs);
+        when(roleRs.next()).thenReturn(true);
+        when(roleRs.getString(1)).thenReturn("cdc_Admin");
+        java.sql.PreparedStatement existsPs = mock(java.sql.PreparedStatement.class);
+        ResultSet exists = mock(ResultSet.class);
+        when(exists.next()).thenReturn(true);
+        when(exists.getLong(1)).thenReturn(0L);
+        when(existsPs.executeQuery()).thenReturn(exists);
+        java.sql.PreparedStatement enablePs = mock(java.sql.PreparedStatement.class);
+        when(conn.prepareStatement(contains("sp_cdc_enable_table"))).thenReturn(enablePs);
+        when(conn.prepareStatement(contains("cdc.change_tables"))).thenReturn(existsPs);
+
+        svc.reconcileAutoSync(sqlServerAutoSyncCtx(conn));
+
+        verify(enablePs).setString(1, "dbo");
+        verify(enablePs).setString(2, "orders2");
+        verify(enablePs).setString(3, "cdc_Admin");
+        verify(enablePs).execute();
+    }
+
+    @Test
+    void anExistingSqlServerCaptureInstanceIsNotEnabledTwice() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService svc = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any()))
+                .thenReturn(java.util.List.of("orders2"));
+        SyncResult ok = successResult();
+        when(engine.runCycle(any())).thenReturn(ok);
+        Connection conn = mock(Connection.class);
+        Statement roleSt = mock(Statement.class);
+        ResultSet roleRs = mock(ResultSet.class);
+        when(conn.createStatement()).thenReturn(roleSt);
+        when(roleSt.executeQuery(any(String.class))).thenReturn(roleRs);
+        when(roleRs.next()).thenReturn(false);
+        java.sql.PreparedStatement existsPs = mock(java.sql.PreparedStatement.class);
+        ResultSet exists = mock(ResultSet.class);
+        when(exists.next()).thenReturn(true);
+        when(exists.getLong(1)).thenReturn(1L);
+        when(existsPs.executeQuery()).thenReturn(exists);
+        when(conn.prepareStatement(contains("cdc.change_tables"))).thenReturn(existsPs);
+
+        svc.reconcileAutoSync(sqlServerAutoSyncCtx(conn));
+
+        verify(conn, never()).prepareStatement(contains("sp_cdc_enable_table"));
+    }
+
+    @Test
+    void aFailedSqlServerEnablementRollsTheAdditionBack() throws Exception {
+        AutoSyncService autoSync = mock(AutoSyncService.class);
+        CdcBaselineService svc = new CdcBaselineService(
+                positionStore, clientFactory, taskStore, dataSourceManager, engine,
+                redisBaseline, autoSync);
+        when(autoSync.reconcile(any(), any(), any(), any()))
+                .thenReturn(java.util.List.of("orders2"));
+        Connection conn = mock(Connection.class);
+        Statement roleSt = mock(Statement.class);
+        ResultSet roleRs = mock(ResultSet.class);
+        when(conn.createStatement()).thenReturn(roleSt);
+        when(roleSt.executeQuery(any(String.class))).thenReturn(roleRs);
+        when(roleRs.next()).thenReturn(false);
+        java.sql.PreparedStatement existsPs = mock(java.sql.PreparedStatement.class);
+        ResultSet exists = mock(ResultSet.class);
+        when(exists.next()).thenReturn(true);
+        when(exists.getLong(1)).thenReturn(0L);
+        when(existsPs.executeQuery()).thenReturn(exists);
+        java.sql.PreparedStatement enablePs = mock(java.sql.PreparedStatement.class);
+        doThrow(new SQLException("SQL Server Agent is not running")).when(enablePs).execute();
+        when(conn.prepareStatement(contains("sp_cdc_enable_table"))).thenReturn(enablePs);
+        when(conn.prepareStatement(contains("cdc.change_tables"))).thenReturn(existsPs);
+
+        assertThatThrownBy(() -> svc.reconcileAutoSync(sqlServerAutoSyncCtx(conn)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SQL Server Agent is not running");
         verify(autoSync).rollback(any(), any(), eq(java.util.List.of("orders2")));
     }
 
