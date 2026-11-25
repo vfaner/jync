@@ -86,6 +86,7 @@
 
     <form class="support-form" data-role="support-form">
       <textarea class="support-input" data-role="support-input" rows="1" maxlength="20000"
+                th:title="#{support.input.hint}"
                 th:placeholder="#{support.input.placeholder}"></textarea>
       <button type="submit" class="support-send" data-role="support-send"
               th:aria-label="#{support.send}" th:title="#{support.send}">

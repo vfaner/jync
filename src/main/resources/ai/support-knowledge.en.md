@@ -108,6 +108,19 @@ above that it is skipped.
   initialisation or restart-time setting), then recreate the tables and resync. Objects
   already created in lower case are not renamed automatically.
 
+## What a full load actually does
+
+- A full load is not a comparison or a watermark probe: Jync reads the whole source table and
+  upserts it into the target, recording the watermark as a side effect; later incremental
+  cycles read only what changed after that watermark.
+- When the target already holds data, it is not cleared by default: existing rows are updated
+  and missing rows are filled. Rows that exist only on the target are not removed unless delete
+  propagation is enabled and the delete comparison runs (within its row ceiling).
+- Dialects with an "unchanged row" guard may report 0 rows for unchanged rows, but the source
+  read and the statement still execute; this is not a free consistency check.
+- There is no "set the watermark without copying" option; a baseline after a strategy switch
+  always reads the table again.
+
 ## Why a strategy switch triggers another full load
 
 - Log CDC (binlog / redo / WAL / change tables / YStream) and cursor polling are both
