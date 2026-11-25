@@ -122,6 +122,9 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
      * minute instead of waiting for a change that cannot arrive.
      */
     private volatile long lastAutoSyncCheckMs;
+
+    /** Service the current stream is attached to; the drain loop's auto-sync scan needs it. */
+    private volatile String activeServiceName;
     /** The open stream; {@code requestStop()} closes it so a blocking poll returns at once. */
     private volatile YStreamClientAdapter currentAdapter;
 
@@ -225,6 +228,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         }
         try {
             Outcome outcome = prepare(projectId);
+            activeServiceName = outcome.serviceName();
             if (outcome.baselineRequired()) {
                 // The service was started BEFORE the baseline, so every change the baseline
                 // is about to read is already inside the stream; replaying from the anchor
@@ -554,6 +558,10 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     private int drain(YStreamClientAdapter adapter) throws Exception {
         int applied = 0;
         while (running && !Thread.currentThread().isInterrupted()) {
+            // A healthy YStream stream stays open for hours, so the attach loop's own
+            // between-cycles scan would never run: checkpoints (event == null) are the
+            // only recurring pulse the drain gives us. The scan itself is throttled.
+            reconcileAutoSync(ctx.projectId(), activeServiceName);
             YStreamEvent event = adapter.next();
             if (event == null) {
                 continue;   // a check point tick, not a reason to close the stream
