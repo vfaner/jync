@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.fanout;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -113,7 +114,9 @@ class FanoutBindingResolverTest {
         });
         FanoutBindingResolver resolver = new FanoutBindingResolver(ctx(reader), null);
 
-        assertThat(resolver.resolve("dbo", "orders")).isNull();
+        assertThatThrownBy(() -> resolver.resolve("dbo", "orders"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("unavailable");
         assertThat(resolver.resolve("dbo", "orders")).isNotNull();
     }
 }

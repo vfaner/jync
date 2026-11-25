@@ -54,6 +54,8 @@ public final class FanoutRuntime implements AutoCloseable {
     private final Map<Long, Long> lastPositionWriteAt = new ConcurrentHashMap<>();
     private static final long POSITION_WRITE_INTERVAL_MS = 1_000L;
     private final java.util.Set<Long> barrierAcked = ConcurrentHashMap.newKeySet();
+    /** Targets already reported as capped, so the cap is logged once, not every tick. */
+    private final java.util.Set<Long> cappedWarned = ConcurrentHashMap.newKeySet();
     private volatile String baselineMarker;
     /** Set by close(): a supervisor tick that is already running must not start workers. */
     private volatile boolean closed;
@@ -127,14 +129,18 @@ public final class FanoutRuntime implements AutoCloseable {
                 continue;
             }
             FanoutBaselineService.Target target = targets.get(i);
-            int attempts = restartAttempts.merge(target.targetDbId(), 1, Integer::sum);
+            int attempts = restartAttempts.getOrDefault(target.targetDbId(), 0);
             // Keep the subscription open: closing it would stop spooling for this target
             // between the failure and the replacement, losing the events in that window.
-            if (attempts > 5) {
-                log.error("Fan-out target {} stopped {} times; not restarting it again"
-                        + " until the project restarts", target.targetDbId(), attempts - 1);
+            if (attempts >= 5) {
+                // Do not keep counting: the old code logged "stopped 6, 7, 8…" forever.
+                if (cappedWarned.add(target.targetDbId())) {
+                    log.error("Fan-out target {} stopped {} times; not restarting it again"
+                            + " until the project restarts", target.targetDbId(), attempts);
+                }
                 continue;
             }
+            restartAttempts.put(target.targetDbId(), attempts + 1);
             log.warn("Fan-out target {} worker stopped ({}); restarting attempt {}",
                     target.targetDbId(), worker.getLastError(), attempts);
             if (closed) {
@@ -182,8 +188,14 @@ public final class FanoutRuntime implements AutoCloseable {
 
     /** Runs the shared baseline; returns the per-table loads (empty when nothing to load). */
     public List<FanoutBaselineService.TableLoad> baseline() throws Exception {
-        List<FanoutBaselineService.TableLoad> loads =
-                baselineService.baseline(sourceCtx, sourceConn, targets, transport);
+        // Its own connection: workers are already resolving bindings on the runtime's
+        // connection from other threads, and a JDBC connection is not thread-safe (SQL
+        // Server corrupts its TDS stream outright; others close the open ResultSet).
+        List<FanoutBaselineService.TableLoad> loads;
+        try (Connection baselineConn = sourceCtx.getConnectionProvider()
+                .open(sourceCtx.getSourceConfig())) {
+            loads = baselineService.baseline(sourceCtx, baselineConn, targets, transport);
+        }
         if (loads.isEmpty()) {
             return loads;
         }
@@ -265,6 +277,7 @@ public final class FanoutRuntime implements AutoCloseable {
         // A successful transaction proves the target is healthy again; a later outage gets
         // a fresh restart budget instead of inheriting an old count.
         restartAttempts.remove(targetDbId);
+        cappedWarned.remove(targetDbId);
         // Same ruling for the shared repair budget: the counter is keyed by project, so
         // without this a fan-out project would spend its whole allowance across unrelated
         // repairs and then refuse a genuine one until the process restarts.

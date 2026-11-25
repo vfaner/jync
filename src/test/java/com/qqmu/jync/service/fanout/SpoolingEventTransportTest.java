@@ -108,13 +108,18 @@ class SpoolingEventTransportTest {
     }
 
     @Test
-    void exceedingThePerTargetCapIsAVisibleErrorNotASilentDrop(@TempDir Path dir)
-            throws Exception {
+    void exceedingThePerTargetCapFailsThatTargetVisiblyWithoutAbortingTheCapture(
+            @TempDir Path dir) throws Exception {
         SpoolingEventTransport transport = new SpoolingEventTransport(dir, 64, mapper);
-        transport.subscribe("slow");
-        assertThatThrownBy(() -> transport.publish(row("tx-1", 1L)))
+        EventTransport.Subscription slow = transport.subscribe("slow");
+
+        // The capture keeps running: a dead target must not stop the healthy ones.
+        transport.publish(row("tx-1", 1L));
+        transport.publish(row("tx-2", 2L));
+
+        assertThatThrownBy(() -> slow.poll(Duration.ofSeconds(1)))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("cap");
+                .hasMessageContaining("no longer writable");
         transport.close();
     }
 

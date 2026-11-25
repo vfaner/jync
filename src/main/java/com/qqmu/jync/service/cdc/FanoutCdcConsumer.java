@@ -185,6 +185,10 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 new CdcFanoutSink(runtime.transport());
         CdcEventStreamHandler.TransactionSink sink = (changes, mark) -> {
             capture.apply(changes, mark);
+            // The inner stream loop can run for hours without reaching its own lease check;
+            // an expired/force-released lease must stop this node before it advances the
+            // shared anchor, or a takeover node would stream the same window in parallel.
+            ctx.requireLease();
             if (mark.getFile() != null) {
                 positionStore.advance(projectId, mark.getFile(), mark.getPos(),
                         mark.getGtidSet());

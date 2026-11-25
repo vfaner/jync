@@ -70,19 +70,20 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
             cache.put(key, binding);
             return binding;
         } catch (SQLException | RuntimeException e) {
-            // NOT cached: a failed catalog read (a throttled pool, a driver hiccup) must be
-            // retried by the next event, not turned into "this table is unsyncable" forever.
+            // NOT cached, and NOT reported as null: null means "this table is not synced",
+            // which the applier treats as rows to skip and then ACKS. A failed catalog read
+            // must fail the transaction so the worker replays it instead of dropping data.
             long now = System.currentTimeMillis();
             Long last = lastWarnAt.get(key);
             if (last == null || now - last >= WARN_INTERVAL_MS) {
                 lastWarnAt.put(key, now);
-                log.warn("Fan-out binding for {}.{} unavailable (will retry): {}",
+                log.warn("Fan-out binding for {}.{} unavailable (transaction will retry): {}",
                         schema, table, e.toString());
             } else {
                 log.debug("Fan-out binding for {}.{} still unavailable: {}",
                         schema, table, e.toString());
             }
-            return null;
+            throw new IllegalStateException("fan-out binding for " + key + " unavailable", e);
         }
     }
 

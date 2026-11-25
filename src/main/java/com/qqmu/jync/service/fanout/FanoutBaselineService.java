@@ -21,6 +21,7 @@ import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.FanoutProgress;
 import com.qqmu.jync.model.ObjectType;
+import com.qqmu.jync.service.sync.SourceReadSession;
 import com.qqmu.jync.service.sync.StructureSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
 
@@ -138,8 +139,15 @@ public final class FanoutBaselineService {
         String sql = "SELECT * FROM " + sourceCtx.getSourceDialect()
                 .qualify(sourceCtx.getSourceSchema(), table.getName());
         long rows = 0;
-        try (PreparedStatement ps = sourceConn.prepareStatement(sql)) {
-            ps.setFetchSize(ROW_BATCH);
+        com.qqmu.jync.service.converter.SqlDialect dialect = sourceCtx.getSourceDialect();
+        // A streamed read, exactly like the single-target full load: with autocommit on the
+        // MySQL/PG drivers ignore fetchSize and buffer the whole table client-side, which a
+        // multi-million-row table turns into an OOM when batches are only bounded by bytes.
+        boolean needsTransaction = dialect != null
+                && dialect.requiresTransactionalSourceForStreaming();
+        try (PreparedStatement ps = sourceConn.prepareStatement(sql);
+             SourceReadSession session = SourceReadSession.begin(sourceConn, needsTransaction)) {
+            ps.setFetchSize(dialect == null ? ROW_BATCH : dialect.streamingFetchSize(ROW_BATCH));
             try (ResultSet rs = ps.executeQuery()) {
                 ResultSetMetaData md = rs.getMetaData();
                 int columns = md.getColumnCount();
@@ -164,6 +172,7 @@ public final class FanoutBaselineService {
                     publishBatch(transport, sourceCtx, table, batch, batchIndex);
                 }
             }
+            session.commit();
         }
         return rows;
     }

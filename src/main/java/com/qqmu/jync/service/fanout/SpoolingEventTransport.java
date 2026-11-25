@@ -63,8 +63,17 @@ public final class SpoolingEventTransport implements EventTransport {
         }
         byte[] bytes = EventCodec.serialize(event);
         for (SpoolSubscription sub : subscriptions) {
-            if (!sub.closed) {
+            if (sub.closed || sub.failure != null) {
+                continue;
+            }
+            try {
                 sub.append(bytes);
+            } catch (RuntimeException e) {
+                // One target at its cap must not abort the capture for every other target —
+                // that is the isolation this transport exists for. The failed subscription
+                // stops accepting events and makes its worker fail visibly; the healthy
+                // targets keep receiving this same event.
+                sub.markFailed(e);
             }
         }
     }
@@ -86,6 +95,8 @@ public final class SpoolingEventTransport implements EventTransport {
         private long readPosition;
         private long ackPosition;
         private volatile boolean closed;
+        /** Set when this target can no longer accept events (cap reached, disk full). */
+        private volatile RuntimeException failure;
 
         SpoolSubscription(String group) throws IOException {
             this.group = group;
@@ -167,10 +178,22 @@ public final class SpoolingEventTransport implements EventTransport {
             return group;
         }
 
+        void markFailed(RuntimeException e) {
+            if (failure == null) {
+                failure = e;
+                log.error("Fan-out spool for target '{}' stopped accepting events: {}",
+                        group, e.getMessage());
+            }
+        }
+
         @Override
         public synchronized ChangeEvent poll(Duration timeout) throws InterruptedException {
             if (closed) {
                 return null;
+            }
+            if (failure != null) {
+                throw new IllegalStateException("fan-out spool for target '" + group
+                        + "' is no longer writable", failure);
             }
             try {
                 spool.seek(readPosition);

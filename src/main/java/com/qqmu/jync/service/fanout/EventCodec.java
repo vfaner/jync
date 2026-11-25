@@ -26,19 +26,36 @@ final class EventCodec {
      * graph and the value types a row can carry are allowed through; everything else is
      * refused and the entry is skipped with a logged error.
      */
-    /** Explicit allow-list; pattern strings cannot express the nested/array names we need. */
+    /**
+     * Concrete value types a row may carry. Package-prefix allowances would also admit
+     * gadget primitives such as SerializedLambda and Proxy, which is exactly what the
+     * allow-list exists to keep out.
+     */
+    private static final java.util.Set<Class<?>> ALLOWED_TYPES = java.util.Set.of(
+            java.lang.Enum.class, java.lang.Number.class, Object.class,
+            String.class, Boolean.class, Byte.class, Short.class, Integer.class,
+            Long.class, Float.class, Double.class, Character.class,
+            java.math.BigDecimal.class, java.math.BigInteger.class,
+            java.util.Date.class, java.sql.Date.class, java.sql.Time.class,
+            java.sql.Timestamp.class,
+            java.time.Instant.class, java.time.LocalDate.class, java.time.LocalTime.class,
+            java.time.LocalDateTime.class, java.time.OffsetTime.class,
+            java.time.OffsetDateTime.class, java.time.ZonedDateTime.class,
+            java.time.ZoneId.class, java.time.ZoneOffset.class,
+            java.time.Duration.class, java.time.Period.class);
+
     private static boolean allowedClass(Class<?> type) {
         if (type.isPrimitive()) {
             return true;
         }
         String name = type.getName();
-        if (type == ChangeEvent.class
+        if (ALLOWED_TYPES.contains(type)
                 || name.startsWith(ChangeEvent.class.getName() + "$")
+                || type == ChangeEvent.class
                 || type == java.util.LinkedHashMap.class
                 || type == java.util.HashMap.class
                 || type == java.util.ArrayList.class
                 || type == java.util.UUID.class
-                || type == java.util.Date.class
                 || java.util.Map.Entry.class.isAssignableFrom(type)
                 // Map.of / List.of and unmodifiable wrappers: plain containers, no gadgets.
                 || name.startsWith("java.util.ImmutableCollections$")
@@ -48,10 +65,7 @@ final class EventCodec {
                 || name.startsWith("java.util.CollSer")) {
             return true;
         }
-        return name.startsWith("java.lang.")
-                || name.startsWith("java.math.")
-                || name.startsWith("java.sql.")
-                || name.startsWith("java.time.");
+        return false;
     }
 
     private static final ObjectInputFilter FILTER = info -> {

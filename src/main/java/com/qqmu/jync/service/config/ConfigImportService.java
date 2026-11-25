@@ -295,7 +295,8 @@ public class ConfigImportService {
                 project.setTargetDbId(map(databaseIds, dto.targetDbId()));
                 project.setTargetRedisId(null);
             }
-            project.setSyncConfig(remapFanoutTargets(dto.syncConfig(), databaseIds));
+            project.setSyncConfig(remapFanoutTargets(dto.syncConfig(), databaseIds,
+                    redisIds));
             project.setEnabled(dto.enabled());
             project.setOwnerUsername(dto.ownerUsername());
             projectIds.put(dto.id(), projects.save(project).getId());
@@ -478,24 +479,36 @@ public class ConfigImportService {
      * an installation with different connection ids would otherwise point at unrelated (or
      * missing) targets.
      */
-    private String remapFanoutTargets(String syncConfig, Map<Long, Long> databaseIds) {
+    private String remapFanoutTargets(String syncConfig, Map<Long, Long> databaseIds,
+                                     Map<Long, Long> redisIds) {
         if (syncConfig == null || syncConfig.isBlank()) {
             return syncConfig;
         }
         try {
             tools.jackson.databind.JsonNode root = objectMapper.readTree(syncConfig);
-            tools.jackson.databind.JsonNode fanout = root.get("fanoutTargetDbIds");
-            if (fanout == null || !fanout.isArray() || fanout.isEmpty()) {
+            if (!(root instanceof tools.jackson.databind.node.ObjectNode object)) {
                 return syncConfig;
             }
-            tools.jackson.databind.node.ArrayNode mapped =
-                    objectMapper.createArrayNode();
-            for (tools.jackson.databind.JsonNode id : fanout) {
-                mapped.add(map(databaseIds, id.asLong()));
+            boolean changed = false;
+            tools.jackson.databind.JsonNode fanout = root.get("fanoutTargetDbIds");
+            if (fanout != null && fanout.isArray() && !fanout.isEmpty()) {
+                tools.jackson.databind.node.ArrayNode mapped =
+                        objectMapper.createArrayNode();
+                for (tools.jackson.databind.JsonNode id : fanout) {
+                    mapped.add(map(databaseIds, id.asLong()));
+                }
+                object.set("fanoutTargetDbIds", mapped);
+                changed = true;
             }
-            ((tools.jackson.databind.node.ObjectNode) root)
-                    .set("fanoutTargetDbIds", mapped);
-            return objectMapper.writeValueAsString(root);
+            // The Redis event transport stores a Redis *target* id, a different id space
+            // from database connections. Left as-is it would point at the exporting
+            // installation's target — a missing one (start refuses) or an unrelated one.
+            tools.jackson.databind.JsonNode redis = root.get("fanoutRedisTargetId");
+            if (redis != null && !redis.isNull()) {
+                object.put("fanoutRedisTargetId", map(redisIds, redis.asLong()));
+                changed = true;
+            }
+            return changed ? objectMapper.writeValueAsString(root) : syncConfig;
         } catch (ConfigPackageException e) {
             throw e;
         } catch (RuntimeException e) {
