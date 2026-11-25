@@ -416,6 +416,29 @@ class CdcEventStreamHandlerTest {
     }
 
     @Test
+    void aCreateTableForAnUntrackedTableIsReportedToTheAutoSyncSink() {
+        List<String> captured = new ArrayList<>();
+        CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
+                new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
+                CdcTransactionBudget.unlimited(), null, null,
+                (db, table, sql) -> {
+                    captured.add(db);
+                    captured.add(table);
+                    captured.add(sql);
+                });
+        QueryEventData ddl = new QueryEventData();
+        ddl.setSql("CREATE TABLE app.new_table (id BIGINT PRIMARY KEY)");
+        ddl.setDatabase("app");
+
+        withSink.onEvent(event(EventType.QUERY, ddl, 330L));
+
+        assertThat(captured).hasSize(3);
+        assertThat(captured.get(0)).isEqualTo("app");
+        assertThat(captured.get(1)).isEqualTo("new_table");
+        assertThat(captured.get(2)).contains("CREATE TABLE app.new_table");
+    }
+
+    @Test
     void aSkippedDdlCarriesTheFileItWasSeenIn() {
         // The binlog position identifies the event only together with its file. A DDL that
         // follows a rotation must be filed in the new file, not whichever file the last

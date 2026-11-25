@@ -51,6 +51,16 @@
                 <span class="help" th:text="#{option.syncIndexesHelp}">help</span>
             </span>
         </label>
+        <!-- 自动同步新增表:开启后只加入开启之后出现的源表;首轮先快照现有表清单。 -->
+        <label class="switch">
+            <input type="checkbox" name="autoSyncNewTables" value="true"
+                   th:checked="${config.autoSyncNewTables}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong th:text="#{option.autoSyncNewTables}">Auto-sync new tables</strong>
+                <span class="help" th:text="#{option.autoSyncNewTablesHelp}">help</span>
+            </span>
+        </label>
         <th:block th:replace="~{project-detail/baseline-options :: group}"/>
     </div>
 </div>

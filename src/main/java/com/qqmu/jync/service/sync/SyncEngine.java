@@ -67,6 +67,7 @@ public class SyncEngine {
      * supplies it; a test that wants the audit uses the full constructor and a mock.
      */
     private final ContentAuditService contentAudit;
+    private final AutoSyncService autoSync;
 
     /**
      * When each table's row counts were last audited, keyed by {@code projectId:tableName}.
@@ -133,7 +134,8 @@ public class SyncEngine {
                       DataSyncService dataSync,
                       SyncStateWriter stateWriter,
                       SyncProperties properties,
-                      ContentAuditService contentAudit) {
+                      ContentAuditService contentAudit,
+                      AutoSyncService autoSync) {
         this.dataSourceManager = dataSourceManager;
         this.changeDetector = changeDetector;
         this.cursorResolver = cursorResolver;
@@ -142,6 +144,20 @@ public class SyncEngine {
         this.stateWriter = stateWriter;
         this.properties = properties;
         this.contentAudit = contentAudit;
+        this.autoSync = autoSync;
+    }
+
+    /** Hand-built test contexts keep the pre-auto-sync constructor. */
+    SyncEngine(DataSourceManager dataSourceManager,
+               ChangeDetector changeDetector,
+               CursorStrategyResolver cursorResolver,
+               StructureSyncService structureSync,
+               DataSyncService dataSync,
+               SyncStateWriter stateWriter,
+               SyncProperties properties,
+               ContentAuditService contentAudit) {
+        this(dataSourceManager, changeDetector, cursorResolver, structureSync, dataSync,
+                stateWriter, properties, contentAudit, null);
     }
 
     /**
@@ -156,7 +172,7 @@ public class SyncEngine {
                SyncStateWriter stateWriter,
                SyncProperties properties) {
         this(dataSourceManager, changeDetector, cursorResolver, structureSync, dataSync,
-                stateWriter, properties, null);
+                stateWriter, properties, null, null);
     }
 
     /**
@@ -351,6 +367,14 @@ public class SyncEngine {
 
     DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx)
             throws SQLException {
+        // Auto-sync is a polling-path feature in this version. Log-CDC projects reconcile
+        // through their consumer's per-table baseline, not through a polling metadata read.
+        if (autoSync != null && ctx.getConfig().isAutoSyncNewTables()
+                && ctx.getRepairTables() == null
+                && !ctx.getConfig().getCaptureStrategyOrDefault().isLogCdc()) {
+            autoSync.reconcile(ctx.getProject(), ctx.getConfig(),
+                    ctx.getSourceReader().listTableNames(sourceConn, ctx.getSourceSchema()));
+        }
         List<String> tables;
         List<String> views;
         List<String> procs;

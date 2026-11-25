@@ -107,6 +107,17 @@ public class SyncConfig {
      */
     private List<String> cursorColumnPriority = new ArrayList<>();
 
+    /**
+     * When true, source tables that appear after the switch was enabled are added to this
+     * project automatically (the first cycle after enabling snapshots the current table
+     * list, so existing unselected tables are not swept in).
+     */
+    private boolean autoSyncNewTables;
+    /** Source tables known when auto-sync was enabled, plus every table it auto-added. */
+    private List<String> autoSyncKnownTables;
+    /** Tables the operator removed from auto-sync; they are never added again. */
+    private List<String> autoSyncIgnoredTables = new ArrayList<>();
+
     /** Table name mapping source -> target; unmapped tables keep their name. */
     private Map<String, String> tableNameMapping = new HashMap<>();
 

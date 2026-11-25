@@ -917,6 +917,14 @@ public class ProjectController {
                 config.setSyncDeletes(form.isSyncDeletes());
                 config.setDisableTargetConstraints(form.isDisableTargetConstraints());
                 config.setTruncateBeforeInitialLoad(form.isTruncateBeforeInitialLoad());
+                // Enabling takes a fresh snapshot on the next cycle; without clearing it, a
+                // table created while the switch was off would be treated as "new" the
+                // moment it is turned back on.
+                boolean autoSync = form.isAutoSyncNewTables();
+                if (autoSync && !config.isAutoSyncNewTables()) {
+                    config.setAutoSyncKnownTables(null);
+                }
+                config.setAutoSyncNewTables(autoSync);
                 // 自定义调度开关:关闭时清空调度的两个字段,让引擎回退到全局默认值。
                 // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。
                 if (form.isCustomSchedule()) {

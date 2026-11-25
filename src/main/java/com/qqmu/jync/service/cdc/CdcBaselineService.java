@@ -4,6 +4,8 @@ import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.function.BooleanSupplier;
 
 import org.springframework.stereotype.Service;
@@ -13,8 +15,10 @@ import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.SyncTargetKind;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.projection.redis.RedisBaselineService;
+import com.qqmu.jync.service.sync.AutoSyncService;
 import com.qqmu.jync.service.sync.LockLostException;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.SyncEngine;
@@ -43,17 +47,29 @@ public class CdcBaselineService {
     private final DataSourceManager dataSourceManager;
     private final SyncEngine engine;
     private final RedisBaselineService redisBaseline;
+    private final AutoSyncService autoSync;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public CdcBaselineService(CdcPositionStore positionStore, BinlogClientFactory clientFactory,
                               SyncTaskStore taskStore,
                               DataSourceManager dataSourceManager, SyncEngine engine,
-                              RedisBaselineService redisBaseline) {
+                              RedisBaselineService redisBaseline, AutoSyncService autoSync) {
         this.positionStore = positionStore;
         this.clientFactory = clientFactory;
         this.taskStore = taskStore;
         this.dataSourceManager = dataSourceManager;
         this.engine = engine;
         this.redisBaseline = redisBaseline;
+        this.autoSync = autoSync;
+    }
+
+    /** Kept for hand-built consumers/tests written before auto-sync existed. */
+    public CdcBaselineService(CdcPositionStore positionStore, BinlogClientFactory clientFactory,
+                              SyncTaskStore taskStore,
+                              DataSourceManager dataSourceManager, SyncEngine engine,
+                              RedisBaselineService redisBaseline) {
+        this(positionStore, clientFactory, taskStore, dataSourceManager, engine, redisBaseline,
+                null);
     }
 
     /** SHOW BINARY LOG STATUS (8.4+) with SHOW MASTER STATUS fallback; GTID set when gtid_mode=ON. */
@@ -335,6 +351,66 @@ public class CdcBaselineService {
             }
         }
         return logMinerAnchorScn;
+    }
+
+    /**
+     * Adds source tables that appeared after the auto-sync switch was enabled and gives each
+     * one its own full load, without resetting the CDC position or touching other tables.
+     *
+     * <p>The caller invokes this while no binlog client is attached (before connecting or
+     * after a disconnect). The stored position is therefore the anchor: changes made during
+     * the load are replayed from it afterwards, and the new tables' full load covers their
+     * rows up to the load; both are idempotent upserts. A failed load rolls the additions
+     * back so the next reconnect retries instead of streaming a table with missing history.
+     *
+     * @return true when at least one table was added and loaded
+     */
+    public boolean reconcileAutoSync(SyncContext ctx) throws Exception {
+        if (autoSync == null || ctx.getConfig() == null
+                || !ctx.getConfig().isAutoSyncNewTables()
+                // First version: only the binlog stream can start tracking a table without
+                // an engine-specific enablement step. SQL Server capture instances, YStream
+                // services and LogMiner prerequisites stay manual (and are reported by their
+                // own probes); enabling auto-sync there would look successful while the new
+                // table never streams.
+                || ctx.getConfig().getCaptureStrategyOrDefault() != CaptureStrategy.BINLOG_CDC
+                || ctx.getProject().getTargetKindOrDefault() == SyncTargetKind.REDIS) {
+            return false;
+        }
+        List<String> added;
+        try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
+            List<String> sourceTables = ctx.getSourceReader()
+                    .listTableNames(conn, ctx.getSourceSchema());
+            added = autoSync.reconcile(ctx.getProject(), ctx.getConfig(), sourceTables, name -> {
+                try {
+                    TableMeta table = ctx.getSourceReader()
+                            .readTable(conn, ctx.getSourceSchema(), name);
+                    return table != null && table.hasPrimaryKey();
+                } catch (SQLException e) {
+                    log.debug("Auto-sync: cannot read metadata for {}: {}", name, e.getMessage());
+                    return false;
+                }
+            });
+        }
+        if (added.isEmpty()) {
+            return false;
+        }
+        try {
+            SyncResult result = engine.runCycle(ctx.toBuilder()
+                    .repairTables(new LinkedHashSet<>(added))
+                    .cdcRepairRun(true)
+                    .build());
+            if (!result.isSuccess()) {
+                throw new IllegalStateException("auto-sync baseline did not succeed for "
+                        + added + ": " + result.getErrors());
+            }
+            log.info("Project '{}': auto-sync baseline loaded {} new table(s): {}",
+                    ctx.projectId(), added.size(), added);
+            return true;
+        } catch (RuntimeException | Error e) {
+            autoSync.rollback(ctx.getProject(), ctx.getConfig(), added);
+            throw e;
+        }
     }
 
     public void runBaseline(SyncContext ctx, BooleanSupplier lockRenewer) {

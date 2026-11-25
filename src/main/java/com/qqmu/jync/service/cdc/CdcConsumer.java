@@ -145,6 +145,8 @@ public final class CdcConsumer implements ManagedCdcConsumer {
      * loop measures the dwell after the stream ends and resets only past the threshold.
      */
     private final AtomicLong connectedAtNs = new AtomicLong();
+    /** Auto-sync table discovery is a metadata listing; do not pay it on every tight reconnect. */
+    private volatile long lastAutoSyncCheckMs;
 
     /** Minimum demonstrated connection lifetime before the backoff resets (ruling R3b). */
     static final long MIN_BACKOFF_RESET_DWELL_MS = 30_000L;
@@ -225,6 +227,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             if (position != null) {
                 lastFile = position.getBinlogFile();             // NULL-FILE 守卫的种子
             }
+            if (position != null && Boolean.TRUE.equals(position.isBaselineDone())) {
+                reconcileAutoSync(projectId);
+            }
             backoff = new CdcReconnectBackoff(
                     properties.getCdc().getReconnectBackoffMs(),
                     properties.getCdc().getReconnectBackoffMaxMs());
@@ -240,6 +245,9 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
                             ChangeType.INFO, "CDC consumer stopped: lease lost", true, 0L);
                     break;                                       // 安静退出:绝不 ERROR
+                }
+                if (position != null && Boolean.TRUE.equals(position.isBaselineDone())) {
+                    reconcileAutoSync(projectId);
                 }
                 lastFailure.set(null);
                 connectedAtNs.set(0L);                             // R3b:本轮连接的存活计时从零起
@@ -542,6 +550,32 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         }
     }
 
+    /**
+     * Detects source tables created after auto-sync was enabled and gives them a per-table
+     * baseline via a targeted repair cycle. Runs only between connections; a failure must not
+     * stop the existing tables' stream, so it is logged and retried on a later reconnect.
+     */
+    private void reconcileAutoSync(long projectId) {
+        if (!ctx.getConfig().isAutoSyncNewTables()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAutoSyncCheckMs < 60_000L) {
+            return;
+        }
+        lastAutoSyncCheckMs = now;
+        try {
+            baselineService.reconcileAutoSync(ctx);
+        } catch (Exception e) {
+            // The baseline service already rolled the additions back; the next reconnect
+            // retries. Do not park the project for a new table the operator can still see.
+            log.warn("Project {}: auto-sync reconciliation failed; existing tables keep"
+                    + " streaming and the new tables are retried on a later reconnect: {}",
+                    projectId, e.toString());
+            stats.setLastError("auto-sync: " + CdcFailureClassifier.describe(e));
+        }
+    }
+
     /** handler(每条连接新建)+ lifecycle 监听;GTID 集合直接取自客户端。 */
     private CdcEventStreamHandler wire(BinaryLogClient client) {
         // An open DDL task means the target may still be missing a column. The projection
@@ -572,7 +606,24 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 },
                 // The run's cache lives on the target factory; the spiller reads the same
                 // compiled column rules instead of rebuilding them per transaction.
-                targetTransactions.writePlans(ctx)::cleanser);
+                targetTransactions.writePlans(ctx)::cleanser,
+                (db, table, sql) -> {
+                    // A CREATE TABLE for a table this project does not track yet: drop the
+                    // stream so the loop can add it and run its per-table baseline before
+                    // resuming from the stored position.
+                    if (!ctx.getConfig().isAutoSyncNewTables()) {
+                        return;
+                    }
+                    lastAutoSyncCheckMs = 0L;
+                    log.info("CDC project {}: new source table {}.{} created; reconnecting"
+                            + " to run its baseline", project.getId(), db, table);
+                    try {
+                        client.disconnect();
+                    } catch (IOException | RuntimeException e) {
+                        log.debug("Could not disconnect after the new table {}: {}",
+                                table, e.toString());
+                    }
+                });
         handler.seedCurrentFile(lastFile);   // mid-file resume: no ROTATE for this file
         handler.attachClient(client);                            // R1:choke 时自行断连
         // A committed transaction that touched no tracked table still moves the log

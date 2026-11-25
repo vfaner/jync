@@ -33,6 +33,7 @@ public class SyncConfigForm {
     private boolean syncDeletes;
     private boolean disableTargetConstraints;
     private boolean truncateBeforeInitialLoad;
+    private boolean autoSyncNewTables;
 
     private Long pollIntervalMs;
     private String cronExpression;

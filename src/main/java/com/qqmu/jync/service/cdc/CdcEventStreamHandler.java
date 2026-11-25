@@ -121,6 +121,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
      * for hand-built handlers used by unit tests.
      */
     private final DdlSink ddlSink;
+    private final NewTableSink newTableSink;
 
     /**
      * Where a skipped DDL is reported: the database, the full statement and the binlog
@@ -133,6 +134,11 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
     @FunctionalInterface
     public interface DdlSink {
         void accept(String database, String sql, String file, long position);
+    }
+
+    /** Reports a CREATE TABLE for a table this project does not track yet. */
+    public interface NewTableSink {
+        void created(String database, String table, String sql);
     }
 
     /**
@@ -279,6 +285,17 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
                           LobSpillStore spillStore, long spillThresholdBytes,
                           CdcTransactionBudget budget, DdlSink ddlSink,
                           Function<String, ColumnCleanser> spillCleansers) {
+        this(config, sourceSchema, supplier, mapper, stats, gtidSetSupplier, sink, spillStore,
+                spillThresholdBytes, budget, ddlSink, spillCleansers, null);
+    }
+
+    CdcEventStreamHandler(SyncConfig config, String sourceSchema, CdcTableMetaSupplier supplier,
+                          CdcRowMapper mapper, CdcRuntimeStats stats,
+                          Supplier<String> gtidSetSupplier, TransactionSink sink,
+                          LobSpillStore spillStore, long spillThresholdBytes,
+                          CdcTransactionBudget budget, DdlSink ddlSink,
+                          Function<String, ColumnCleanser> spillCleansers,
+                          NewTableSink newTableSink) {
         this.config = config;
         this.sourceSchema = sourceSchema;
         this.supplier = supplier;
@@ -291,6 +308,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         this.budget = budget;
         this.ddlSink = ddlSink == null ? (db, sql, file, position) -> { } : ddlSink;
         this.spillCleansers = spillCleansers;
+        this.newTableSink = newTableSink == null ? (db, table, sql) -> { } : newTableSink;
     }
 
     /**
@@ -609,6 +627,18 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         // table is judged this way: a multi-table DROP or a RENAME may still touch one.
         String singleTable = CdcDdlTaskService.exclusivelyNamedTable(normalized);
         if (singleTable != null && !config.includesTable(singleTable)) {
+            // A newly created table is the one DDL an auto-sync project must not ignore.
+            // The consumer disconnects and reconciles; a failure in this side channel must
+            // never stop the stream.
+            if (normalized.stripLeading().toUpperCase(java.util.Locale.ROOT)
+                    .startsWith("CREATE TABLE")) {
+                try {
+                    newTableSink.created(data.getDatabase(), singleTable, normalized);
+                } catch (RuntimeException e) {
+                    log.warn("New-table sink failed for {}.{}: {}", data.getDatabase(),
+                            singleTable, e.toString());
+                }
+            }
             log.debug("Ignoring DDL for unsynced table {}: {}", singleTable, normalized);
             return;
         }
