@@ -61,6 +61,36 @@
                 <span class="help" th:text="#{option.autoSyncNewTablesHelp}">help</span>
             </span>
         </label>
+        <!-- 一源多目标：额外目标连接（主目标仍是任务的 targetDbId）。仅 MySQL binlog CDC。 -->
+        <div th:if="${fanoutTargetOptions != null and !#lists.isEmpty(fanoutTargetOptions)}"
+             style="margin-top:12px">
+            <p class="small muted" style="margin:0 0 6px"
+               th:text="#{option.fanoutHelp}">help</p>
+            <label class="switch" th:each="t : ${fanoutTargetOptions}">
+                <input type="checkbox" name="fanoutTargetIds" th:value="${t.id}"
+                       th:checked="${config.fanoutTargetDbIds != null
+                                     and config.fanoutTargetDbIds.contains(t.id)}">
+                <span class="track"></span>
+                <span class="switch-text">
+                    <strong th:text="${t.name}">target</strong>
+                    <span class="help" th:text="#{option.fanoutTarget}">extra target</span>
+                </span>
+            </label>
+            <div th:if="${fanoutStatuses != null and !#lists.isEmpty(fanoutStatuses)}"
+                 style="margin-top:8px">
+                <p class="small muted" style="margin:0 0 4px"
+                   th:text="#{option.fanoutStatusTitle}">Targets</p>
+                <ul class="small muted" style="margin:0 0 0 18px;padding:0">
+                    <li th:each="s : ${fanoutStatuses}">
+                        <b th:text="${s.name}">target</b>
+                        <span th:if="${s.file != null}" class="mono"
+                              th:text="|${s.file}:${s.pos}|">binlog:pos</span>
+                        <span th:if="${s.file == null}" th:text="#{option.fanoutNoPosition}">no position</span>
+                        <span th:text="|spool ${s.spoolBytes} B|">spool</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
         <th:block th:replace="~{project-detail/baseline-options :: group}"/>
     </div>
 </div>

@@ -59,6 +59,11 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
         }
     }
 
+    /** A DDL invalidates every cached layout; the next TABLE_MAP re-reads it. */
+    public void invalidateAll() {
+        cache.clear();
+    }
+
     private static final CdcTableBinding NULL_BINDING =
             CdcTableBinding.of("", "", null, "", null);
 }

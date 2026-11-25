@@ -85,6 +85,7 @@ public class MetadataEnumColumnMigration implements ApplicationRunner {
             new Column("oa_auth_config", "request_format"),
             new Column("oa_auth_config", "validate_method"),
             new Column("project", "target_kind"),
+            new Column("fanout_progress", "object_type"),
             new Column("sync_progress", "object_type"),
             new Column("sync_task", "status"));
 

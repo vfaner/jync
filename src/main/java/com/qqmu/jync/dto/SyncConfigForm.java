@@ -34,6 +34,8 @@ public class SyncConfigForm {
     private boolean disableTargetConstraints;
     private boolean truncateBeforeInitialLoad;
     private boolean autoSyncNewTables;
+    /** Additional target connection ids for a fan-out project. */
+    private List<Long> fanoutTargetIds;
 
     private Long pollIntervalMs;
     private String cronExpression;

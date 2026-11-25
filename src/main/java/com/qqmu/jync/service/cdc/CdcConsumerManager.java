@@ -111,6 +111,10 @@ public class CdcConsumerManager {
     private final YStreamClientFactory yStreamClientFactory;
     private final YStreamServiceLifecycle yStreamLifecycle;
     private final RedisTargetService redisTargets;
+
+    /** Optional so hand-built manager tests keep the old constructor; Spring injects it. */
+    @Autowired(required = false)
+    private FanoutCdcConsumerFactory fanoutFactory;
     private final RedisProjectionWriter redisProjectionWriter;
     /**
      * Target-table repair handed to every engine it supports; null in hand-built managers
@@ -402,6 +406,11 @@ public class CdcConsumerManager {
         // knows a cache target is not a JDBC target.
         CdcTargetTransactionFactory targetTransactions = new CdcTargetTransactionFactory(
                 stats, properties.getQueryTimeoutSeconds(), redisTargets, redisProjectionWriter);
+        if (strategy == CaptureStrategy.BINLOG_CDC && fanoutFactory != null
+                && ctx.getConfig().getFanoutTargetDbIds() != null
+                && !ctx.getConfig().getFanoutTargetDbIds().isEmpty()) {
+            return fanoutFactory.create(project, lock, ctx, stats);
+        }
         if (strategy == CaptureStrategy.LOGMINER_CDC) {
             return new LogMinerCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,

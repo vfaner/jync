@@ -3,6 +3,7 @@ package com.qqmu.jync.service.fanout;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
@@ -19,6 +20,7 @@ public final class FanoutTargetWorker implements AutoCloseable {
 
     private final EventTransport.Subscription subscription;
     private final EventApplier applier;
+    private final Consumer<String> onCommit;
     private final Thread thread;
     private volatile boolean running = true;
     private volatile String lastAppliedPosition;
@@ -27,8 +29,14 @@ public final class FanoutTargetWorker implements AutoCloseable {
 
     public FanoutTargetWorker(String name, EventTransport.Subscription subscription,
                               EventApplier applier) {
+        this(name, subscription, applier, null);
+    }
+
+    public FanoutTargetWorker(String name, EventTransport.Subscription subscription,
+                              EventApplier applier, Consumer<String> onCommit) {
         this.subscription = subscription;
         this.applier = applier;
+        this.onCommit = onCommit;
         this.thread = new Thread(this::run, "fanout-" + name);
         this.thread.setDaemon(true);
     }
@@ -66,6 +74,9 @@ public final class FanoutTargetWorker implements AutoCloseable {
                         subscription.ack(event);
                         appliedTransactions++;
                         lastAppliedPosition = event.position();
+                        if (onCommit != null) {
+                            onCommit.accept(event.position());
+                        }
                         buffer = new ArrayList<>();
                         transactionId = null;
                         break;

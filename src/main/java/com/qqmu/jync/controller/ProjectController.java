@@ -71,6 +71,10 @@ public class ProjectController {
 
     private final ProjectService projectService;
     private final DatabaseConfigService databaseConfigService;
+
+    /** Optional so slice tests without the fan-out beans still load the controller. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutPositionStore fanoutPositionStore;
     private final CdcOperationsService cdcOperationsService;
     private final CdcConsumerManager cdcConsumerManager;
     private final CdcPositionStore cdcPositionStore;
@@ -385,6 +389,43 @@ public class ProjectController {
             }
         }
         model.addAttribute("columnRuleTables", columnRuleTables);
+        // Extra targets for a fan-out project: any TARGET connection except the source and
+        // the project's primary target.
+        model.addAttribute("fanoutTargetOptions", databaseConfigService.findByRole(
+                        ConnectionRole.TARGET).stream()
+                .filter(c -> !java.util.Objects.equals(c.getId(), project.getSourceDbId())
+                        && !java.util.Objects.equals(c.getId(), project.getTargetDbId()))
+                .toList());
+        if (fanoutPositionStore != null && config.getFanoutTargetDbIds() != null
+                && !config.getFanoutTargetDbIds().isEmpty()) {
+            List<Long> ids = new ArrayList<>();
+            if (project.getTargetDbId() != null) {
+                ids.add(project.getTargetDbId());
+            }
+            ids.addAll(config.getFanoutTargetDbIds());
+            List<Map<String, Object>> fanoutStatuses = new ArrayList<>();
+            for (Long targetId : ids) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("targetId", targetId);
+                row.put("name", databaseConfigService.findById(targetId)
+                        .map(DatabaseConfig::getName).orElse("#" + targetId));
+                fanoutPositionStore.find(id, targetId).ifPresentOrElse(position -> {
+                    row.put("file", position.getBinlogFile());
+                    row.put("pos", position.getBinlogPos());
+                    row.put("updatedAt", position.getUpdatedAt());
+                }, () -> row.put("file", null));
+                java.nio.file.Path spool = java.nio.file.Path.of("data", "fanout",
+                        String.valueOf(id), targetId + ".log");
+                try {
+                    row.put("spoolBytes", java.nio.file.Files.exists(spool)
+                            ? java.nio.file.Files.size(spool) : 0L);
+                } catch (java.io.IOException e) {
+                    row.put("spoolBytes", 0L);
+                }
+                fanoutStatuses.add(row);
+            }
+            model.addAttribute("fanoutStatuses", fanoutStatuses);
+        }
         // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
         // lets the page show chunk progress and the resume promise per table.
         addFullLoadProgress(fullLoad, model);
@@ -925,6 +966,37 @@ public class ProjectController {
                     config.setAutoSyncKnownTables(null);
                 }
                 config.setAutoSyncNewTables(autoSync);
+                List<Long> fanout = form.getFanoutTargetIds();
+                if (fanout != null) {
+                    List<Long> clean = new ArrayList<>();
+                    for (Long targetId : fanout) {
+                        if (targetId != null && !clean.contains(targetId)) {
+                            clean.add(targetId);
+                        }
+                    }
+                    if (clean.size() > 8) {
+                        return ConfigSaveOutcome.error("error.project.fanout.tooMany");
+                    }
+                    if (!clean.isEmpty()) {
+                        CaptureStrategy effective = strategyParam != null
+                                ? CaptureStrategy.valueOf(strategyParam)
+                                : config.getCaptureStrategyOrDefault();
+                        if (effective != CaptureStrategy.BINLOG_CDC) {
+                            return ConfigSaveOutcome.error(
+                                    "error.project.fanout.requires.binlog");
+                        }
+                        for (Long targetId : clean) {
+                            DatabaseConfig target = databaseConfigService.findById(targetId)
+                                    .orElse(null);
+                            if (target == null || target.getRole() != ConnectionRole.TARGET
+                                    || java.util.Objects.equals(targetId, project.getSourceDbId())
+                                    || java.util.Objects.equals(targetId, project.getTargetDbId())) {
+                                return ConfigSaveOutcome.error("error.project.fanout.invalid");
+                            }
+                        }
+                    }
+                    config.setFanoutTargetDbIds(clean);
+                }
                 // 自定义调度开关:关闭时清空调度的两个字段,让引擎回退到全局默认值。
                 // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。
                 if (form.isCustomSchedule()) {
