@@ -25,7 +25,7 @@ public record ChangeEvent(
 
     public enum EventKind { ROW, COMMIT, DDL }
 
-    public enum ChangeOperation { INSERT, UPDATE, DELETE }
+    public enum ChangeOperation { INSERT, UPDATE, UPSERT, DELETE }
 
     public static ChangeEvent row(String position, String transactionId, String schema,
                                   String table, ChangeOperation operation,
