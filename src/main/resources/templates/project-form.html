@@ -115,12 +115,18 @@
                         <label for="fanoutTargetIds">
                             <span th:text="#{project.fanoutTargets}">Extra targets</span>
                         </label>
-                        <select class="select" id="fanoutTargetIds" name="fanoutTargetIds"
-                                multiple size="4">
-                            <option th:each="db : ${fanoutTargets}" th:value="${db.id}"
-                                    th:selected="${fanoutSelected != null and fanoutSelected.contains(db.id)}"
-                                    th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
-                        </select>
+                        <div class="fanout-target-list"
+                             th:if="${fanoutTargets != null and !#lists.isEmpty(fanoutTargets)}">
+                            <label class="fanout-target-option" th:each="db : ${fanoutTargets}">
+                                <input type="checkbox" name="fanoutTargetIds" th:value="${db.id}"
+                                       th:checked="${fanoutSelected != null and fanoutSelected.contains(db.id)}">
+                                <span class="fanout-target-name" th:text="${db.name}">db</span>
+                                <span class="fanout-target-type"
+                                      th:text="#{${'db.type.' + db.type.name()}}">MySQL</span>
+                            </label>
+                        </div>
+                        <div class="help" th:if="${fanoutTargets == null or #lists.isEmpty(fanoutTargets)}"
+                             th:text="#{project.fanoutTargets.empty}">No extra target connections.</div>
                         <div class="help" th:text="#{project.fanoutTargets.help}">help</div>
                     </div>
                     <div class="field" id="redis-target-field"
