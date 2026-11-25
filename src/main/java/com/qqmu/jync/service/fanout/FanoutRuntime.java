@@ -41,6 +41,7 @@ public final class FanoutRuntime implements AutoCloseable {
     private final FanoutBaselineService baselineService;
     private final FanoutProgressStore progressStore;
     private final FanoutPositionStore positionStore;
+    private final com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair;
     private final CdcRuntimeStats stats;
     private final Map<Long, Integer> restartAttempts = new ConcurrentHashMap<>();
     private final java.util.Set<Long> barrierAcked = ConcurrentHashMap.newKeySet();
@@ -50,6 +51,7 @@ public final class FanoutRuntime implements AutoCloseable {
     public FanoutRuntime(SyncContext sourceCtx, List<FanoutBaselineService.Target> targets,
                          CdcRuntimeStats stats, StructureSyncService structureSync,
                          FanoutProgressStore progressStore, FanoutPositionStore positionStore,
+                         com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
                          ObjectMapper mapper, Path spoolDirectory, long maxSpoolBytes)
             throws Exception {
         this.sourceCtx = sourceCtx;
@@ -61,14 +63,21 @@ public final class FanoutRuntime implements AutoCloseable {
         this.progressStore = progressStore;
         this.positionStore = positionStore;
         this.stats = stats;
+        this.targetRepair = targetRepair;
         this.baselineService = new FanoutBaselineService(structureSync);
         for (FanoutBaselineService.Target target : targets) {
             String group = String.valueOf(target.targetDbId());
             EventTransport.Subscription subscription = transport.subscribe(group);
-            EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
-            workers.add(new FanoutTargetWorker(group, subscription, applier,
+            workers.add(new FanoutTargetWorker(group, subscription, applierFor(target),
                     position -> onTargetCommit(target.targetDbId(), position)));
         }
+    }
+
+    /** One target's write path, with the missing-table repair shared by every target. */
+    private EventApplier applierFor(FanoutBaselineService.Target target) {
+        EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
+        return targetRepair == null ? applier
+                : new RepairingEventApplier(applier, targetRepair, target.context());
     }
 
     /** Must run before the baseline so published rows are consumed immediately. */
@@ -114,8 +123,7 @@ public final class FanoutRuntime implements AutoCloseable {
                                          EventTransport.Subscription subscription) {
         subscription.rewindToAck();
         String group = String.valueOf(target.targetDbId());
-        EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
-        return new FanoutTargetWorker(group, subscription, applier,
+        return new FanoutTargetWorker(group, subscription, applierFor(target),
                 position -> onTargetCommit(target.targetDbId(), position));
     }
 
@@ -186,6 +194,12 @@ public final class FanoutRuntime implements AutoCloseable {
         // A successful transaction proves the target is healthy again; a later outage gets
         // a fresh restart budget instead of inheriting an old count.
         restartAttempts.remove(targetDbId);
+        // Same ruling for the shared repair budget: the counter is keyed by project, so
+        // without this a fan-out project would spend its whole allowance across unrelated
+        // repairs and then refuse a genuine one until the process restarts.
+        if (targetRepair != null) {
+            targetRepair.resetAttempts(sourceCtx.projectId());
+        }
         if (position != null && position.equals(baselineMarker)) {
             barrierAcked.add(targetDbId);
             return;

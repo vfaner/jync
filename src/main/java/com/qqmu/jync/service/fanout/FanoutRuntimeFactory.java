@@ -30,17 +30,20 @@ public class FanoutRuntimeFactory {
     private final StructureSyncService structureSync;
     private final FanoutProgressStore progressStore;
     private final FanoutPositionStore positionStore;
+    private final com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair;
     private final ObjectMapper mapper;
 
     public FanoutRuntimeFactory(FanoutTargetContextFactory targetContexts,
                                 StructureSyncService structureSync,
                                 FanoutProgressStore progressStore,
                                 FanoutPositionStore positionStore,
+                                com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
                                 ObjectMapper mapper) {
         this.targetContexts = targetContexts;
         this.structureSync = structureSync;
         this.progressStore = progressStore;
         this.positionStore = positionStore;
+        this.targetRepair = targetRepair;
         this.mapper = mapper;
     }
 
@@ -63,7 +66,9 @@ public class FanoutRuntimeFactory {
                     targetContexts.build(project, targetId, lockOwner, lockRenewer)));
         }
         Path spool = Path.of("data", "fanout", String.valueOf(project.getId()));
+        // Every target gets the same missing-table repair as a single-target consumer; the
+        // service's attempt budget is per project, which is shared by all targets.
         return new FanoutRuntime(sourceCtx, targets, stats, structureSync, progressStore,
-                positionStore, mapper, spool, SPOOL_MAX_BYTES);
+                positionStore, targetRepair, mapper, spool, SPOOL_MAX_BYTES);
     }
 }
