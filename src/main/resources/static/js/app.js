@@ -3794,6 +3794,38 @@
     refresh();
   }
 
+  /** 一源多目标：每目标位点/积压每 5 秒刷新，页面隐藏时暂停。 */
+  function bindFanoutStatusRefresh() {
+    var box = document.getElementById('fanout-status');
+    if (!box) return;
+    var url = box.getAttribute('data-refresh-url');
+    if (!url) return;
+    var timer = null;
+    var inFlight = false;
+    function refresh() {
+      if (inFlight) return;
+      inFlight = true;
+      fetch(url, { cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          return response.text();
+        })
+        .then(function (html) {
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var list = fresh.querySelector('.fanout-status-list');
+          if (list) box.innerHTML = list.outerHTML;
+        })
+        .catch(function () { /* keep the last numbers; retry next tick */ })
+        .then(function () { inFlight = false; });
+    }
+    function apply() {
+      if (timer) { clearInterval(timer); timer = null; }
+      if (!document.hidden) timer = setInterval(refresh, 5000);
+    }
+    document.addEventListener('visibilitychange', apply);
+    apply();
+  }
+
   var RESOURCE_REFRESH_INTERVAL = 5000;
 
   /**
@@ -5547,6 +5579,7 @@
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
     bindFullLoadRefresh();
+    bindFanoutStatusRefresh();
     bindResourceRefresh();
     bindGaugeTopProcesses();
     bindLiveStats();

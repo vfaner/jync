@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<!--/* One fan-out target row: name, last acknowledged position and spool backlog. Polled
+       independently of the table-status fragment because it only changes while the project
+       runs. */-->
+<div th:fragment="missing"></div>
+<div th:fragment="list" class="fanout-status-list">
+    <p class="small muted" style="margin:0 0 4px"
+       th:text="#{option.fanoutStatusTitle}">Targets</p>
+    <ul class="small muted" style="margin:0 0 0 18px;padding:0">
+        <li th:each="s : ${fanoutStatuses}">
+            <b th:text="${s.name}">target</b>
+            <span th:if="${s.file != null}" class="mono"
+                  th:text="|${s.file}:${s.pos}|">binlog:pos</span>
+            <span th:if="${s.file == null}" th:text="#{option.fanoutNoPosition}">not consumed yet</span>
+            <span th:if="${s.ageSeconds != null}" th:text="#{option.fanoutAge(${s.ageSeconds})}">age</span>
+            <span th:text="#{option.fanoutSpool(${s.spoolBytes})}">spool</span>
+        </li>
+    </ul>
+</div>
+</body>
+</html>

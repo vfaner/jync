@@ -420,34 +420,8 @@ public class ProjectController {
             }
         }
         model.addAttribute("columnRuleTables", columnRuleTables);
-        if (fanoutPositionStore != null && config.getFanoutTargetDbIds() != null
-                && !config.getFanoutTargetDbIds().isEmpty()) {
-            List<Long> ids = new ArrayList<>();
-            if (project.getTargetDbId() != null) {
-                ids.add(project.getTargetDbId());
-            }
-            ids.addAll(config.getFanoutTargetDbIds());
-            List<Map<String, Object>> fanoutStatuses = new ArrayList<>();
-            for (Long targetId : ids) {
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("targetId", targetId);
-                row.put("name", databaseConfigService.findById(targetId)
-                        .map(DatabaseConfig::getName).orElse("#" + targetId));
-                fanoutPositionStore.find(id, targetId).ifPresentOrElse(position -> {
-                    row.put("file", position.getBinlogFile());
-                    row.put("pos", position.getBinlogPos());
-                    row.put("updatedAt", position.getUpdatedAt());
-                }, () -> row.put("file", null));
-                java.nio.file.Path spool = java.nio.file.Path.of("data", "fanout",
-                        String.valueOf(id), targetId + ".log");
-                try {
-                    row.put("spoolBytes", java.nio.file.Files.exists(spool)
-                            ? java.nio.file.Files.size(spool) : 0L);
-                } catch (java.io.IOException e) {
-                    row.put("spoolBytes", 0L);
-                }
-                fanoutStatuses.add(row);
-            }
+        List<Map<String, Object>> fanoutStatuses = buildFanoutStatuses(id, project, config);
+        if (!fanoutStatuses.isEmpty()) {
             model.addAttribute("fanoutStatuses", fanoutStatuses);
         }
         // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
@@ -791,6 +765,58 @@ public class ProjectController {
             }
         });
         return filtered;
+    }
+
+    /** Polled by the detail page so per-target positions and spool backlog stay live. */
+    @GetMapping("/{id}/fanout-status")
+    public String fanoutStatusFragment(@PathVariable Long id, Model model) {
+        Project project = projectService.findById(id).orElse(null);
+        if (project == null) {
+            return "project-detail/fanout-status :: missing";
+        }
+        SyncConfig config = projectService.loadConfig(project);
+        model.addAttribute("fanoutStatuses", buildFanoutStatuses(id, project, config));
+        return "project-detail/fanout-status :: list";
+    }
+
+    private List<Map<String, Object>> buildFanoutStatuses(Long projectId, Project project,
+                                                          SyncConfig config) {
+        if (fanoutPositionStore == null || config == null
+                || config.getFanoutTargetDbIds() == null
+                || config.getFanoutTargetDbIds().isEmpty()) {
+            return List.of();
+        }
+        List<Long> ids = new ArrayList<>();
+        if (project.getTargetDbId() != null) {
+            ids.add(project.getTargetDbId());
+        }
+        ids.addAll(config.getFanoutTargetDbIds());
+        List<Map<String, Object>> statuses = new ArrayList<>();
+        for (Long targetId : ids) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("targetId", targetId);
+            row.put("name", databaseConfigService.findById(targetId)
+                    .map(DatabaseConfig::getName).orElse("#" + targetId));
+            fanoutPositionStore.find(projectId, targetId).ifPresentOrElse(position -> {
+                row.put("file", position.getBinlogFile());
+                row.put("pos", position.getBinlogPos());
+                if (position.getUpdatedAt() != null) {
+                    row.put("ageSeconds", Math.max(0L,
+                            java.time.Duration.between(position.getUpdatedAt(),
+                                    java.time.Instant.now()).getSeconds()));
+                }
+            }, () -> row.put("file", null));
+            java.nio.file.Path spool = java.nio.file.Path.of("data", "fanout",
+                    String.valueOf(projectId), targetId + ".log");
+            try {
+                row.put("spoolBytes", java.nio.file.Files.exists(spool)
+                        ? java.nio.file.Files.size(spool) : 0L);
+            } catch (java.io.IOException e) {
+                row.put("spoolBytes", 0L);
+            }
+            statuses.add(row);
+        }
+        return statuses;
     }
 
     @GetMapping("/{id}/cdc-card")

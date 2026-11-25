@@ -61,20 +61,11 @@
                 <span class="help" th:text="#{option.autoSyncNewTablesHelp}">help</span>
             </span>
         </label>
-        <!-- 一源多目标的目标选择在新建/编辑页维护；这里只读展示各目标位点与积压。 -->
-        <div th:if="${fanoutStatuses != null and !#lists.isEmpty(fanoutStatuses)}"
-             style="margin-top:12px">
-            <p class="small muted" style="margin:0 0 4px"
-               th:text="#{option.fanoutStatusTitle}">Targets</p>
-            <ul class="small muted" style="margin:0 0 0 18px;padding:0">
-                <li th:each="s : ${fanoutStatuses}">
-                    <b th:text="${s.name}">target</b>
-                    <span th:if="${s.file != null}" class="mono"
-                          th:text="|${s.file}:${s.pos}|">binlog:pos</span>
-                    <span th:if="${s.file == null}" th:text="#{option.fanoutNoPosition}">no position</span>
-                    <span th:text="|spool ${s.spoolBytes} B|">spool</span>
-                </li>
-            </ul>
+        <!-- 一源多目标：目标选择在新建/编辑页维护；这里只读展示并 5 秒刷新位点/积压。 -->
+        <div id="fanout-status" th:if="${fanoutStatuses != null and !#lists.isEmpty(fanoutStatuses)}"
+             style="margin-top:12px"
+             th:attr="data-refresh-url=@{/projects/{id}/fanout-status(id=${project.id})}">
+            <div th:replace="~{project-detail/fanout-status :: list}"/>
         </div>
         <th:block th:replace="~{project-detail/baseline-options :: group}"/>
     </div>

@@ -10,6 +10,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.service.fanout.FanoutMetaSupplier;
 import com.qqmu.jync.service.fanout.FanoutRuntime;
 import com.qqmu.jync.service.fanout.FanoutRuntimeFactory;
+import com.qqmu.jync.service.sync.AutoSyncService;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
@@ -35,8 +36,10 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
     private final CdcRuntimeStats stats;
     private final SyncProperties properties;
     private final FanoutRuntimeFactory runtimes;
+    private final AutoSyncService autoSync;
 
     private volatile boolean running = true;
+    private volatile boolean rebaselineRequested;
     private volatile BinaryLogClient client;
     private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
 
@@ -44,7 +47,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                              BinlogClientFactory clientFactory, CdcPositionStore positionStore,
                              CdcBaselineService baselineService, SyncTaskStore taskStore,
                              CdcRuntimeStats stats, SyncProperties properties,
-                             FanoutRuntimeFactory runtimes) {
+                             FanoutRuntimeFactory runtimes, AutoSyncService autoSync) {
         this.project = project;
         this.lock = lock;
         this.ctx = ctx;
@@ -55,6 +58,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
         this.stats = stats;
         this.properties = properties;
         this.runtimes = runtimes;
+        this.autoSync = autoSync;
     }
 
     @Override
@@ -65,16 +69,21 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
         try {
             runtime = runtimes.create(project, ctx, "fanout-" + projectId, lock::renew, stats);
             runtime.startWorkers();
-            CdcPosition position = positionStore.find(projectId).orElse(null);
-            if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {
-                CdcPositionMark mark = baselineService.readCurrentPosition(ctx.getSourceConfig());
-                positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
-                        mark.getGtidSet(), clientFactory.serverIdFor(projectId));
-                runtime.baseline();
-                positionStore.markBaselineDone(projectId);
-                log.info("Fan-out baseline for project {} finished", projectId);
+            while (running && !Thread.currentThread().isInterrupted()) {
+                reconcileAutoSync(projectId);
+                ensureBaseline(runtime, projectId);
+                if (!running) {
+                    break;
+                }
+                stream(projectId, runtime);
+                if (!running || !rebaselineRequested) {
+                    break;
+                }
+                // A new source table arrived while streaming: the position was dropped by
+                // reconcileAutoSync, so the next iteration re-baselines every target before
+                // resuming. The spools keep the old rows; baseline upserts make replay safe.
+                rebaselineRequested = false;
             }
-            stream(projectId, runtime);
         } catch (Exception e) {
             String detail = CdcFailureClassifier.describe(e);
             stats.setLastError(detail);
@@ -91,6 +100,44 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             if (runtime != null) {
                 runtime.close();
             }
+        }
+    }
+
+    private void ensureBaseline(FanoutRuntime runtime, long projectId) throws Exception {
+        CdcPosition position = positionStore.find(projectId).orElse(null);
+        if (position != null && Boolean.TRUE.equals(position.isBaselineDone())) {
+            return;
+        }
+        CdcPositionMark mark = baselineService.readCurrentPosition(ctx.getSourceConfig());
+        positionStore.recordBaselineStart(projectId, mark.getFile(), mark.getPos(),
+                mark.getGtidSet(), clientFactory.serverIdFor(projectId));
+        runtime.baseline();
+        positionStore.markBaselineDone(projectId);
+        log.info("Fan-out baseline for project {} finished", projectId);
+    }
+
+    /**
+     * Adds source tables that appeared after the auto-sync switch was enabled. A fan-out
+     * re-baseline is the safe first version: the new table has no history on any target, and
+     * every target must receive it before the shared stream resumes.
+     */
+    private void reconcileAutoSync(long projectId) {
+        if (!ctx.getConfig().isAutoSyncNewTables()) {
+            return;
+        }
+        try (java.sql.Connection conn = openSource()) {
+            java.util.List<String> sourceTables = ctx.getSourceReader()
+                    .listTableNames(conn, ctx.getSourceSchema());
+            java.util.List<String> added = autoSync.reconcile(project, ctx.getConfig(),
+                    sourceTables);
+            if (!added.isEmpty()) {
+                positionStore.delete(projectId);
+                log.info("Fan-out auto-sync added {} table(s); dropping the capture anchor to"
+                        + " re-baseline every target: {}", added.size(), added);
+            }
+        } catch (Exception e) {
+            // A metadata blip must not stop the existing stream; the next reconnect retries.
+            log.warn("Fan-out auto-sync reconciliation failed: {}", e.toString());
         }
     }
 
@@ -127,7 +174,15 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                     current::getGtidSet, sink, lobSpillStore.get(properties),
                     properties.getLob().getCdcSpillThresholdBytes(),
                     CdcTransactionBudget.from(properties),
-                    (db, sql, file, position) -> { }, null, null);
+                    (db, sql, file, position) -> { }, null,
+                    (db, table, sql) -> {
+                        if (ctx.getConfig().isAutoSyncNewTables()) {
+                            rebaselineRequested = true;
+                            log.info("Fan-out capture saw CREATE TABLE {}.{}; reconnecting to"
+                                    + " re-baseline", db, table);
+                            disconnect(current);
+                        }
+                    });
             handler.seedCurrentFile(resume == null ? null : resume.getBinlogFile());
             handler.onEmptyTransaction(mark -> {
                 if (mark.getFile() == null || !ctx.renewLease()) {
@@ -177,7 +232,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                     log.debug("Fan-out binding connection close failed: {}", e.toString());
                 }
             }
-            if (!running) {
+            if (!running || rebaselineRequested) {
                 break;
             }
             if (!CdcWaits.sleepWhileRunning(() -> running, backoff.nextDelayMs())) {
