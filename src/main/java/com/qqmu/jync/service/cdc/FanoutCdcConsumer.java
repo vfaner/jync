@@ -128,8 +128,22 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
         try (java.sql.Connection conn = openSource()) {
             java.util.List<String> sourceTables = ctx.getSourceReader()
                     .listTableNames(conn, ctx.getSourceSchema());
+            // Only keyed tables: the fan-out baseline skips a keyless table (CDC cannot
+            // address its rows), yet a table added to the selection would stay there and be
+            // reported as skipped on every baseline — the single-target reconcile applies the
+            // same primary-key filter.
             java.util.List<String> added = autoSync.reconcile(project, ctx.getConfig(),
-                    sourceTables);
+                    sourceTables, name -> {
+                        try {
+                            var table = ctx.getSourceReader()
+                                    .readTable(conn, ctx.getSourceSchema(), name);
+                            return table != null && table.hasPrimaryKey();
+                        } catch (java.sql.SQLException e) {
+                            log.debug("Auto-sync: cannot read metadata for {}: {}",
+                                    name, e.getMessage());
+                            return false;
+                        }
+                    });
             if (!added.isEmpty()) {
                 positionStore.delete(projectId);
                 log.info("Fan-out auto-sync added {} table(s); dropping the capture anchor to"
