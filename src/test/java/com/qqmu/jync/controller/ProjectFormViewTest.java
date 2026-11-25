@@ -315,6 +315,37 @@ class ProjectFormViewTest {
         assertThat(selectBlock(page, "targetDbId")).doesNotContain("required");
     }
 
+    @Test
+    void theTargetPickerListsPrimaryAndFanoutTargetsInOneTagEditor() throws Exception {
+        Project project = new Project();
+        project.setId(7L);
+        project.setName("fan-proj");
+        project.setSourceDbId(1L);
+        project.setTargetDbId(2L);
+        project.setTargetKind(SyncTargetKind.JDBC);
+        when(projectService.findById(7L)).thenReturn(Optional.of(project));
+        when(projectService.isRunning(project)).thenReturn(false);
+        com.qqmu.jync.dto.SyncConfig config = new com.qqmu.jync.dto.SyncConfig();
+        config.setFanoutTargetDbIds(List.of(3L));
+        when(projectService.loadConfig(project)).thenReturn(config);
+        when(databaseConfigService.findByRole(ConnectionRole.SOURCE))
+                .thenReturn(List.of(config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findByRole(ConnectionRole.TARGET)).thenReturn(List.of(
+                config(2L, "tgt-a", ConnectionRole.TARGET),
+                config(3L, "tgt-b", ConnectionRole.TARGET)));
+
+        String page = mvc.perform(get("/projects/7/edit").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // One picker carries the primary and every extra target; no second "extra targets"
+        // control may appear next to it.
+        assertThat(page).contains("data-role=\"target-picker\"");
+        assertThat(page).contains("data-id=\"2\"", "data-id=\"3\"");
+        assertThat(page).contains("name=\"fanoutTargetIds\"");
+        assertThat(page).doesNotContain("id=\"fanout-target-field\"");
+    }
+
     private static RedisTarget redisTarget(long id, String name) {
         RedisTarget target = new RedisTarget();
         target.setId(id);
