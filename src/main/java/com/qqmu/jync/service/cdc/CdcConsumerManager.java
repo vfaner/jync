@@ -115,6 +115,9 @@ public class CdcConsumerManager {
     /** Optional so hand-built manager tests keep the old constructor; Spring injects it. */
     @Autowired(required = false)
     private FanoutCdcConsumerFactory fanoutFactory;
+    /** Optional for the same reason: tests that never fan out keep the direct-write path. */
+    @Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutRuntimeRegistry fanoutRuntimes;
     private final RedisProjectionWriter redisProjectionWriter;
     /**
      * Target-table repair handed to every engine it supports; null in hand-built managers
@@ -401,16 +404,35 @@ public class CdcConsumerManager {
     private ManagedCdcConsumer consumerFor(Project project, SyncLockService.LockHandle lock,
                                            SyncContext ctx, CaptureStrategy strategy,
                                            CdcRuntimeStats stats) {
-        // One factory per consumer run, shared by whichever engine the strategy picks: it
-        // carries this run's stats and statement timeout, and it is the single place that
-        // knows a cache target is not a JDBC target.
-        CdcTargetTransactionFactory targetTransactions = new CdcTargetTransactionFactory(
-                stats, properties.getQueryTimeoutSeconds(), redisTargets, redisProjectionWriter);
-        if (strategy == CaptureStrategy.BINLOG_CDC && fanoutFactory != null
+        boolean fanout = fanoutFactory != null
+                && project.getTargetKindOrDefault() == SyncTargetKind.JDBC
                 && ctx.getConfig().getFanoutTargetDbIds() != null
-                && !ctx.getConfig().getFanoutTargetDbIds().isEmpty()) {
+                && !ctx.getConfig().getFanoutTargetDbIds().isEmpty();
+        if (strategy == CaptureStrategy.BINLOG_CDC && fanout) {
             return fanoutFactory.create(project, lock, ctx, stats);
         }
+        // One factory per consumer run, shared by whichever engine the strategy picks: it
+        // carries this run's stats and statement timeout, and it is the single place that
+        // knows a cache target is not a JDBC target. With a fan-out runtime registered for
+        // the project it hands out publishing transactions instead of direct writes.
+        CdcTargetTransactionFactory targetTransactions = new CdcTargetTransactionFactory(
+                stats, properties.getQueryTimeoutSeconds(), redisTargets, redisProjectionWriter,
+                fanoutRuntimes);
+        ManagedCdcConsumer engine = engineConsumer(project, lock, ctx, strategy, stats,
+                targetTransactions);
+        if (fanout && strategy.isLogCdc()) {
+            // The JDBC engines keep their stream untouched; the wrapper owns the runtime and
+            // the registry redirects their baseline and transactions to it.
+            return fanoutFactory.wrapEngine(project, lock, ctx, stats, engine);
+        }
+        return engine;
+    }
+
+    /** The unmodified engine instance for the strategy (constructors only wire fields). */
+    private ManagedCdcConsumer engineConsumer(Project project, SyncLockService.LockHandle lock,
+                                              SyncContext ctx, CaptureStrategy strategy,
+                                              CdcRuntimeStats stats,
+                                              CdcTargetTransactionFactory targetTransactions) {
         if (strategy == CaptureStrategy.LOGMINER_CDC) {
             return new LogMinerCdcConsumer(project, lock, ctx, positionStore,
                     baselineService, taskStore, stateWriter, dataSourceManager,

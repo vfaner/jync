@@ -798,9 +798,15 @@ public class ProjectController {
             row.put("name", databaseConfigService.findById(targetId)
                     .map(DatabaseConfig::getName).orElse("#" + targetId));
             row.put("ageSeconds", null);
+            row.put("lsn", null);
+            row.put("scn", null);
             fanoutPositionStore.find(projectId, targetId).ifPresentOrElse(position -> {
                 row.put("file", position.getBinlogFile());
                 row.put("pos", position.getBinlogPos());
+                // Non-binlog engines resume by LSN/SCN; show the token they actually use
+                // instead of pretending every fan-out source is MySQL.
+                row.put("lsn", position.getLsn());
+                row.put("scn", position.getScn());
                 if (position.getUpdatedAt() != null) {
                     row.put("ageSeconds", Math.max(0L,
                             java.time.Duration.between(position.getUpdatedAt(),
@@ -1032,7 +1038,9 @@ public class ProjectController {
                         CaptureStrategy effective = strategyParam != null
                                 ? CaptureStrategy.valueOf(strategyParam)
                                 : config.getCaptureStrategyOrDefault();
-                        if (effective != CaptureStrategy.BINLOG_CDC) {
+                        if (!effective.isLogCdc()
+                                || project.getTargetKindOrDefault()
+                                        != SyncTargetKind.JDBC) {
                             return ConfigSaveOutcome.error(
                                     "error.project.fanout.requires.binlog");
                         }
@@ -1053,7 +1061,7 @@ public class ProjectController {
                 CaptureStrategy effectiveForFanout = strategyParam != null
                         ? CaptureStrategy.valueOf(strategyParam)
                         : config.getCaptureStrategyOrDefault();
-                if (effectiveForFanout != CaptureStrategy.BINLOG_CDC
+                if (!effectiveForFanout.isLogCdc()
                         && config.getFanoutTargetDbIds() != null) {
                     config.setFanoutTargetDbIds(new ArrayList<>());
                 }

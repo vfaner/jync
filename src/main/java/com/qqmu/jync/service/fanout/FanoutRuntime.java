@@ -27,6 +27,11 @@ import tools.jackson.databind.ObjectMapper;
 @Slf4j
 public final class FanoutRuntime implements AutoCloseable {
 
+    /** Typed position tokens published by the non-binlog engines (see onTargetCommit). */
+    public static final String TOKEN_LSN = "lsn:";
+    public static final String TOKEN_SCN = "scn:";
+    public static final String TOKEN_YSTREAM = "ystream:";
+
     private final SyncContext sourceCtx;
     private final List<FanoutBaselineService.Target> targets;
     private final Connection sourceConn;
@@ -114,11 +119,12 @@ public final class FanoutRuntime implements AutoCloseable {
                 position -> onTargetCommit(target.targetDbId(), position));
     }
 
-    public void baseline() throws Exception {
+    /** Runs the shared baseline; returns the per-table loads (empty when nothing to load). */
+    public List<FanoutBaselineService.TableLoad> baseline() throws Exception {
         List<FanoutBaselineService.TableLoad> loads =
                 baselineService.baseline(sourceCtx, sourceConn, targets, transport);
         if (loads.isEmpty()) {
-            return;
+            return loads;
         }
         // Barrier: every worker must acknowledge the final marker before the baseline is
         // reported complete, otherwise a crash right after "done" could restart capture from
@@ -149,6 +155,7 @@ public final class FanoutRuntime implements AutoCloseable {
                 progressStore.save(progress);
             }
         }
+        return loads;
     }
 
     public EventTransport transport() {
@@ -186,9 +193,32 @@ public final class FanoutRuntime implements AutoCloseable {
         recordTargetPosition(positionStore, sourceCtx.projectId(), targetDbId, position);
     }
 
-    private static void recordTargetPosition(FanoutPositionStore store, Long projectId,
+    static void recordTargetPosition(FanoutPositionStore store, Long projectId,
                                              Long targetDbId, String position) {
         if (position == null || position.startsWith("baseline")) {
+            return;
+        }
+        // Non-binlog engines publish a typed token: LSN/SCN/YStream positions are not a
+        // "file:offset" pair, and storing them as one would misreport progress.
+        if (position.startsWith(TOKEN_LSN)) {
+            store.advance(projectId, targetDbId, null, 0L, null,
+                    position.substring(TOKEN_LSN.length()), null);
+            return;
+        }
+        if (position.startsWith(TOKEN_SCN)) {
+            try {
+                store.advance(projectId, targetDbId, null, 0L, null, null,
+                        Long.parseLong(position.substring(TOKEN_SCN.length())));
+            } catch (NumberFormatException e) {
+                // Malformed token: keep the in-memory progress only.
+            }
+            return;
+        }
+        if (position.startsWith(TOKEN_YSTREAM)) {
+            // YStream's packed position is an opaque text token; the LSN column is its
+            // generic holder (same column the single-target engine writes it to).
+            store.advance(projectId, targetDbId, null, 0L, null,
+                    position.substring(TOKEN_YSTREAM.length()), null);
             return;
         }
         int colon = position.lastIndexOf(':');

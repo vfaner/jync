@@ -44,20 +44,42 @@ public class CdcTargetTransactionFactory {
      */
     private volatile CdcWritePlanCache writePlans;
 
+    /**
+     * Fan-out runtimes of this node; when one is registered for the project, the transaction
+     * becomes a publisher and every target applies it through its own worker. Null in
+     * hand-built factories/tests, which keeps the direct-write path.
+     */
+    private final com.qqmu.jync.service.fanout.FanoutRuntimeRegistry fanoutRuntimes;
+
     public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds) {
-        this(stats, queryTimeoutSeconds, null, null);
+        this(stats, queryTimeoutSeconds, null, null, null);
     }
 
     public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds,
                                        RedisTargetService redisTargets,
                                        RedisProjectionWriter redisWriter) {
+        this(stats, queryTimeoutSeconds, redisTargets, redisWriter, null);
+    }
+
+    public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds,
+                                       RedisTargetService redisTargets,
+                                       RedisProjectionWriter redisWriter,
+                                       com.qqmu.jync.service.fanout.FanoutRuntimeRegistry
+                                               fanoutRuntimes) {
         this.stats = stats;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.redisTargets = redisTargets;
         this.redisWriter = redisWriter;
+        this.fanoutRuntimes = fanoutRuntimes;
     }
 
     public CdcTargetTransaction open(Project project, SyncContext ctx) throws SQLException {
+        com.qqmu.jync.service.fanout.FanoutRuntime fanout =
+                fanoutRuntimes == null ? null : fanoutRuntimes.get(project.getId());
+        if (fanout != null) {
+            return new com.qqmu.jync.service.fanout.FanoutTargetTransaction(
+                    fanout.transport());
+        }
         if (project.getTargetKindOrDefault() == SyncTargetKind.REDIS) {
             if (redisTargets == null || redisWriter == null) {
                 throw new IllegalStateException("Redis CDC targets need the Redis target and"

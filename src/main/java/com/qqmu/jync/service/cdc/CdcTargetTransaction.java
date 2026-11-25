@@ -24,6 +24,15 @@ public interface CdcTargetTransaction extends AutoCloseable {
     void applyDeletes(CdcTableBinding binding, List<Map<String, Object>> rows) throws SQLException;
 
     /**
+     * Tells the handle which source position this transaction commits at. The direct JDBC
+     * target ignores it (the engine persists the position itself); a fan-out publishing
+     * transaction forwards it to every target worker so per-target resume points stay real.
+     */
+    default void notePosition(String token) {
+        // Default: nothing to do.
+    }
+
+    /**
      * JDBC: commits the target transaction. Redis: executes the buffered pipeline once and
      * checks every reply. Throwing means this transaction did not land — the caller must
      * not advance the position.

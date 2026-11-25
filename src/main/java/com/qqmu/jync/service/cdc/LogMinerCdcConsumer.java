@@ -732,6 +732,9 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     : tx.deletes().entrySet()) {
                 target.applyDeletes(e.getKey(), e.getValue());
             }
+            // Fan-out only: carries this transaction's SCN to every target worker. The
+            // direct JDBC handle ignores it and the engine persists the SCN below.
+            target.notePosition(com.qqmu.jync.service.fanout.FanoutRuntime.TOKEN_SCN + csn);
             target.commit();
         }
         ctx.requireLease();

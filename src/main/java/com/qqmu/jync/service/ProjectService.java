@@ -700,7 +700,16 @@ public class ProjectService {
             if (changed && isRunning(project)) {
                 throw new IllegalStateException("error.project.stop.before.config");
             }
-            config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+            if (!config.getCaptureStrategyOrDefault().isLogCdc()) {
+                // Picking extra targets on a polling project turns on the log-based strategy
+                // its source actually supports; fan-out has no polling runner. A source with
+                // no log engine has no fan-out path at all, and starting it would fail later.
+                CaptureStrategy preferred = preferredLogStrategy(project);
+                if (preferred == null) {
+                    throw new IllegalStateException("error.project.fanout.requires.binlog");
+                }
+                config.setCaptureStrategy(preferred);
+            }
         }
         config.setFanoutTargetDbIds(clean);
         if (changed && !clean.isEmpty()) {
@@ -711,6 +720,27 @@ public class ProjectService {
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         return projectRepository.save(project);
+    }
+
+    /**
+     * The first log-based strategy the project's source supports, used when enabling fan-out
+     * on a polling project. Null when the source has no log engine (MongoDB / analytical
+     * engines) or its connection cannot be resolved — the caller refuses fan-out instead of
+     * persisting a strategy that can only fail on start.
+     */
+    private CaptureStrategy preferredLogStrategy(Project project) {
+        DatabaseConfig source = project.getSourceDbId() == null ? null
+                : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
+        if (source == null) {
+            return null;
+        }
+        for (CaptureStrategy strategy : CaptureStrategyParser.supportedFor(
+                source.getType(), source.resolvedFamily())) {
+            if (strategy.isLogCdc()) {
+                return strategy;
+            }
+        }
+        return null;
     }
 
     /**
@@ -1246,9 +1276,10 @@ public class ProjectService {
         // Bare keys: ApiExceptionHandler returns them as-is and the browser localizes them.
         SyncConfig config = loadConfig(project);
         if (config.getFanoutTargetDbIds() != null && !config.getFanoutTargetDbIds().isEmpty()) {
-            // The fan-out runner is a binlog consumer; starting polling with extra targets
-            // would silently write only the primary target.
-            if (config.getCaptureStrategyOrDefault() != CaptureStrategy.BINLOG_CDC) {
+            // Fan-out rides a log-based stream; starting polling with extra targets would
+            // silently write only the primary target. A cache target has no fan-out path.
+            if (!config.getCaptureStrategyOrDefault().isLogCdc()
+                    || project.getTargetKindOrDefault() != SyncTargetKind.JDBC) {
                 throw new IllegalStateException("error.project.fanout.requires.binlog");
             }
             java.util.Set<Long> seen = new java.util.HashSet<>();

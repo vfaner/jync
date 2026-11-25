@@ -839,6 +839,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     : tx.deletes().entrySet()) {
                 target.applyDeletes(e.getKey(), e.getValue());
             }
+            // Fan-out only: the LSN every target worker must record on its own commit.
+            target.notePosition(com.qqmu.jync.service.fanout.FanoutRuntime.TOKEN_LSN
+                    + commitLsn);
             target.commit();
         }
         ctx.requireLease();

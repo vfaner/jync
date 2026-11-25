@@ -49,6 +49,14 @@ public class CdcBaselineService {
     private final RedisBaselineService redisBaseline;
     private final AutoSyncService autoSync;
 
+    /**
+     * Fan-out runtimes of this node. When one is registered for the project, the baseline
+     * loads every target through the shared runtime instead of the project's single target —
+     * same anchor, same not-done/retry semantics, and no per-engine fan-out branch.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutRuntimeRegistry fanoutRuntimes;
+
     @org.springframework.beans.factory.annotation.Autowired
     public CdcBaselineService(CdcPositionStore positionStore, BinlogClientFactory clientFactory,
                               SyncTaskStore taskStore,
@@ -430,6 +438,32 @@ public class CdcBaselineService {
                 return;
             }
             logMinerAnchorScn = recordBaselineAnchor(ctx);
+            com.qqmu.jync.service.fanout.FanoutRuntime fanout =
+                    fanoutRuntimes == null ? null : fanoutRuntimes.get(projectId);
+            if (fanout != null) {
+                // A fan-out baseline reads the source once and publishes to the shared
+                // transport, so every target receives the same snapshot. The anchor was
+                // already recorded above, exactly as for a single target; the archive check
+                // and the done marker keep their order (check, then mark) so a gap cannot be
+                // shipped as a complete baseline.
+                java.util.List<com.qqmu.jync.service.fanout.FanoutBaselineService.TableLoad>
+                        loads = runFanoutBaseline(fanout);
+                if (logMinerAnchorScn != null) {
+                    assertArchiveStillCovers(ctx.getSourceConfig(), logMinerAnchorScn);
+                }
+                positionStore.markBaselineDone(projectId);
+                if (!loads.isEmpty()) {
+                    try {
+                        taskStore.markCdcDataApplied(projectId);
+                    } catch (RuntimeException e) {
+                        log.warn("Could not advance last-sync after the fan-out baseline of"
+                                + " project {}: {}", projectId, e.getMessage());
+                    }
+                }
+                log.info("Fan-out baseline for project {} completed ({} table(s))",
+                        projectId, loads.size());
+                return;
+            }
             SyncResult result = engine.runCycle(ctx.toBuilder().cdcBaselineRun(true).build());
             // runCycle 把 SQLException/LockLost/RuntimeException 折进 result 而不外抛:
             // 失败的全量必须在这里转成异常,否则残缺快照会被标成 baseline_done,流从
@@ -528,6 +562,23 @@ public class CdcBaselineService {
                 taskStore.recordCdcFailure(projectId, detail);
             }
             throw e;
+        }
+    }
+
+    /**
+     * The fan-out half of {@link #runBaseline}: the runtime creates every target's tables,
+     * reads the source once and waits for each target to acknowledge the snapshot. Failures
+     * propagate as unchecked exceptions so the caller's keep-the-anchor / transient-retry
+     * handling stays identical to the single-target path.
+     */
+    private java.util.List<com.qqmu.jync.service.fanout.FanoutBaselineService.TableLoad>
+            runFanoutBaseline(com.qqmu.jync.service.fanout.FanoutRuntime fanout) {
+        try {
+            return fanout.baseline();
+        } catch (RuntimeException | Error e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("Fan-out baseline failed: " + e.getMessage(), e);
         }
     }
 

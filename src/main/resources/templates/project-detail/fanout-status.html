@@ -13,7 +13,12 @@
             <b th:text="${s.name}">target</b>
             <span th:if="${s.file != null}" class="mono"
                   th:text="|${s.file}:${s.pos}|">binlog:pos</span>
-            <span th:if="${s.file == null}" th:text="#{option.fanoutNoPosition}">not consumed yet</span>
+            <span th:if="${s.file == null and s.lsn != null}" class="mono"
+                  th:text="|LSN ${s.lsn}|">LSN</span>
+            <span th:if="${s.file == null and s.lsn == null and s.scn != null}" class="mono"
+                  th:text="|SCN ${s.scn}|">SCN</span>
+            <span th:if="${s.file == null and s.lsn == null and s.scn == null}"
+                  th:text="#{option.fanoutNoPosition}">not consumed yet</span>
             <span th:if="${s.ageSeconds != null}" th:text="#{option.fanoutAge(${s.ageSeconds})}">age</span>
             <span th:text="#{option.fanoutSpool(${s.spoolBytes})}">spool</span>
         </li>

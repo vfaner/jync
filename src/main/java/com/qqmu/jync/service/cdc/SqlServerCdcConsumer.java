@@ -1049,6 +1049,9 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 for (Map.Entry<CdcTableBinding, SqlServerTxFold.Buffer> e : buffers.entrySet()) {
                     target.applyDeletes(e.getKey(), e.getValue().deletes());
                 }
+                // Fan-out only: the LSN every target worker must record on its own commit.
+                target.notePosition(com.qqmu.jync.service.fanout.FanoutRuntime.TOKEN_LSN
+                        + txLsn);
                 target.commit();
             } catch (Exception e) {
                 // P2-3: a flush failure may mean schema drift — the cached bindings that

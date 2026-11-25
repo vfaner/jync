@@ -759,6 +759,11 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                         : committed.deletes().entrySet()) {
                     target.applyDeletes(e.getKey(), e.getValue());
                 }
+                // Fan-out only: the packed YStream position every target worker records.
+                if (position != null) {
+                    target.notePosition(com.qqmu.jync.service.fanout.FanoutRuntime
+                            .TOKEN_YSTREAM + YStreamPositionCodec.encode(position));
+                }
                 target.commit();
             } catch (RuntimeException | SQLException e) {
                 applyFailedThisCycle = true;   // only target write failures feed the cap
