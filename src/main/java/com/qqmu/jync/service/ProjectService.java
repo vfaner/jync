@@ -130,6 +130,9 @@ public class ProjectService {
     private com.qqmu.jync.repository.FanoutPositionRepository fanoutPositions;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.qqmu.jync.repository.FanoutProgressRepository fanoutProgress;
+    /** Optional: removes the Redis Stream of a deleted project when that transport is on. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutStreamCleanup fanoutStreamCleanup;
     private final TaskMetricSampleRepository taskMetricSampleRepository;
     private final AlertStateRepository alertStateRepository;
     private final SyncProperties properties;
@@ -1624,6 +1627,9 @@ public class ProjectService {
                 fanoutProgress.deleteByProjectId(projectId);
             }
             deleteFanoutSpool(projectId);
+            if (fanoutStreamCleanup != null) {
+                fanoutStreamCleanup.delete(projectId);
+            }
             projectRepository.deleteById(projectId);
             // Drop the runner's per-project state (queued rerun, attempt count, stop epoch,
             // heartbeat marker) so a reused id cannot inherit a ghost cycle.

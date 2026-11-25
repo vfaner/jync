@@ -32,6 +32,13 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
      * reads are rare — once per table — so serializing them costs nothing.
      */
     private final Object readLock = new Object();
+    /**
+     * Last WARN per table for a failed catalog read. One high-volume table whose metadata
+     * cannot be read must not print a warning per row event; a minute between warnings keeps
+     * it visible without drowning the log.
+     */
+    private final Map<String, Long> lastWarnAt = new ConcurrentHashMap<>();
+    private static final long WARN_INTERVAL_MS = 60_000L;
 
     public FanoutBindingResolver(SyncContext sourceCtx, Connection sourceConn) {
         this.sourceCtx = sourceCtx;
@@ -65,8 +72,16 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
         } catch (SQLException | RuntimeException e) {
             // NOT cached: a failed catalog read (a throttled pool, a driver hiccup) must be
             // retried by the next event, not turned into "this table is unsyncable" forever.
-            log.warn("Fan-out binding for {}.{} unavailable (will retry): {}",
-                    schema, table, e.toString());
+            long now = System.currentTimeMillis();
+            Long last = lastWarnAt.get(key);
+            if (last == null || now - last >= WARN_INTERVAL_MS) {
+                lastWarnAt.put(key, now);
+                log.warn("Fan-out binding for {}.{} unavailable (will retry): {}",
+                        schema, table, e.toString());
+            } else {
+                log.debug("Fan-out binding for {}.{} still unavailable: {}",
+                        schema, table, e.toString());
+            }
             return null;
         }
     }
