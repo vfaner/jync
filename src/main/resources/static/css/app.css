@@ -1213,6 +1213,12 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 
 /* 一源多目标：额外目标勾选列表（不使用原生 multiple select） */
+/* 原生目标下拉保留给表单绑定与旧脚本，视觉上由标签选择器代替；不能用
+   display:none，否则 required 校验会变成不可聚焦的错误。 */
+.target-primary-select {
+  position: absolute !important; width: 1px; height: 1px; padding: 0;
+  border: 0; opacity: 0; overflow: hidden; pointer-events: none;
+}
 .fanout-target-picker { margin-top: 0; }
 .fanout-target-picker .tag-input { min-height: 42px; cursor: default; }
 .fanout-add-select { flex: 1 1 220px; min-width: 180px; font-family: inherit; font-size: 13px; }

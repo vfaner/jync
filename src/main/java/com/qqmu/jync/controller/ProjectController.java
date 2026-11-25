@@ -271,8 +271,6 @@ public class ProjectController {
                 optionsForRole(ConnectionRole.SOURCE, project.getSourceDbId(), scope));
         model.addAttribute("targetDatabases",
                 optionsForRole(ConnectionRole.TARGET, project.getTargetDbId(), scope));
-        model.addAttribute("fanoutTargets",
-                optionsForRole(ConnectionRole.TARGET, null, scope));
     }
 
     /**
@@ -422,13 +420,6 @@ public class ProjectController {
             }
         }
         model.addAttribute("columnRuleTables", columnRuleTables);
-        // Extra targets for a fan-out project: any TARGET connection except the source and
-        // the project's primary target.
-        model.addAttribute("fanoutTargetOptions", databaseConfigService.findByRole(
-                        ConnectionRole.TARGET).stream()
-                .filter(c -> !java.util.Objects.equals(c.getId(), project.getSourceDbId())
-                        && !java.util.Objects.equals(c.getId(), project.getTargetDbId()))
-                .toList());
         if (fanoutPositionStore != null && config.getFanoutTargetDbIds() != null
                 && !config.getFanoutTargetDbIds().isEmpty()) {
             List<Long> ids = new ArrayList<>();

@@ -1766,38 +1766,46 @@
    * 拖动或 Alt+←/→ 调整顺序。保存只提交这组列名，不在这里读取源库。
    */
   /**
-   * 额外目标选择：已选目标显示为可移除的标签，下拉只负责“添加”。提交仍走
-   * 同名 hidden input，表单没有 JS 时服务端渲染的标签也能直接提交。
+   * 目标数据库多选：第一枚标签是主目标，其余写入 fanoutTargetIds。标签和 hidden
+   * input 同时提交，禁用 JS 时服务端渲染的标签也能正常工作。
    */
-  function bindFanoutPicker(picker) {
-    var chips = picker.querySelector('[data-role="fanout-chips"]');
-    var add = picker.querySelector('[data-role="fanout-add"]');
-    var hidden = picker.querySelector('[data-role="fanout-hidden"]');
-    if (!chips || !add || !hidden) return;
-    var max = parseInt(picker.getAttribute('data-max'), 10) || 8;
+  function bindTargetPicker(picker) {
+    var chips = picker.querySelector('[data-role="target-chips"]');
+    var add = picker.querySelector('[data-role="target-add"]');
+    var primary = picker.querySelector('[data-role="target-primary"]');
+    var primaryHidden = picker.querySelector('[data-role="target-primary-hidden"]');
+    var extras = picker.querySelector('[data-role="target-extras"]');
+    if (!chips || !primary || !extras) return;
+    var max = parseInt(picker.getAttribute('data-max'), 10) || 9;
+    var locked = picker.getAttribute('data-locked') === 'true';
 
-    function hiddenInputs() {
-      return Array.prototype.slice.call(hidden.querySelectorAll('input'));
+    function chipNodes() {
+      return Array.prototype.slice.call(chips.querySelectorAll('.tag-chip'));
     }
-    function has(id) {
-      return hiddenInputs().some(function (input) { return input.value === id; });
-    }
-    function setOption(id, disabled) {
-      Array.prototype.slice.call(add.options).forEach(function (option) {
-        if (option.value === id) option.disabled = disabled;
+    function sync() {
+      var nodes = chipNodes();
+      var primaryId = nodes.length ? nodes[0].getAttribute('data-id') : '';
+      primary.value = primaryId;
+      if (primaryHidden) primaryHidden.value = primaryId;
+      extras.innerHTML = '';
+      nodes.slice(1).forEach(function (chip) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'fanoutTargetIds';
+        input.value = chip.getAttribute('data-id');
+        extras.appendChild(input);
       });
-    }
-    function removeChip(chip) {
-      var id = chip.getAttribute('data-id');
-      chip.remove();
-      hiddenInputs().forEach(function (input) {
-        if (input.value === id) input.remove();
-      });
-      setOption(id, false);
+      if (add) {
+        var selected = {};
+        nodes.forEach(function (chip) { selected[chip.getAttribute('data-id')] = true; });
+        Array.prototype.slice.call(add.options).forEach(function (option) {
+          if (option.value) option.disabled = !!selected[option.value];
+        });
+      }
     }
     function addChip(id, name, type) {
-      if (has(id)) return;
-      if (hiddenInputs().length >= max) {
+      if (!id || chipNodes().some(function (c) { return c.getAttribute('data-id') === id; })) return;
+      if (chipNodes().length >= max) {
         toast(picker.getAttribute('data-label-max'), 'warn');
         return;
       }
@@ -1820,30 +1828,39 @@
       remove.setAttribute('aria-label', picker.getAttribute('data-label-remove'));
       chip.appendChild(remove);
       chips.insertBefore(chip, add);
-      var input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = 'fanoutTargetIds';
-      input.value = id;
-      hidden.appendChild(input);
-      setOption(id, true);
+      sync();
     }
 
     chips.addEventListener('click', function (event) {
+      if (locked) return;
       var button = event.target.closest ? event.target.closest('button[data-remove]') : null;
       if (!button) return;
       var chip = button.closest('.tag-chip');
       if (chip) {
-        removeChip(chip);
-        add.focus();
+        chip.remove();
+        sync();
+        if (add) add.focus();
       }
     });
-    add.addEventListener('change', function () {
-      var option = add.options[add.selectedIndex];
-      if (!option || !option.value) return;
-      addChip(option.value, option.getAttribute('data-name') || option.textContent,
-        option.getAttribute('data-type') || '');
-      add.value = '';
-    });
+    // Preserve the stored primary target: the template renders chips in option order, but
+    // the first chip is what sync() treats as primary.
+    var initialPrimary = primary.value;
+    if (initialPrimary) {
+      var primaryChip = chips.querySelector('.tag-chip[data-id="'
+        + initialPrimary.replace(/"/g, '\"') + '"]');
+      if (primaryChip) chips.insertBefore(primaryChip, chips.firstChild);
+    }
+    sync();
+    if (add) {
+      add.addEventListener('change', function () {
+        var option = add.options[add.selectedIndex];
+        if (!option || !option.value) return;
+        addChip(option.value, option.getAttribute('data-name') || option.textContent,
+          option.getAttribute('data-type') || '');
+        add.value = '';
+      });
+    }
+    sync();
   }
 
   function bindCursorPriority(btn) {
@@ -5520,7 +5537,7 @@
     document.querySelectorAll('[data-role="column-rule-form"]').forEach(bindColumnRuleForm);
     document.querySelectorAll('[data-role="column-rule-table"]').forEach(bindColumnRuleFilter);
     document.querySelectorAll('[data-role="cursor-priority-open"]').forEach(bindCursorPriority);
-    document.querySelectorAll('[data-role="fanout-picker"]').forEach(bindFanoutPicker);
+    document.querySelectorAll('[data-role="target-picker"]').forEach(bindTargetPicker);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
     document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);
