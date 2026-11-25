@@ -52,6 +52,24 @@ class SupportKnowledgeBaseTest {
     }
 
     @Test
+    void aChineseFanoutQuestionFindsTheFanoutSection() {
+        var hits = kb.search("zh", "一源多目标 fan-out 20 个目标 Redis Stream 中转", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("一源多目标（fan-out）");
+            assertThat(hit.body()).contains("sync.fanout.max-targets");
+        });
+    }
+
+    @Test
+    void anEnglishFanoutQuestionFindsTheFanoutSection() {
+        var hits = kb.search("en", "one source many targets fan-out Redis Stream transport", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit ->
+                assertThat(hit.title()).isEqualTo("One source, many targets (fan-out)"));
+    }
+
+    @Test
     void aChineseQuestionAboutTdengineFindsTheTimeSeriesSection() {
         var hits = kb.search("zh", "TDengine 时序数据库怎么同步", 3);
         assertThat(hits).isNotEmpty();

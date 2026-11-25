@@ -50,7 +50,9 @@ public class UpdateSystemParamsTool implements SupportTool {
                 + "sync.fetch-size (1-100000), sync.full-load-fetch-size (1-100000), "
                 + "sync.chunk-size (1000-1000000), sync.chunk-target-bytes "
                 + "(1048576-1073741824), sync.adaptive-chunk-size (true/false), "
-                + "sync.min-adaptive-chunk-size (100-100000), sync.max-retries (0-10). "
+                + "sync.min-adaptive-chunk-size (100-100000), sync.max-retries (0-10), "
+                + "sync.fanout.max-targets (2-100, total targets per one-source-many-targets "
+                + "project, primary included). "
                 + "Applies to subsequent sync rounds; other nodes converge within about 30 "
                 + "seconds. Security, TLS, credentials, retention, comparison limits, pool "
                 + "sizes and thread counts are not editable. Nothing is written until Confirm.";

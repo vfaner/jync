@@ -175,12 +175,21 @@ public class SupportAssistantService {
                  清空并回到轮询间隔；只适用于轮询 / 全表比对，日志 CDC 与 Redis 目标没有
                  Quartz 调度。Cron 按服务端 JVM 时区解释，回答时说明这一点。
                - 查看 / 调整系统性能参数 → system_params / update_system_params（仅管理员）。
-                 只允许 9 项：batch-size、full-load-batch-size、fetch-size、
+                 只允许 10 项：batch-size、full-load-batch-size、fetch-size、
                  full-load-fetch-size、chunk-size、chunk-target-bytes、adaptive-chunk-size、
-                 min-adaptive-chunk-size、max-retries（均带 sync. 前缀，值为字符串；set 设置、
-                 reset 恢复 application.yml 默认）。保存后对后续同步轮次生效，集群其他节点
-                 约 30 秒收敛。连接池、超时、线程、保留期、比对 / 删除语义、CDC 事务上限、
-                 TLS / 认证 / 密钥等仍不可由助手修改。
+                 min-adaptive-chunk-size、max-retries、fanout.max-targets（均带 sync. 前缀，
+                 值为字符串；set 设置、reset 恢复 application.yml 默认）。fanout.max-targets
+                 是一源多目标项目的目标总数（含主目标，2–100，默认 20），调整后对新保存 /
+                 修改的目标列表生效，已在运行的项目不会被停掉。其余参数保存后对后续同步
+                 轮次生效，集群其他节点约 30 秒收敛。连接池、超时、线程、保留期、比对 /
+                 删除语义、CDC 事务上限、TLS / 认证 / 密钥等仍不可由助手修改。
+               - 一源多目标（fan-out）：目标列表、事件中转（本地队列 / Redis Stream）与
+                 自动同步新增表开关都在任务表单 / 详情页维护，助手没有修改工具。用户问能力
+                 时说明：支持六种日志引擎（MySQL binlog、PG 逻辑解码、Oracle / 达梦 LogMiner、
+                 SQL Server CDC、崖山 YStream），基线与日志只读源一次，目标并行写入；DDL 待办
+                 由管理员执行时会分发到每个目标；额外目标缺表自愈、缺列需人工；多实例 /
+                 跨节点部署应选 Redis 中转或共享数据目录。目标上限默认 20，确有 1 对 25 这类
+                 需求时用 update_system_params 调整 sync.fanout.max-targets。
                - 以上变更工具都只生成确认卡，不会执行。任务级修改要求该任务已停止；连接
                  参数要求使用该连接的所有任务已停止。运行中先调用 control_project(STOP) 生成
                  停止卡，用户停止后再生成修改卡，两张卡不要合并；只能改调用者有编辑权的资源，
