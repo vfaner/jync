@@ -73,6 +73,74 @@ Auto-resolution (an explicit cursor wins):
 Deletes: under sync.full-compare-max-rows (20000) both key sets are compared each cycle;
 above that it is skipped.
 
+## How the progress card refreshes
+
+- The task-detail table-progress card refreshes itself: about every 2 seconds while a full
+  load runs, about every 5 seconds while the task is running (10 seconds above 200 tables).
+  The strategy/cursor column, full-load state, incremental state, last sync time and
+  full-load progress all update in place - no page reload. Polling pauses while the page is
+  hidden and catches up when it comes back.
+- The full-load progress column exists only while a full load is unfinished: loading now, or
+  stopped mid-way with resumable checkpoints. It hides itself once every load completed, and
+  shows "Loading..." before the first checkpoint is written.
+- The strategy/cursor column shows the resolved strategy badge and cursor column. An em dash
+  means the table has no progress row yet, or no usable cursor (incremental state LIMITED).
+  A cursor resolved at the end of a full load appears on the next automatic refresh.
+- The yellow index hint next to a cursor column comes from a source-side probe made when the
+  page was loaded; after setting or changing a cursor column, reload the page to re-evaluate
+  it. This is independent of the automatic status refresh.
+
+## Target table / column name case
+
+- Jync creates target objects with the source spelling, quoted (backticks on MySQL, double
+  quotes on PostgreSQL / Oracle, brackets on SQL Server); it does not convert identifiers to
+  upper or lower case.
+- The stored case is decided by the target database's folding rules: MySQL's
+  lower_case_table_names (fixed at initialisation; 1 / 2 stores table names lower-case), and
+  openGauss / Vastbase-style lower_case_column_names (which lower-cases even quoted column
+  names) plus their table-name setting. Jync cannot override this per session.
+- There is no Jync switch to force lower or preserve upper case. Table names can be renamed
+  one by one with the task's table-name mapping; column names cannot be renamed — column rules
+  transform values, not identifiers.
+- Since 2.4.5 Jync reads the target catalog's actual column spellings for Vastbase-family
+  targets, so syncing still works after folding; only the object names differ.
+- To keep upper case, turn the folding parameter off in the target first (usually an
+  initialisation or restart-time setting), then recreate the tables and resync. Objects
+  already created in lower case are not renamed automatically.
+
+## Why a strategy switch triggers another full load
+
+- Log CDC (binlog / redo / WAL / change tables / YStream) and cursor polling are both
+  incremental; they differ in where changes come from: the log, or a cursor-column query.
+- Polling needs a cursor watermark to read only changes. After switching from log CDC to
+  polling, or when a polling task is created, the table has no polling cursor, so the first
+  cycle runs a full load to establish the watermark and later cycles are incremental. This is
+  not a first sync in the data sense — it is a new baseline for the new strategy.
+- That load upserts by primary key and does not clear the target by default (unless
+  "truncate before initial load" is enabled): existing rows are refreshed and missing rows are
+  filled, which usually repairs the gap that motivated the switch.
+- Once the baseline finishes, no further full load runs unless the cursor is cleared or
+  unreadable, the target table is recreated, or the strategy/cursor column changes again.
+### Switching back from polling to log CDC
+
+- Jync stops the consumer, clears the polling cursor and the old position, runs a new baseline
+  and then streams from the new anchor; it never resumes the position from before the polling
+  period.
+- Before switching, verify:
+  - The table is a base table with a primary key. Views have no row-change events and keyless
+    tables cannot locate updates/deletes, so neither suits CDC (this is usually why data was
+    missing during the binlog phase); keep them on polling.
+  - If deletes matter, enable delete propagation first: the new baseline finishes with one
+    delete comparison that removes rows deleted at the source during the polling period;
+    otherwise they stay on the target.
+  - Binlog / archive retention must exceed the baseline duration, or the anchor logs are
+    purged and the switch immediately reports an expired position.
+  - The switch runs another full load (primary-key upsert, target not cleared by default);
+    schedule it off-peak for large tables.
+- Order of operations: stop the task → confirm `binlog_format=ROW`, replication privileges and
+  log retention → enable delete propagation if needed → switch the strategy → start → watch
+  CDC lag and row counts.
+
 ## Real-time sync caveats
 
 - Writes are key-based upserts (at-least-once): the target needs a primary or unique key.
@@ -630,6 +698,9 @@ name when asking for support.
 - One-click upgrade downloads the jar (split into 100MB parts from Gitee when needed), verifies and
   swaps it, keeping jync.jar.bak. Restart to finish; it interrupts running tasks, so use a quiet
   window.
+- A container cannot swap the jar inside its image: pull the new image tag and recreate the
+  container; the volume behind /app/data stays. runtime_info reports the version and deployment,
+  but the assistant never performs the upgrade or restart.
 
 ## Troubleshooting sync issues
 
@@ -637,6 +708,9 @@ name when asking for support.
   the task is flagged as stuck.
 - Row counts differ: compare COUNT(*) on both sides, then check cursor monotonicity and open
   transactions.
+- The lag panel is "time the newest applied change was produced at the source" versus "time this
+  node processed it"; an idle source does not grow it. SQL Server CDC samples
+  cdc.lsn_time_mapping by commit LSN and keeps the previous sample when the mapping row is gone.
 - CDC lag grows or the stream stalls: check log retention, consumer position and network; for an
   expired position or a parked consumer see "CDC stalls and rebuilding the baseline".
 - Row counts still differ after a rebuild: a rebuild does not delete rows; removing rows deleted
@@ -726,6 +800,10 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 - It reads the effective retention windows for change-log, audit, system-log and metrics data
   (log_retention), so "how long are logs kept" and "why did old entries disappear" are answered
   from the running configuration; deleting logs itself stays a manual page action.
+- The running version, newest published version and update state, plus whether this instance runs
+  in a container (runtime_info), so "am I on the latest version", "how do I upgrade" and "Docker
+  or jar" are answered from the installation; upgrading, pulling images and restarting remain
+  manual actions.
 
 ## Assistant actions and confirmation cards
 
@@ -862,8 +940,8 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 ## Docker deployment and ARM64
 
 - Official images support **linux/amd64 (x86_64)** and **linux/arm64 (aarch64)**. `aarch64` is ARM64, not a third architecture; Docker calls it `arm64`, while 32-bit ARM is `arm/v7`.
-- On a machine where `uname -m` prints `aarch64`, run `docker pull vfaner/jync:2.4.5` and Docker selects the arm64 image automatically. Do not force `--platform linux/amd64`; that uses QEMU and can produce `exec format error` or severe slowdown.
+- On a machine where `uname -m` prints `aarch64`, run `docker pull vfaner/jync:latest` and Docker selects the arm64 image automatically. Do not force `--platform linux/amd64`; that uses QEMU and can produce `exec format error` or severe slowdown.
 - Kylin V10 aarch64 (kernel 4.19) can run Jync, but Docker or containerd must actually be installed; a supported kernel alone is not enough. Podman can run the same image.
-- If Docker Hub is unreachable, use `ghcr.io/vfaner/jync:2.4.5`. For fully offline hosts, `docker save` / `docker load` on another machine, or run `jync.jar` with a JDK 17 aarch64 build.
+- If Docker Hub is unreachable, use `ghcr.io/vfaner/jync:latest`. For fully offline hosts, `docker save` / `docker load` on another machine, or run `jync.jar` with a JDK 17 aarch64 build.
 - On Kylin or SELinux, use named volumes or add `:Z` to bind mounts so the container can write `/app/data` and `/app/logs`.
 - Default accounts are `admin / 123456` (plus `ops` and `view`); the first login forces a password change.

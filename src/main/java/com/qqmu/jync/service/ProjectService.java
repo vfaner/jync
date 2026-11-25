@@ -2043,14 +2043,22 @@ public class ProjectService {
      * not finished"; the counts tell how far it got and whether it will resume.
      */
     public Map<String, FullLoadProgress> findFullLoadProgress(Long projectId) {
+        // Group case-insensitively: the rest of the status view already matches table names
+        // by upper case, and a checkpoint row left under another spelling would otherwise
+        // become a second entry — its rows counted twice in the summary while the table row
+        // showed only one of them.
         Map<String, java.util.List<com.qqmu.jync.dto.ChunkCheckpointStatusRow>> byTable =
                 new LinkedHashMap<>();
+        Map<String, String> displayNames = new LinkedHashMap<>();
         for (com.qqmu.jync.dto.ChunkCheckpointStatusRow c
                 : checkpointRepository.findStatusRowsByProjectId(projectId)) {
-            byTable.computeIfAbsent(c.tableName(), k -> new ArrayList<>()).add(c);
+            String key = c.tableName() == null ? "" : c.tableName().toUpperCase(Locale.ROOT);
+            byTable.computeIfAbsent(key, k -> new ArrayList<>()).add(c);
+            displayNames.putIfAbsent(key, c.tableName());
         }
         Map<String, FullLoadProgress> result = new LinkedHashMap<>();
-        byTable.forEach((table, rows) -> result.put(table, FullLoadProgress.ofStatusRows(rows)));
+        byTable.forEach((key, rows) ->
+                result.put(displayNames.get(key), FullLoadProgress.ofStatusRows(rows)));
         return result;
     }
 

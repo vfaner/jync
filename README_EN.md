@@ -9,7 +9,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-brightgreen.svg)](https://spring.io/projects/spring-boot)
-[![Version](https://img.shields.io/badge/version-2.4.5-blue.svg)](https://github.com/vfaner/jync/releases/tag/v2.4.5)
+[![Version](https://img.shields.io/badge/version-2.4.6-blue.svg)](https://github.com/vfaner/jync/releases/tag/v2.4.6)
 [![Docker Sponsored OSS](https://img.shields.io/badge/Docker-Sponsored%20OSS-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/vfaner/jync)
 [![GitHub star](https://img.shields.io/github/stars/vfaner/jync?label=GitHub%20star)](https://github.com/vfaner/jync)
 [![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
@@ -22,8 +22,9 @@ start one jar, open the browser, and build continuous **schema + data** synchron
 Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB, and MongoDB → KingbaseES.
 
 No Kafka, Flink or ZooKeeper, and no job code to write. Apache-2.0 licensed and fully
-self-hostable, including air-gapped networks. **v2.4.5** adds table/column comment sync and a
-project-level cursor-column priority, plus fixes for Vastbase, Dameng CDC and MySQL type precision.
+self-hostable, including air-gapped networks. **v2.4.6** fixes polling and CDC stability —
+case-insensitive resume, no duplicate rows from keyless windows, truthful SQL Server lag — and keeps
+the table-progress card live without a reload.
 
 ## Highlights
 
@@ -147,9 +148,9 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
 Container deployment (official images built by GitHub Actions on tags, **linux/amd64 (x86_64) and linux/arm64 (aarch64)**; aarch64 is ARM64 and Docker selects it automatically):
 
 ```bash
-docker pull vfaner/jync:2.4.5
+docker pull vfaner/jync:2.4.6
 docker compose -f docker-compose.release.yml up -d
-# Mirror: ghcr.io/vfaner/jync:2.4.5; in a container upgrade by pulling the new image
+# Mirror: ghcr.io/vfaner/jync:2.4.6; in a container upgrade by pulling the new image
 ```
 
 Open `http://<host>:8080` and sign in with `admin / 123456`, `ops / 123456` or `view / 123456`;

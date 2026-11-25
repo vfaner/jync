@@ -374,8 +374,8 @@ public class ProjectController {
             }
         }
         model.addAttribute("progressByTable", progressByTable);
-        Map<String, ProjectService.FullLoadProgress> fullLoad =
-                projectService.findFullLoadProgress(id);
+        Map<String, ProjectService.FullLoadProgress> fullLoad = filterFullLoadToSelection(
+                projectService.findFullLoadProgress(id), config);
         model.addAttribute("statusFragmentData", false);
         addTableStatuses(id, config, fullLoad, model);
         Set<String> columnRuleTables = new TreeSet<>();
@@ -615,11 +615,12 @@ public class ProjectController {
             // 500 that the poller keeps retrying.
             return "project-detail/full-load-progress :: missing";
         }
-        Map<String, ProjectService.FullLoadProgress> fullLoad =
-                projectService.findFullLoadProgress(id);
+        SyncConfig config = projectService.loadConfig(project);
+        Map<String, ProjectService.FullLoadProgress> fullLoad = filterFullLoadToSelection(
+                projectService.findFullLoadProgress(id), config);
         model.addAttribute("project", project);
         model.addAttribute("statusFragmentData", true);
-        addTableStatuses(id, projectService.loadConfig(project), fullLoad, model);
+        addTableStatuses(id, config, fullLoad, model);
         addFullLoadProgress(fullLoad, model);
         return "project-detail/full-load-progress :: data";
     }
@@ -679,23 +680,52 @@ public class ProjectController {
      */
     private void addFullLoadProgress(Map<String, ProjectService.FullLoadProgress> fullLoadProgress,
                                      Model model) {
+        // The panel says "当前表 <name> 已写入行数 <rows>": both values must describe the SAME
+        // table. Summing every unfinished load here made a project with a second table's
+        // leftover checkpoints show a total next to one table's name, disagreeing with that
+        // table's own row in the list.
+        Map.Entry<String, ProjectService.FullLoadProgress> current =
+                fullLoadProgress.entrySet().stream()
+                        .filter(entry -> entry.getValue().getLastUpdatedAt() != null)
+                        .max(java.util.Comparator.comparing(
+                                entry -> entry.getValue().getLastUpdatedAt()))
+                        .orElse(null);
+        java.time.Instant fullLoadUpdatedAt =
+                current == null ? null : current.getValue().getLastUpdatedAt();
         model.addAttribute("fullLoadTableCount", fullLoadProgress.size());
-        model.addAttribute("fullLoadRows", fullLoadProgress.values().stream()
-                .mapToLong(ProjectService.FullLoadProgress::getRowsCopied).sum());
-        java.time.Instant fullLoadUpdatedAt = fullLoadProgress.values().stream()
-                .map(ProjectService.FullLoadProgress::getLastUpdatedAt)
-                .filter(java.util.Objects::nonNull)
-                .max(java.time.Instant::compareTo)
-                .orElse(null);
+        model.addAttribute("fullLoadRows",
+                current == null ? 0L : current.getValue().getRowsCopied());
         model.addAttribute("fullLoadUpdatedAt", fullLoadUpdatedAt);
         model.addAttribute("fullLoadStale", fullLoadUpdatedAt != null
                 && fullLoadUpdatedAt.isBefore(java.time.Instant.now().minusSeconds(600)));
-        model.addAttribute("fullLoadCurrentTable", fullLoadProgress.entrySet().stream()
-                .filter(entry -> entry.getValue().getLastUpdatedAt() != null)
-                .max(java.util.Comparator.comparing(
-                        entry -> entry.getValue().getLastUpdatedAt()))
-                .map(Map.Entry::getKey)
-                .orElse(null));
+        model.addAttribute("fullLoadCurrentTable", current == null ? null : current.getKey());
+    }
+
+    /**
+     * Checkpoints of tables the project no longer selects are historical leftovers: they must
+     * not inflate the full-load summary or keep the 「全量进度」 column visible. A legacy
+     * project without an explicit selection ("all") has no list to filter by and keeps every
+     * entry; an explicitly empty selection keeps none.
+     */
+    private static Map<String, ProjectService.FullLoadProgress> filterFullLoadToSelection(
+            Map<String, ProjectService.FullLoadProgress> fullLoad, SyncConfig config) {
+        if (config == null || config.getTables() == null || config.getTables().isEmpty()) {
+            return config != null && config.isObjectSelectionExplicit()
+                    ? Map.of() : fullLoad;
+        }
+        Set<String> selected = new LinkedHashSet<>();
+        for (String table : config.getTables()) {
+            if (table != null) {
+                selected.add(table.toUpperCase(Locale.ROOT));
+            }
+        }
+        Map<String, ProjectService.FullLoadProgress> filtered = new LinkedHashMap<>();
+        fullLoad.forEach((table, progress) -> {
+            if (table != null && selected.contains(table.toUpperCase(Locale.ROOT))) {
+                filtered.put(table, progress);
+            }
+        });
+        return filtered;
     }
 
     @GetMapping("/{id}/cdc-card")

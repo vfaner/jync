@@ -167,6 +167,24 @@ class ProjectServiceTest {
     }
 
     @Test
+    void checkpointRowsUnderDifferentSpellingsOfTheSameTableAreMerged() {
+        // The status view matches table names case-insensitively; two checkpoint spellings
+        // must not become two entries (the summary would count the rows twice while the
+        // table row showed only one entry).
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("ItEmS", 0, 0, 5,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, java.time.Instant.now()),
+                new ChunkCheckpointStatusRow("ITEMS", 0, 1, 7,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, java.time.Instant.now())));
+
+        java.util.Map<String, ProjectService.FullLoadProgress> progress =
+                service.findFullLoadProgress(1L);
+
+        assertThat(progress).hasSize(1);
+        assertThat(progress.values().iterator().next().getRowsCopied()).isEqualTo(12);
+    }
+
+    @Test
     void fullLoadProgressIsEmptyWhenNoLoadIsInFlight() {
         when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
 

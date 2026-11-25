@@ -8,7 +8,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-brightgreen.svg)](https://spring.io/projects/spring-boot)
-[![Version](https://img.shields.io/badge/version-2.4.5-blue.svg)](https://github.com/vfaner/jync/releases/tag/v2.4.5)
+[![Version](https://img.shields.io/badge/version-2.4.6-blue.svg)](https://github.com/vfaner/jync/releases/tag/v2.4.6)
 [![Docker Sponsored OSS](https://img.shields.io/badge/Docker-Sponsored%20OSS-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/vfaner/jync)
 [![GitHub star](https://img.shields.io/github/stars/vfaner/jync?label=GitHub%20star)](https://github.com/vfaner/jync)
 [![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
@@ -17,7 +17,7 @@
 
 Jync 是面向**信创迁移与异构数据集成**的开源同步工具：单个 jar 启动，浏览器完成建连接、选表、配调度与启动；在 **35 种数据库（另支持自定义 JDBC 类型）** 之间持续同步**结构与数据**，另有三条不走 JDBC 的专属迁移链路（Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES）。
 
-不需要 Kafka、Flink、ZooKeeper，也不需要编写作业代码；Apache-2.0 协议，可完全私有化部署、内网离线运行。当前 **v2.4.5** 新增表 / 字段注释同步与项目级游标列优先级，并修复海量、达梦 CDC 与 MySQL 类型精度等边界。
+不需要 Kafka、Flink、ZooKeeper，也不需要编写作业代码；Apache-2.0 协议，可完全私有化部署、内网离线运行。当前 **v2.4.6** 集中修复轮询全量与日志 CDC 的稳定性问题，并让同步进度卡实时更新。
 
 ## 核心亮点
 
@@ -105,9 +105,9 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
 容器部署（官方镜像由 tag 触发的 GitHub Actions 构建，**linux/amd64（x86_64）与 linux/arm64（aarch64）**；aarch64 即 ARM64，Docker 会自动选择架构）：
 
 ```bash
-docker pull vfaner/jync:2.4.5
+docker pull vfaner/jync:2.4.6
 docker compose -f docker-compose.release.yml up -d
-# 备用镜像 ghcr.io/vfaner/jync:2.4.5；容器内升级请拉取新镜像并重建容器
+# 备用镜像 ghcr.io/vfaner/jync:2.4.6；容器内升级请拉取新镜像并重建容器
 ```
 
 首次访问 `http://<服务器>:8080`，使用内置账号 `admin / 123456`、`ops / 123456` 或 `view / 123456` 登录，**首次登录强制修改密码**。生产部署、外部元数据库、Docker / Kubernetes、HTTPS 与升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)与[部署说明](docs/deploy-container.md)。
@@ -140,7 +140,7 @@ com.qqmu.jync
 - **真库验证矩阵**：[docs/verification-matrix.md](docs/verification-matrix.md)
 - **发布说明**：[docs/release-notes/](docs/release-notes/)
 
-`mvn test` 运行单元测试（6801 项：6797 通过、3 个 TLS 证书用例受本机证书配置影响、1 个仅限 Linux 的用例按环境跳过），覆盖方言与 SQL 改写、全量与续传、六类 CDC、Redis 投影、专属迁移、ETL、告警、角色归属、AI 助手与安全。真库集成测试（`*IT`）需 Docker，命令见验证矩阵。
+`mvn test` 运行单元测试（6804 项：6800 通过、3 个 TLS 证书用例受本机证书配置影响、1 个仅限 Linux 的用例按环境跳过），覆盖方言与 SQL 改写、全量与续传、六类 CDC、Redis 投影、专属迁移、ETL、告警、角色归属、AI 助手与安全。真库集成测试（`*IT`）需 Docker，命令见验证矩阵。
 
 ## 参与贡献
 

@@ -8,6 +8,8 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Instant;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -152,6 +154,38 @@ class FullLoadProgressViewTest {
         assertThat(fragment).contains("id=\"progress-summary-data\"");
         assertThat(fragment).contains("data-status-cell=\"fullProgress\"");
         assertThat(fragment).contains("200");
+    }
+
+    /**
+     * 摘要里的「当前表 X 已写入行数」必须与 X 那一行显示的数字一致：不能把其他表遗留的
+     * 检查点加进来，也不能把未选中表的历史检查点算进去。
+     */
+    @Test
+    void theSummaryRowsDescribeTheCurrentTableAndIgnoreDeselectedLeftovers() throws Exception {
+        ChunkCheckpoint current = new ChunkCheckpoint(1L, "ITEMS", 0, 0, null, 8_300_000,
+                ChunkCheckpoint.STATUS_CHUNK);
+        current.setUpdatedAt(Instant.now());
+        ChunkCheckpoint leftover = new ChunkCheckpoint(1L, "OLD", 0, 0, null, 1_400_390,
+                ChunkCheckpoint.STATUS_CHUNK);
+        leftover.setUpdatedAt(Instant.now().minusSeconds(60));
+        stubDetail(Map.of(
+                "ITEMS", ProjectService.FullLoadProgress.of(List.of(current)),
+                "OLD", ProjectService.FullLoadProgress.of(List.of(leftover))));
+
+        SyncConfig config = new SyncConfig();
+        config.setTables(new LinkedHashSet<>(List.of("ITEMS")));
+        config.setObjectSelectionExplicit(true);
+        when(projectService.loadConfig(any(Project.class))).thenReturn(config);
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
+                        null, null, 8_300_000L, Instant.now())));
+
+        String html = render();
+
+        assertThat(html).contains("8300000");
+        assertThat(html).doesNotContain("9700390");
+        assertThat(html).doesNotContain("1400390");
+        assertThat(html).doesNotContain("data-progress-table=\"OLD\"");
     }
 
     /**

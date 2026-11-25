@@ -5,7 +5,7 @@
 #       数据卷 ./data、./logs 会保留，不要删除。
 services:
   jync:
-    image: vfaner/jync:2.4.5
+    image: vfaner/jync:2.4.6
     container_name: jync
     ports:
       - "8080:8080"
