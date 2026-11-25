@@ -45,6 +45,10 @@ public final class FanoutTargetWorker implements AutoCloseable {
         thread.start();
     }
 
+    public EventTransport.Subscription subscription() {
+        return subscription;
+    }
+
     public boolean isAlive() {
         return thread.isAlive();
     }
@@ -75,12 +79,14 @@ public final class FanoutTargetWorker implements AutoCloseable {
                                     + " while " + transactionId + " is open");
                         }
                         applier.applyTransaction(event.transactionId(), event.position(), buffer);
-                        subscription.ack(event);
-                        appliedTransactions++;
-                        lastAppliedPosition = event.position();
+                        // Persist the target offset BEFORE acknowledging: if the offset
+                        // write fails, the event stays in the spool and is replayed, not lost.
                         if (onCommit != null) {
                             onCommit.accept(event.position());
                         }
+                        subscription.ack(event);
+                        appliedTransactions++;
+                        lastAppliedPosition = event.position();
                         buffer = new ArrayList<>();
                         transactionId = null;
                         break;

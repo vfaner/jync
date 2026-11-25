@@ -40,6 +40,19 @@ class SpoolingEventTransportTest {
     }
 
     @Test
+    void ackingWhenCaughtUpTruncatesTheSpool(@TempDir Path dir) throws Exception {
+        SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000, mapper);
+        EventTransport.Subscription sub = transport.subscribe("caught-up");
+        transport.publish(row("tx-1", 1L));
+
+        ChangeEvent event = sub.poll(Duration.ofSeconds(1));
+        sub.ack(event);
+
+        assertThat(java.nio.file.Files.size(dir.resolve("caught-up.log"))).isZero();
+        transport.close();
+    }
+
+    @Test
     void exceedingThePerTargetCapIsAVisibleErrorNotASilentDrop(@TempDir Path dir)
             throws Exception {
         SpoolingEventTransport transport = new SpoolingEventTransport(dir, 64, mapper);

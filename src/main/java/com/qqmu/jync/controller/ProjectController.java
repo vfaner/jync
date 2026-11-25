@@ -176,9 +176,31 @@ public class ProjectController {
             model.addAttribute("copyFrom", source.getId());
         }
         model.addAttribute("project", project);
+        model.addAttribute("fanoutSelected", java.util.List.of());
         addDatabaseOptions(model, project);
         addRedisOptions(model, project);
         return "project-form";
+    }
+
+    private void validateFanoutTargets(Project project, List<Long> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return;
+        }
+        if (ids.size() > 8) {
+            throw new IllegalArgumentException("error.project.fanout.tooMany");
+        }
+        Set<Long> seen = new java.util.HashSet<>();
+        for (Long targetId : ids) {
+            if (targetId == null || !seen.add(targetId)) {
+                throw new IllegalArgumentException("error.project.fanout.invalid");
+            }
+            DatabaseConfig target = databaseConfigService.findById(targetId).orElse(null);
+            if (target == null || target.getRole() != ConnectionRole.TARGET
+                    || java.util.Objects.equals(targetId, project.getSourceDbId())
+                    || java.util.Objects.equals(targetId, project.getTargetDbId())) {
+                throw new IllegalArgumentException("error.project.fanout.invalid");
+            }
+        }
     }
 
     /**
@@ -224,6 +246,11 @@ public class ProjectController {
             // The service refuses an endpoint switch while running; the form shows the same
             // verdict up front so the user does not fill in a whole edit that cannot save.
             model.addAttribute("topologyLocked", projectService.isRunning(project));
+            SyncConfig editConfig = projectService.loadConfig(project);
+            model.addAttribute("fanoutSelected",
+                    editConfig == null || editConfig.getFanoutTargetDbIds() == null
+                            ? java.util.List.of()
+                            : editConfig.getFanoutTargetDbIds());
             addDatabaseOptions(model, project);
             addRedisOptions(model, project);
             return "project-form";
@@ -244,6 +271,8 @@ public class ProjectController {
                 optionsForRole(ConnectionRole.SOURCE, project.getSourceDbId(), scope));
         model.addAttribute("targetDatabases",
                 optionsForRole(ConnectionRole.TARGET, project.getTargetDbId(), scope));
+        model.addAttribute("fanoutTargets",
+                optionsForRole(ConnectionRole.TARGET, null, scope));
     }
 
     /**
@@ -297,13 +326,17 @@ public class ProjectController {
     @PostMapping("/save")
     public String save(@ModelAttribute Project project,
                        @RequestParam(name = "copyFrom", required = false) Long copyFrom,
+                       @RequestParam(name = "fanoutTargetIds", required = false)
+                       List<Long> fanoutTargetIds,
                        RedirectAttributes flash) {
         try {
+            validateFanoutTargets(project, fanoutTargetIds);
             // The clone is created and its settings copied in one transaction; a failure
             // leaves neither an empty project nor a half-initialized one behind.
             Project saved = copyFrom != null
                     ? projectService.saveAsClone(project, copyFrom, AccessGuard.current())
                     : projectService.save(project, AccessGuard.current());
+            projectService.configureFanout(saved.getId(), fanoutTargetIds);
             flash.addFlashAttribute("message", "msg.project.saved");
             return "redirect:/projects/" + saved.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -996,6 +1029,15 @@ public class ProjectController {
                         }
                     }
                     config.setFanoutTargetDbIds(clean);
+                }
+                // A strategy switch away from binlog leaves no fan-out to run; stale extra
+                // targets would otherwise sit in the config and surprise a later switch back.
+                CaptureStrategy effectiveForFanout = strategyParam != null
+                        ? CaptureStrategy.valueOf(strategyParam)
+                        : config.getCaptureStrategyOrDefault();
+                if (effectiveForFanout != CaptureStrategy.BINLOG_CDC
+                        && config.getFanoutTargetDbIds() != null) {
+                    config.setFanoutTargetDbIds(new ArrayList<>());
                 }
                 // 自定义调度开关:关闭时清空调度的两个字段,让引擎回退到全局默认值。
                 // 开启时透传表单值(空字符串 → null,保持"留空=默认"语义)。

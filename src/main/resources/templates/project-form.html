@@ -110,6 +110,19 @@
                         <input type="hidden" name="targetDbId" th:if="${topologyLocked}"
                                th:value="${project.targetDbId}">
                     </div>
+                    <!-- 一源多目标：首版仅 MySQL binlog CDC；此处选的额外目标会在保存时写入任务配置。 -->
+                    <div class="field" id="fanout-target-field">
+                        <label for="fanoutTargetIds">
+                            <span th:text="#{project.fanoutTargets}">Extra targets</span>
+                        </label>
+                        <select class="select" id="fanoutTargetIds" name="fanoutTargetIds"
+                                multiple size="4">
+                            <option th:each="db : ${fanoutTargets}" th:value="${db.id}"
+                                    th:selected="${fanoutSelected != null and fanoutSelected.contains(db.id)}"
+                                    th:text="|${db.name} · #{${'db.type.' + db.type.name()}}|">db</option>
+                        </select>
+                        <div class="help" th:text="#{project.fanoutTargets.help}">help</div>
+                    </div>
                     <div class="field" id="redis-target-field"
                          th:classappend="${project.targetKindOrDefault.name() == 'REDIS'} ? '' : 'is-hidden'">
                         <label for="targetRedisId">
@@ -157,6 +170,7 @@
     (function () {
         var jdbcField = document.getElementById('jdbc-target-field');
         var redisField = document.getElementById('redis-target-field');
+        var fanoutField = document.getElementById('fanout-target-field');
         var jdbcSelect = document.getElementById('targetDbId');
         var redisSelect = document.getElementById('targetRedisId');
         if (!jdbcField || !redisField || !jdbcSelect || !redisSelect) {
@@ -165,6 +179,9 @@
         function apply(kind) {
             jdbcField.classList.toggle('is-hidden', kind !== 'JDBC');
             redisField.classList.toggle('is-hidden', kind !== 'REDIS');
+            if (fanoutField) {
+                fanoutField.classList.toggle('is-hidden', kind !== 'JDBC');
+            }
             jdbcSelect.required = kind === 'JDBC';
             redisSelect.required = kind === 'REDIS';
         }

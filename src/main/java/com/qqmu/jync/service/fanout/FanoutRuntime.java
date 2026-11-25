@@ -85,7 +85,8 @@ public final class FanoutRuntime implements AutoCloseable {
             }
             FanoutBaselineService.Target target = targets.get(i);
             int attempts = restartAttempts.merge(target.targetDbId(), 1, Integer::sum);
-            worker.close();
+            // Keep the subscription open: closing it would stop spooling for this target
+            // between the failure and the replacement, losing the events in that window.
             if (attempts > 5) {
                 log.error("Fan-out target {} stopped {} times; not restarting it again"
                         + " until the project restarts", target.targetDbId(), attempts - 1);
@@ -93,15 +94,19 @@ public final class FanoutRuntime implements AutoCloseable {
             }
             log.warn("Fan-out target {} worker stopped ({}); restarting attempt {}",
                     target.targetDbId(), worker.getLastError(), attempts);
-            FanoutTargetWorker replacement = newWorker(target);
+            FanoutTargetWorker replacement = newWorker(target, worker.subscription());
             workers.set(i, replacement);
             replacement.start();
         }
     }
 
     private FanoutTargetWorker newWorker(FanoutBaselineService.Target target) {
+        return newWorker(target, transport.subscribe(String.valueOf(target.targetDbId())));
+    }
+
+    private FanoutTargetWorker newWorker(FanoutBaselineService.Target target,
+                                         EventTransport.Subscription subscription) {
         String group = String.valueOf(target.targetDbId());
-        EventTransport.Subscription subscription = transport.subscribe(group);
         EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
         return new FanoutTargetWorker(group, subscription, applier,
                 position -> recordTargetPosition(positionStore, sourceCtx.projectId(),
@@ -168,7 +173,7 @@ public final class FanoutRuntime implements AutoCloseable {
 
     private static void recordTargetPosition(FanoutPositionStore store, Long projectId,
                                              Long targetDbId, String position) {
-        if (position == null || position.startsWith("baseline:")) {
+        if (position == null || position.startsWith("baseline")) {
             return;
         }
         int colon = position.lastIndexOf(':');

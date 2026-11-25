@@ -677,6 +677,24 @@ public class ProjectService {
     }
 
     /**
+     * Applies the create/edit form's extra targets. A non-empty list implies the binlog
+     * capture the fan-out runner needs; clearing it leaves the current strategy alone.
+     */
+    @Transactional
+    public Project configureFanout(Long projectId, java.util.List<Long> extraTargets) {
+        Project project = require(projectId);
+        SyncConfig config = loadConfig(project);
+        java.util.List<Long> clean = extraTargets == null
+                ? new java.util.ArrayList<>() : new java.util.ArrayList<>(extraTargets);
+        config.setFanoutTargetDbIds(clean);
+        if (!clean.isEmpty()) {
+            config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        }
+        project.setSyncConfig(contextFactory.serializeConfig(config));
+        return projectRepository.save(project);
+    }
+
+    /**
      * A clone must not inherit the source's Redis key prefix.
      *
      * <p>The prefix is a namespace: two projects projecting into one Redis target must not share
@@ -1208,6 +1226,12 @@ public class ProjectService {
         // button; this is the server-side backstop for a stale page or a direct API call.
         // Bare keys: ApiExceptionHandler returns them as-is and the browser localizes them.
         SyncConfig config = loadConfig(project);
+        if (config.getFanoutTargetDbIds() != null && !config.getFanoutTargetDbIds().isEmpty()
+                && config.getCaptureStrategyOrDefault() != CaptureStrategy.BINLOG_CDC) {
+            // The fan-out runner is a binlog consumer; starting polling with extra targets
+            // would silently write only the primary target.
+            throw new IllegalStateException("error.project.fanout.requires.binlog");
+        }
         // Switching an existing polling project's target to Redis leaves its stored config
         // untouched, and the detail page no longer offers POLLING for a cache target — so a
         // start before the next config save would schedule JDBC cycles that cannot even build
