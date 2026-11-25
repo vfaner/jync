@@ -555,6 +555,23 @@ public final class CdcConsumer implements ManagedCdcConsumer {
      * baseline via a targeted repair cycle. Runs only between connections; a failure must not
      * stop the existing tables' stream, so it is logged and retried on a later reconnect.
      */
+    /**
+     * Whether auto-sync could ever add this table (it requires a primary key). A catalog
+     * error answers false: not disconnecting is safe, the next CREATE or reconnect retries.
+     */
+    private boolean autoSyncEligible(String db, String table) {
+        try (java.sql.Connection conn = ctx.getConnectionProvider()
+                .open(ctx.getSourceConfig())) {
+            String schema = db == null || db.isBlank() ? ctx.getSourceSchema() : db;
+            com.qqmu.jync.dto.meta.TableMeta meta =
+                    ctx.getSourceReader().readTable(conn, schema, table);
+            return meta != null && meta.hasPrimaryKey();
+        } catch (Exception e) {
+            log.debug("Auto-sync: cannot check {}: {}", table, e.toString());
+            return false;
+        }
+    }
+
     private void reconcileAutoSync(long projectId) {
         if (!ctx.getConfig().isAutoSyncNewTables()) {
             return;
@@ -612,6 +629,15 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                     // stream so the loop can add it and run its per-table baseline before
                     // resuming from the stored position.
                     if (!ctx.getConfig().isAutoSyncNewTables()) {
+                        return;
+                    }
+                    if (!autoSyncEligible(db, table)) {
+                        // A keyless table is never added by the reconciler; disconnecting
+                        // for it would replay the same CREATE on every reconnect, because
+                        // the position never moves past a DDL nothing consumed.
+                        log.info("CDC project {}: new table {}.{} has no primary key;"
+                                + " auto-sync keeps streaming without it",
+                                project.getId(), db, table);
                         return;
                     }
                     lastAutoSyncCheckMs = 0L;

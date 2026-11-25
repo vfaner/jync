@@ -133,6 +133,19 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
      * re-baseline is the safe first version: the new table has no history on any target, and
      * every target must receive it before the shared stream resumes.
      */
+    /** Keyless tables are never added; disconnecting for them would loop on the CREATE. */
+    private boolean autoSyncEligible(String db, String table) {
+        try (java.sql.Connection conn = openSource()) {
+            String schema = db == null || db.isBlank() ? ctx.getSourceSchema() : db;
+            com.qqmu.jync.dto.meta.TableMeta meta =
+                    ctx.getSourceReader().readTable(conn, schema, table);
+            return meta != null && meta.hasPrimaryKey();
+        } catch (Exception e) {
+            log.debug("Auto-sync: cannot check {}: {}", table, e.toString());
+            return false;
+        }
+    }
+
     private void reconcileAutoSync(long projectId) {
         if (!ctx.getConfig().isAutoSyncNewTables()) {
             return;
@@ -204,12 +217,18 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                             projectId, db, sql, file, position),
                     null,
                     (db, table, sql) -> {
-                        if (ctx.getConfig().isAutoSyncNewTables()) {
-                            rebaselineRequested = true;
-                            log.info("Fan-out capture saw CREATE TABLE {}.{}; reconnecting to"
-                                    + " re-baseline", db, table);
-                            disconnect(current);
+                        if (!ctx.getConfig().isAutoSyncNewTables()) {
+                            return;
                         }
+                        if (!autoSyncEligible(db, table)) {
+                            log.info("Fan-out capture: new table {}.{} has no primary key;"
+                                    + " auto-sync keeps streaming without it", db, table);
+                            return;
+                        }
+                        rebaselineRequested = true;
+                        log.info("Fan-out capture saw CREATE TABLE {}.{}; reconnecting to"
+                                + " re-baseline", db, table);
+                        disconnect(current);
                     });
             handler.seedCurrentFile(resume == null ? null : resume.getBinlogFile());
             handler.onEmptyTransaction(mark -> {

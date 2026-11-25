@@ -170,10 +170,11 @@ public final class RedisStreamEventTransport implements EventTransport {
                 deliveredIds.add(message.getId());
                 return event;
             } catch (IOException e) {
-                log.error("Fan-out Redis stream entry {} cannot be decoded; acknowledging"
-                        + " and skipping it", message.getId(), e);
-                ackIds(List.of(message.getId()));
-                return null;
+                // Never ack an entry this process cannot read: skipping it would apply a
+                // partial transaction (the COMMIT still arrives) and lose rows silently.
+                // The worker stops with its pending list intact, so nothing is lost.
+                throw new IllegalStateException("fan-out Redis stream entry "
+                        + message.getId() + " cannot be decoded", e);
             }
         }
 

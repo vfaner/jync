@@ -41,6 +41,7 @@ public final class FanoutRuntime implements AutoCloseable {
     private final FanoutProgressStore progressStore;
     private final FanoutPositionStore positionStore;
     private final com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair;
+    private final int queryTimeoutSeconds;
     private final CdcRuntimeStats stats;
     private final Map<Long, Integer> restartAttempts = new ConcurrentHashMap<>();
     /**
@@ -54,13 +55,15 @@ public final class FanoutRuntime implements AutoCloseable {
     private static final long POSITION_WRITE_INTERVAL_MS = 1_000L;
     private final java.util.Set<Long> barrierAcked = ConcurrentHashMap.newKeySet();
     private volatile String baselineMarker;
+    /** Set by close(): a supervisor tick that is already running must not start workers. */
+    private volatile boolean closed;
     private ScheduledExecutorService supervisor;
 
     public FanoutRuntime(SyncContext sourceCtx, List<FanoutBaselineService.Target> targets,
                          CdcRuntimeStats stats, StructureSyncService structureSync,
                          FanoutProgressStore progressStore, FanoutPositionStore positionStore,
                          com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
-                         EventTransport transport)
+                         int queryTimeoutSeconds, EventTransport transport)
             throws Exception {
         this.sourceCtx = sourceCtx;
         this.targets = List.copyOf(targets);
@@ -72,6 +75,7 @@ public final class FanoutRuntime implements AutoCloseable {
         this.positionStore = positionStore;
         this.stats = stats;
         this.targetRepair = targetRepair;
+        this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.baselineService = new FanoutBaselineService(structureSync);
         for (FanoutBaselineService.Target target : targets) {
             String group = String.valueOf(target.targetDbId());
@@ -83,7 +87,8 @@ public final class FanoutRuntime implements AutoCloseable {
 
     /** One target's write path, with the missing-table repair shared by every target. */
     private EventApplier applierFor(FanoutBaselineService.Target target) {
-        EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
+        EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings,
+                queryTimeoutSeconds);
         return targetRepair == null ? applier
                 : new RepairingEventApplier(applier, targetRepair, target.context(),
                         sourceCtx::getConfig);
@@ -102,6 +107,20 @@ public final class FanoutRuntime implements AutoCloseable {
 
     /** Restarts a target whose worker stopped; the spool offset makes replay lossless. */
     private synchronized void restartDeadWorkers() {
+        try {
+            restartDeadWorkersOnce();
+        } catch (RuntimeException e) {
+            // ScheduledExecutorService drops a task after one escaping exception: a single
+            // bad restart would silently stop supervision for every target of this run.
+            log.warn("Fan-out supervisor tick for project {} failed: {}",
+                    sourceCtx.projectId(), e.toString());
+        }
+    }
+
+    private void restartDeadWorkersOnce() {
+        if (closed) {
+            return;
+        }
         for (int i = 0; i < workers.size(); i++) {
             FanoutTargetWorker worker = workers.get(i);
             if (worker.isAlive()) {
@@ -118,6 +137,9 @@ public final class FanoutRuntime implements AutoCloseable {
             }
             log.warn("Fan-out target {} worker stopped ({}); restarting attempt {}",
                     target.targetDbId(), worker.getLastError(), attempts);
+            if (closed) {
+                return;
+            }
             FanoutTargetWorker replacement = newWorker(target, worker.subscription());
             workers.set(i, replacement);
             replacement.start();
@@ -215,6 +237,7 @@ public final class FanoutRuntime implements AutoCloseable {
 
     @Override
     public void close() {
+        closed = true;
         if (supervisor != null) {
             supervisor.shutdownNow();
         }

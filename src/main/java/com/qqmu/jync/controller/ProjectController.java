@@ -180,7 +180,15 @@ public class ProjectController {
         }
         model.addAttribute("project", project);
         model.addAttribute("fanoutMaxTargets", properties.getFanout().getMaxTargets());
-        model.addAttribute("fanoutSelected", java.util.List.of());
+        // A clone starts from the source's extra targets (the primary is chosen fresh), so
+        // saving without touching the picker does not silently turn a fan-out source into
+        // a single-target clone.
+        SyncConfig sourceConfig = source == null ? null : projectService.loadConfig(source);
+        java.util.List<Long> clonedExtras = sourceConfig == null
+                || sourceConfig.getFanoutTargetDbIds() == null
+                        ? java.util.List.of()
+                        : sourceConfig.getFanoutTargetDbIds();
+        model.addAttribute("fanoutSelected", clonedExtras);
         addDatabaseOptions(model, project);
         addRedisOptions(model, project);
         return "project-form";
@@ -189,6 +197,9 @@ public class ProjectController {
     private void validateFanoutTargets(Project project, List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
             return;
+        }
+        if (project.getTargetKindOrDefault() != SyncTargetKind.JDBC) {
+            throw new IllegalArgumentException("error.project.fanout.requires.binlog");
         }
         if (ids.size() > properties.getFanout().getMaxTargets() - 1) {
             throw new IllegalArgumentException("error.project.fanout.tooMany");

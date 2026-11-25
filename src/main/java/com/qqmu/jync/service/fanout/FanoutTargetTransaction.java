@@ -24,8 +24,14 @@ import com.qqmu.jync.service.cdc.CdcTargetTransaction;
 public final class FanoutTargetTransaction implements CdcTargetTransaction {
 
     private final EventTransport transport;
-    private final String transactionId = UUID.randomUUID().toString();
-    private final List<ChangeEvent> buffer = new ArrayList<>();
+    /** Used only when the engine supplied no position (tests / hand-built handles). */
+    private final String fallbackTransactionId = UUID.randomUUID().toString();
+    /** Pending rows are materialized at commit, after the position token is known. */
+    private final List<Pending> buffer = new ArrayList<>();
+
+    private record Pending(boolean delete, com.qqmu.jync.service.cdc.CdcTableBinding binding,
+                           Map<String, Object> row) {
+    }
     /** Set by the engine right before commit; the commit event carries it to every target. */
     private String position;
     private boolean closed;
@@ -37,31 +43,39 @@ public final class FanoutTargetTransaction implements CdcTargetTransaction {
     @Override
     public void applyUpserts(CdcTableBinding binding, List<Map<String, Object>> rows) {
         for (Map<String, Object> row : rows) {
-            buffer.add(ChangeEvent.row(position, transactionId, binding.getDatabase(),
-                    binding.getTable(), ChangeEvent.ChangeOperation.UPSERT,
-                    new LinkedHashMap<>(row), null, System.currentTimeMillis()));
+            buffer.add(new Pending(false, binding, new LinkedHashMap<>(row)));
         }
     }
 
     @Override
     public void applyDeletes(CdcTableBinding binding, List<Map<String, Object>> rows) {
         for (Map<String, Object> row : rows) {
-            buffer.add(ChangeEvent.row(position, transactionId, binding.getDatabase(),
-                    binding.getTable(), ChangeEvent.ChangeOperation.DELETE,
-                    null, new LinkedHashMap<>(row), System.currentTimeMillis()));
+            buffer.add(new Pending(true, binding, new LinkedHashMap<>(row)));
         }
     }
 
     @Override
     public void commit() throws SQLException {
         try {
+            // Deterministic id: a publish that dies midway leaves the first rows in the
+            // queue, the engine retries, and the replay must reuse the SAME id or the
+            // worker sees "transaction X ended without a COMMIT" and never recovers.
+            String transactionId = position == null || position.isBlank()
+                    ? fallbackTransactionId : "tx:" + position;
+            long now = System.currentTimeMillis();
             // Publish rows first, commit marker last: the marker is what makes a worker apply
             // the buffered transaction, so it must never be visible before its rows.
-            for (ChangeEvent event : buffer) {
+            for (Pending pending : buffer) {
+                ChangeEvent event = pending.delete()
+                        ? ChangeEvent.row(position, transactionId,
+                                pending.binding().getDatabase(), pending.binding().getTable(),
+                                ChangeEvent.ChangeOperation.DELETE, null, pending.row(), now)
+                        : ChangeEvent.row(position, transactionId,
+                                pending.binding().getDatabase(), pending.binding().getTable(),
+                                ChangeEvent.ChangeOperation.UPSERT, pending.row(), null, now);
                 transport.publish(event);
             }
-            transport.publish(ChangeEvent.commit(position, transactionId,
-                    System.currentTimeMillis()));
+            transport.publish(ChangeEvent.commit(position, transactionId, now));
             buffer.clear();
         } catch (Exception e) {
             // The transport's failures are IO failures; report them through the engines'

@@ -31,9 +31,16 @@ public final class JdbcFanoutApplier implements EventApplier {
 
     public JdbcFanoutApplier(SyncContext targetCtx, CdcRuntimeStats stats,
                              CdcBindingResolver bindings) {
+        this(targetCtx, stats, bindings, 0);
+    }
+
+    public JdbcFanoutApplier(SyncContext targetCtx, CdcRuntimeStats stats,
+                             CdcBindingResolver bindings, int queryTimeoutSeconds) {
         this.targetCtx = targetCtx;
         this.bindings = bindings;
-        this.applier = new CdcEventApplier(targetCtx, stats, 0);
+        // Same knob as the single-target path: a locked target row must fail the transaction
+        // instead of parking this target's worker (and its backlog) indefinitely.
+        this.applier = new CdcEventApplier(targetCtx, stats, queryTimeoutSeconds);
     }
 
     @Override
@@ -53,10 +60,14 @@ public final class JdbcFanoutApplier implements EventApplier {
             if (row == null) {
                 continue;
             }
+            // Copy: CdcEventApplier cleanses values IN PLACE, and RepairingEventApplier
+            // replays the same events after a successful repair. Handing it the event's own
+            // map would apply a non-idempotent rule (STRIP_PREFIX, masks) twice.
+            Map<String, Object> copy = new LinkedHashMap<>(row);
             if (event.operation() == ChangeEvent.ChangeOperation.DELETE) {
-                deletes.computeIfAbsent(binding, b -> new ArrayList<>()).add(row);
+                deletes.computeIfAbsent(binding, b -> new ArrayList<>()).add(copy);
             } else {
-                upserts.computeIfAbsent(binding, b -> new ArrayList<>()).add(row);
+                upserts.computeIfAbsent(binding, b -> new ArrayList<>()).add(copy);
             }
         }
         if (upserts.isEmpty() && deletes.isEmpty()) {

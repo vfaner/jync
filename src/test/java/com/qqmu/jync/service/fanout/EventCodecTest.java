@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.fanout;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.math.BigDecimal;
 import java.sql.Timestamp;
@@ -36,6 +37,27 @@ class EventCodecTest {
         assertThat(decoded.row().get("payload")).isEqualTo(new byte[] {1, 2, 3});
         assertThat(decoded.row().get("created"))
                 .isEqualTo(Timestamp.valueOf("2026-11-25 12:00:00"));
+    }
+
+    @Test
+    void anObjectOutsideTheEventGraphIsRefused() {
+        byte[] payload = serializeForeignObject();
+
+        assertThatThrownBy(() -> EventCodec.deserialize(payload))
+                .isInstanceOf(java.io.IOException.class);
+    }
+
+    private static byte[] serializeForeignObject() {
+        try {
+            java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+            try (java.io.ObjectOutputStream out =
+                         new java.io.ObjectOutputStream(buffer)) {
+                out.writeObject(new java.util.concurrent.atomic.AtomicInteger(1));
+            }
+            return buffer.toByteArray();
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

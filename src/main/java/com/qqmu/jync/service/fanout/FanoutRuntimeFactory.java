@@ -97,6 +97,14 @@ public class FanoutRuntimeFactory {
                 transport = new RedisStreamEventTransport(
                         com.qqmu.jync.service.projection.redis.RedisUris.from(target, password),
                         streamKey);
+            } else if (targetId != null) {
+                // A selected target that no longer resolves must NOT fall back to the
+                // server-wide URI: the events would move to an unrelated Redis (or the
+                // default localhost) without anyone noticing.
+                throw new IllegalStateException("Fan-out Redis transport for project "
+                        + project.getId() + " points at Redis target " + targetId
+                        + " which no longer exists; pick another target or switch to the"
+                        + " local queue");
             } else {
                 // Legacy: a server-wide Redis URI still works for projects saved before the
                 // per-project target picker existed.
@@ -115,6 +123,6 @@ public class FanoutRuntimeFactory {
         // Every target gets the same missing-table repair as a single-target consumer; the
         // service's attempt budget is per project, which is shared by all targets.
         return new FanoutRuntime(sourceCtx, targets, stats, structureSync, progressStore,
-                positionStore, targetRepair, transport);
+                positionStore, targetRepair, properties.getQueryTimeoutSeconds(), transport);
     }
 }

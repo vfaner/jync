@@ -722,6 +722,11 @@ public class ProjectService {
                 ? new java.util.ArrayList<>() : new java.util.ArrayList<>(extraTargets);
         boolean changed = !new java.util.HashSet<>(old).equals(new java.util.HashSet<>(clean));
         if (!clean.isEmpty()) {
+            if (project.getTargetKindOrDefault() != SyncTargetKind.JDBC) {
+                // A cache target has no fan-out runner; accept it here and start would
+                // refuse later, leaving a task that can never run.
+                throw new IllegalStateException("error.project.fanout.requires.binlog");
+            }
             if (changed && isRunning(project)) {
                 throw new IllegalStateException("error.project.stop.before.config");
             }

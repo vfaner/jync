@@ -80,6 +80,33 @@ class FanoutTargetTransactionTest {
     }
 
     @Test
+    void aRetriedTransactionReusesTheSameIdSoTheWorkerCanRecover() throws Exception {
+        InMemoryEventTransport transport = new InMemoryEventTransport(16);
+        EventTransport.Subscription sub = transport.subscribe("t1");
+        CdcTableBinding binding = CdcTableBinding.of("src", "orders", orders(), "orders", null);
+
+        FanoutTargetTransaction first = new FanoutTargetTransaction(transport);
+        first.applyUpserts(binding, List.of(row(1L, "a")));
+        first.notePosition(FanoutRuntime.TOKEN_SCN + "7");
+        first.commit();
+
+        // The first publish died before the COMMIT: the engine retries the same source
+        // transaction. A fresh random id here made the worker fail with "transaction ended
+        // without a COMMIT" forever.
+        FanoutTargetTransaction retry = new FanoutTargetTransaction(transport);
+        retry.applyUpserts(binding, List.of(row(1L, "a")));
+        retry.notePosition(FanoutRuntime.TOKEN_SCN + "7");
+        retry.commit();
+
+        String firstRowTx = sub.poll(Duration.ofSeconds(1)).transactionId();
+        sub.poll(Duration.ofSeconds(1));
+        String retryRowTx = sub.poll(Duration.ofSeconds(1)).transactionId();
+        ChangeEvent marker = sub.poll(Duration.ofSeconds(1));
+        assertThat(retryRowTx).isEqualTo(firstRowTx);
+        assertThat(marker.transactionId()).isEqualTo(firstRowTx);
+    }
+
+    @Test
     void anAbortedTransactionPublishesNothing() throws Exception {
         InMemoryEventTransport transport = new InMemoryEventTransport(8);
         EventTransport.Subscription sub = transport.subscribe("t1");

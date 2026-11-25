@@ -3,8 +3,11 @@ package com.qqmu.jync.service.fanout;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputFilter;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Wire format of one fan-out event, shared by the spool and the Redis Stream transport.
@@ -13,7 +16,56 @@ import java.io.ObjectOutputStream;
  * and LOB values whose types must survive the hand-off unchanged, which a JSON text form does
  * not guarantee. Both ends run the same build, so the class layout is identical.
  */
+@Slf4j
 final class EventCodec {
+
+    /**
+     * Both transports read bytes that may not have been written by this process — the Redis
+     * stream key is writable by anyone with Redis access, and the spool file is writable on
+     * disk. Plain Java deserialization is a gadget-code surface (CWE-502), so only the event
+     * graph and the value types a row can carry are allowed through; everything else is
+     * refused and the entry is skipped with a logged error.
+     */
+    /** Explicit allow-list; pattern strings cannot express the nested/array names we need. */
+    private static boolean allowedClass(Class<?> type) {
+        if (type.isPrimitive()) {
+            return true;
+        }
+        String name = type.getName();
+        if (type == ChangeEvent.class
+                || name.startsWith(ChangeEvent.class.getName() + "$")
+                || type == java.util.LinkedHashMap.class
+                || type == java.util.HashMap.class
+                || type == java.util.ArrayList.class
+                || type == java.util.UUID.class
+                || type == java.util.Date.class
+                || java.util.Map.Entry.class.isAssignableFrom(type)
+                // Map.of / List.of and unmodifiable wrappers: plain containers, no gadgets.
+                || name.startsWith("java.util.ImmutableCollections$")
+                || name.startsWith("java.util.Collections$Unmodifiable")
+                || name.startsWith("java.util.Arrays$")
+                // Serialization proxy of Map.of / List.of.
+                || name.startsWith("java.util.CollSer")) {
+            return true;
+        }
+        return name.startsWith("java.lang.")
+                || name.startsWith("java.math.")
+                || name.startsWith("java.sql.")
+                || name.startsWith("java.time.");
+    }
+
+    private static final ObjectInputFilter FILTER = info -> {
+        Class<?> type = info.serialClass();
+        if (type == null) {
+            return ObjectInputFilter.Status.UNDECIDED;
+        }
+        Class<?> element = type.isArray() ? type.getComponentType() : type;
+        if (allowedClass(element)) {
+            return ObjectInputFilter.Status.ALLOWED;
+        }
+        log.warn("Refusing an unexpected class in a fan-out event: {}", type.getName());
+        return ObjectInputFilter.Status.REJECTED;
+    };
 
     private EventCodec() {
     }
@@ -32,6 +84,7 @@ final class EventCodec {
 
     static ChangeEvent deserialize(byte[] bytes) throws IOException {
         try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(bytes))) {
+            in.setObjectInputFilter(FILTER);
             return (ChangeEvent) in.readObject();
         } catch (ClassNotFoundException e) {
             throw new IOException("unknown fan-out event class", e);
