@@ -76,8 +76,17 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             }
             stream(projectId, runtime);
         } catch (Exception e) {
-            log.error("Fan-out consumer for project {} stopped: {}", projectId, e.toString());
-            taskStore.recordCdcFailure(projectId, CdcFailureClassifier.describe(e));
+            String detail = CdcFailureClassifier.describe(e);
+            stats.setLastError(detail);
+            if (CdcFailureClassifier.isTransient(e)) {
+                // A target or the source blinking must not park the project; supervision
+                // restarts the capture and the per-target spools replay from their offsets.
+                log.warn("Fan-out consumer for project {} stopped transiently: {}",
+                        projectId, detail);
+            } else {
+                log.error("Fan-out consumer for project {} stopped: {}", projectId, detail);
+                taskStore.recordCdcFailure(projectId, detail);
+            }
         } finally {
             if (runtime != null) {
                 runtime.close();
@@ -120,6 +129,15 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                     CdcTransactionBudget.from(properties),
                     (db, sql, file, position) -> { }, null, null);
             handler.seedCurrentFile(resume == null ? null : resume.getBinlogFile());
+            handler.onEmptyTransaction(mark -> {
+                if (mark.getFile() == null || !ctx.renewLease()) {
+                    return;
+                }
+                positionStore.advance(projectId, mark.getFile(), mark.getPos(),
+                        mark.getGtidSet());
+                stats.recordPosition(mark.getFile(), mark.getPos(), mark.getGtidSet());
+                stats.touchActivity();
+            });
             handler.attachClient(current);
             current.registerEventListener(handler);
             current.registerLifecycleListener(new BinaryLogClient.AbstractLifecycleListener() {
@@ -144,6 +162,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 handler.releaseSpill();
                 positionStore.flush(projectId);
                 disconnect(current);
+                stats.setConnected(false);
                 this.client = null;
                 try {
                     bindingConn.close();

@@ -63,7 +63,9 @@ public final class JdbcFanoutApplier implements EventApplier {
             return;
         }
         Connection conn = targetCtx.getConnectionProvider().open(targetCtx.getTargetConfig());
+        boolean originalAutoCommit = true;
         try {
+            originalAutoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
             for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
                 applier.applyUpserts(conn, e.getKey(), e.getValue());
@@ -76,6 +78,11 @@ public final class JdbcFanoutApplier implements EventApplier {
             rollback(conn);
             throw e;
         } finally {
+            try {
+                conn.setAutoCommit(originalAutoCommit);
+            } catch (SQLException e) {
+                log.debug("Fan-out target autocommit restore failed: {}", e.toString());
+            }
             close(conn);
         }
     }

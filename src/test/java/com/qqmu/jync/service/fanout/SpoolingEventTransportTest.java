@@ -26,7 +26,7 @@ class SpoolingEventTransportTest {
         transport.publish(row("tx-2", 2L));
 
         ChangeEvent first = a.poll(Duration.ofSeconds(1));
-        assertThat(first.row()).containsEntry("id", 1);
+        assertThat(first.row()).containsEntry("id", 1L);
         a.ack(first);
         assertThat(b.poll(Duration.ofSeconds(1))).isNotNull();
         assertThat(b.poll(Duration.ofSeconds(1))).isNotNull();
@@ -37,6 +37,22 @@ class SpoolingEventTransportTest {
         ChangeEvent next = a2.poll(Duration.ofSeconds(1));
         assertThat(next.transactionId()).isEqualTo("tx-2");
         reopened.close();
+    }
+
+    @Test
+    void rewindingReplaysAnEventThatWasPolledButNotAcked(@TempDir Path dir) throws Exception {
+        SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000, mapper);
+        EventTransport.Subscription sub = transport.subscribe("rewind");
+        transport.publish(row("tx-1", 1L));
+
+        ChangeEvent first = sub.poll(Duration.ofSeconds(1));
+        assertThat(first.transactionId()).isEqualTo("tx-1");
+        // A worker died after polling but before applying/acking; the replacement rewinds.
+        sub.rewindToAck();
+
+        ChangeEvent replayed = sub.poll(Duration.ofSeconds(1));
+        assertThat(replayed.transactionId()).isEqualTo("tx-1");
+        transport.close();
     }
 
     @Test

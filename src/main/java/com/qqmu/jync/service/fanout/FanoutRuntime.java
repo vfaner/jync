@@ -2,8 +2,8 @@ package com.qqmu.jync.service.fanout;
 
 import java.nio.file.Path;
 import java.sql.Connection;
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,12 +32,14 @@ public final class FanoutRuntime implements AutoCloseable {
     private final Connection sourceConn;
     private final FanoutBindingResolver bindings;
     private final EventTransport transport;
-    private final List<FanoutTargetWorker> workers = new ArrayList<>();
+    private final List<FanoutTargetWorker> workers = new CopyOnWriteArrayList<>();
     private final FanoutBaselineService baselineService;
     private final FanoutProgressStore progressStore;
     private final FanoutPositionStore positionStore;
     private final CdcRuntimeStats stats;
     private final Map<Long, Integer> restartAttempts = new ConcurrentHashMap<>();
+    private final java.util.Set<Long> barrierAcked = ConcurrentHashMap.newKeySet();
+    private volatile String baselineMarker;
     private ScheduledExecutorService supervisor;
 
     public FanoutRuntime(SyncContext sourceCtx, List<FanoutBaselineService.Target> targets,
@@ -60,8 +62,7 @@ public final class FanoutRuntime implements AutoCloseable {
             EventTransport.Subscription subscription = transport.subscribe(group);
             EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
             workers.add(new FanoutTargetWorker(group, subscription, applier,
-                    position -> recordTargetPosition(positionStore, sourceCtx.projectId(),
-                            target.targetDbId(), position)));
+                    position -> onTargetCommit(target.targetDbId(), position)));
         }
     }
 
@@ -106,11 +107,11 @@ public final class FanoutRuntime implements AutoCloseable {
 
     private FanoutTargetWorker newWorker(FanoutBaselineService.Target target,
                                          EventTransport.Subscription subscription) {
+        subscription.rewindToAck();
         String group = String.valueOf(target.targetDbId());
         EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings);
         return new FanoutTargetWorker(group, subscription, applier,
-                position -> recordTargetPosition(positionStore, sourceCtx.projectId(),
-                        target.targetDbId(), position));
+                position -> onTargetCommit(target.targetDbId(), position));
     }
 
     public void baseline() throws Exception {
@@ -123,17 +124,20 @@ public final class FanoutRuntime implements AutoCloseable {
         // reported complete, otherwise a crash right after "done" could restart capture from
         // the anchor with a target that never consumed the rows.
         String marker = "baseline-done:" + UUID.randomUUID();
+        barrierAcked.clear();
+        baselineMarker = marker;
         transport.publish(ChangeEvent.commit(marker, marker, System.currentTimeMillis()));
+        java.util.Set<Long> wanted = new java.util.LinkedHashSet<>();
+        for (FanoutBaselineService.Target target : targets) {
+            wanted.add(target.targetDbId());
+        }
         long deadline = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(5);
-        for (FanoutTargetWorker worker : workers) {
-            while (!marker.equals(worker.getLastAppliedPosition())
-                    && System.currentTimeMillis() < deadline
-                    && worker.isAlive()) {
-                Thread.sleep(50L);
-            }
-            if (!marker.equals(worker.getLastAppliedPosition())) {
-                throw new IllegalStateException("fan-out baseline barrier timed out for a target");
-            }
+        while (!barrierAcked.containsAll(wanted) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50L);
+        }
+        if (!barrierAcked.containsAll(wanted)) {
+            throw new IllegalStateException("fan-out baseline barrier timed out: acked "
+                    + barrierAcked + " of " + wanted);
         }
         for (FanoutBaselineService.TableLoad load : loads) {
             for (FanoutBaselineService.Target target : targets) {
@@ -169,6 +173,14 @@ public final class FanoutRuntime implements AutoCloseable {
         } catch (Exception e) {
             log.debug("Fan-out source connection close failed: {}", e.toString());
         }
+    }
+
+    private void onTargetCommit(Long targetDbId, String position) {
+        if (position != null && position.equals(baselineMarker)) {
+            barrierAcked.add(targetDbId);
+            return;
+        }
+        recordTargetPosition(positionStore, sourceCtx.projectId(), targetDbId, position);
     }
 
     private static void recordTargetPosition(FanoutPositionStore store, Long projectId,

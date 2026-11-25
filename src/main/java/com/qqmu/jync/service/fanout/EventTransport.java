@@ -22,5 +22,12 @@ public interface EventTransport extends AutoCloseable {
 
         /** Acknowledges an event for this group; the PoC transport uses it for lag accounting. */
         void ack(ChangeEvent event);
+
+        /**
+         * Rewinds this subscription to its last acknowledged offset. Used when a target worker
+         * is replaced: events delivered but not yet committed must be replayed, not skipped.
+         */
+        default void rewindToAck() {
+        }
     }
 }

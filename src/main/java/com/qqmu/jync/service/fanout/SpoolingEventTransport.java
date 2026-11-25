@@ -1,6 +1,10 @@
 package com.qqmu.jync.service.fanout;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -61,13 +65,16 @@ public final class SpoolingEventTransport implements EventTransport {
         if (closed) {
             throw new IllegalStateException("transport is closed");
         }
-        String line;
+        byte[] bytes;
         try {
-            line = mapper.writeValueAsString(event) + "\n";
-        } catch (RuntimeException e) {
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            try (ObjectOutputStream out = new ObjectOutputStream(buffer)) {
+                out.writeObject(event);
+            }
+            bytes = buffer.toByteArray();
+        } catch (IOException e) {
             throw new IllegalStateException("could not serialize a fan-out event", e);
         }
-        byte[] bytes = line.getBytes(StandardCharsets.UTF_8);
         for (SpoolSubscription sub : subscriptions) {
             if (!sub.closed) {
                 sub.append(bytes);
@@ -90,6 +97,7 @@ public final class SpoolingEventTransport implements EventTransport {
         private final Path offsetPath;
         private final RandomAccessFile spool;
         private long readPosition;
+        private long ackPosition;
         private volatile boolean closed;
 
         SpoolSubscription(String group) throws IOException {
@@ -98,7 +106,8 @@ public final class SpoolingEventTransport implements EventTransport {
             this.offsetPath = directory.resolve(group + ".offset");
             this.spool = new RandomAccessFile(logPath.toFile(), "rw");
             long ack = readOffset();
-            this.readPosition = Math.min(ack, spool.length());
+            this.ackPosition = Math.min(ack, spool.length());
+            this.readPosition = ackPosition;
         }
 
         private long readOffset() {
@@ -120,12 +129,13 @@ public final class SpoolingEventTransport implements EventTransport {
             }
             try {
                 long size = spool.length();
-                if (size + bytes.length > maxBytesPerTarget) {
+                if (size + 4L + bytes.length > maxBytesPerTarget) {
                     throw new IllegalStateException("fan-out spool for target '" + group
                             + "' reached its " + maxBytesPerTarget + "-byte cap; the target is"
                             + " too far behind (or dead) — fix it, then restart the group");
                 }
                 spool.seek(size);
+                spool.writeInt(bytes.length);
                 spool.write(bytes);
             } catch (IOException e) {
                 throw new IllegalStateException("could not append to the fan-out spool for '"
@@ -145,13 +155,24 @@ public final class SpoolingEventTransport implements EventTransport {
             }
             try {
                 spool.seek(readPosition);
-                String line = spool.readLine();
-                if (line == null || line.isEmpty()) {
+                int length;
+                try {
+                    length = spool.readInt();
+                } catch (java.io.EOFException eof) {
                     return null;
                 }
+                if (length <= 0 || length > 64 * 1024 * 1024) {
+                    throw new IOException("invalid fan-out record length " + length);
+                }
+                byte[] bytes = new byte[length];
+                spool.readFully(bytes);
                 readPosition = spool.getFilePointer();
-                return mapper.readValue(new String(line.getBytes(StandardCharsets.ISO_8859_1),
-                        StandardCharsets.UTF_8), ChangeEvent.class);
+                try (ObjectInputStream in = new ObjectInputStream(
+                        new ByteArrayInputStream(bytes))) {
+                    return (ChangeEvent) in.readObject();
+                } catch (ClassNotFoundException e) {
+                    throw new IOException("unknown fan-out event class", e);
+                }
             } catch (IOException e) {
                 throw new IllegalStateException("could not read the fan-out spool for '"
                         + group, e);
@@ -163,19 +184,26 @@ public final class SpoolingEventTransport implements EventTransport {
             if (event == null) {
                 return;
             }
+            ackPosition = readPosition;
             try {
-                Files.writeString(offsetPath, Long.toString(readPosition));
+                Files.writeString(offsetPath, Long.toString(ackPosition));
                 // Caught up: the whole file is acknowledged, so truncating it cannot drop
                 // unread events and keeps a long-running spool from growing forever.
-                if (readPosition == spool.length() && readPosition > 0) {
+                if (ackPosition == spool.length() && ackPosition > 0) {
                     spool.setLength(0);
                     readPosition = 0;
+                    ackPosition = 0;
                     Files.writeString(offsetPath, "0");
                 }
             } catch (IOException e) {
                 throw new IllegalStateException("could not persist the fan-out offset for '"
                         + group, e);
             }
+        }
+
+        @Override
+        public synchronized void rewindToAck() {
+            readPosition = ackPosition;
         }
 
         @Override

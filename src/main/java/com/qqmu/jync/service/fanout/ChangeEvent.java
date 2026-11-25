@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.fanout;
 
+import java.io.Serializable;
 import java.util.Map;
 
 /**
@@ -21,7 +22,7 @@ public record ChangeEvent(
         Map<String, Object> row,
         Map<String, Object> oldRow,
         String ddlSql,
-        long sourceTimeMillis) {
+        long sourceTimeMillis) implements Serializable {
 
     public enum EventKind { ROW, COMMIT, DDL }
 

@@ -1,10 +1,13 @@
 package com.qqmu.jync.service.fanout;
 
+import java.sql.Blob;
+import java.sql.Clob;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.SQLXML;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -138,7 +141,7 @@ public final class FanoutBaselineService {
                 while (rs.next()) {
                     Map<String, Object> row = new LinkedHashMap<>();
                     for (int i = 1; i <= columns; i++) {
-                        row.put(md.getColumnLabel(i), rs.getObject(i));
+                        row.put(md.getColumnLabel(i), serializableValue(rs, i));
                     }
                     batch.add(row);
                     rows++;
@@ -153,6 +156,23 @@ public final class FanoutBaselineService {
             }
         }
         return rows;
+    }
+
+    /** The spool is JSON: turn JDBC LOB handles into bytes/text before publishing. */
+    private static Object serializableValue(ResultSet rs, int index) throws SQLException {
+        Object value = rs.getObject(index);
+        if (value instanceof Blob blob) {
+            long length = blob.length();
+            return blob.getBytes(1L, (int) Math.min(length, Integer.MAX_VALUE));
+        }
+        if (value instanceof Clob clob) {
+            long length = clob.length();
+            return clob.getSubString(1, (int) Math.min(length, Integer.MAX_VALUE));
+        }
+        if (value instanceof SQLXML xml) {
+            return xml.getString();
+        }
+        return value;
     }
 
     private void publishBatch(EventTransport transport, SyncContext ctx, TableMeta table,

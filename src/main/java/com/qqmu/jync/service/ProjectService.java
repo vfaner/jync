@@ -684,11 +684,23 @@ public class ProjectService {
     public Project configureFanout(Long projectId, java.util.List<Long> extraTargets) {
         Project project = require(projectId);
         SyncConfig config = loadConfig(project);
+        java.util.List<Long> old = config.getFanoutTargetDbIds() == null
+                ? java.util.List.of() : config.getFanoutTargetDbIds();
         java.util.List<Long> clean = extraTargets == null
                 ? new java.util.ArrayList<>() : new java.util.ArrayList<>(extraTargets);
-        config.setFanoutTargetDbIds(clean);
+        boolean changed = !new java.util.HashSet<>(old).equals(new java.util.HashSet<>(clean));
         if (!clean.isEmpty()) {
+            if (changed && isRunning(project)) {
+                throw new IllegalStateException("error.project.stop.before.config");
+            }
             config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        }
+        config.setFanoutTargetDbIds(clean);
+        if (changed && !clean.isEmpty()) {
+            // A new target has no baseline yet. Dropping the capture position makes the next
+            // start re-run the shared baseline for every target instead of streaming only
+            // future changes into an empty new target.
+            positionStore.delete(projectId);
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         return projectRepository.save(project);
