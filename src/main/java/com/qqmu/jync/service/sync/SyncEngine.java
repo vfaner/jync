@@ -397,37 +397,38 @@ public class SyncEngine {
         // table that has no cursor candidate at all; that table fetches its own estimate in
         // syncOneTable. Collecting for every table there is pure cost: a 2000-table project
         // over a 20 ms link would spend 40 s per cycle on numbers nobody reads.
-        if (ctx.getConfig().isSyncData() && rowEstimatesAreReadForEveryTable(ctx.getConfig())) {
+        boolean everyEstimate = ctx.getConfig().isSyncData()
+                && rowEstimatesAreReadForEveryTable(ctx.getConfig());
+        // One schema-wide catalog query (cached for five minutes) replaces one estimate query
+        // per table. That N+1 was 700 round trips per cycle on a large project; only products
+        // that do not expose table statistics still fall back to the per-table call.
+        Map<String, MetadataReader.TableStat> schemaStats = Map.of();
+        if (ctx.getConfig().isSyncData()
+                && (everyEstimate || properties.isSmallTablesFirst())
+                && ctx.getSourceReader().reportsTableStats()) {
+            schemaStats = schemaStatsFor(sourceConn, ctx);
+            Map<String, MetadataReader.TableStat> byName = new java.util.HashMap<>();
+            for (Map.Entry<String, MetadataReader.TableStat> entry : schemaStats.entrySet()) {
+                byName.put(entry.getKey().toUpperCase(java.util.Locale.ROOT), entry.getValue());
+            }
             for (TableMeta table : meta.getTables()) {
+                MetadataReader.TableStat stat =
+                        byName.get(table.getName().toUpperCase(java.util.Locale.ROOT));
+                if (stat != null && stat.rows() != null) {
+                    table.setApproximateRowCount(stat.rows());
+                }
+            }
+        }
+        if (everyEstimate) {
+            for (TableMeta table : meta.getTables()) {
+                if (table.getApproximateRowCount() != null) {
+                    continue;
+                }
                 try {
                     table.setApproximateRowCount(ctx.getSourceReader()
                             .estimateRowCount(sourceConn, ctx.getSourceSchema(), table.getName()));
                 } catch (SQLException e) {
                     log.debug("Row estimate failed for {}: {}", table.getName(), e.getMessage());
-                }
-            }
-        }
-        // Small-table-first needs a number for every selected table. One schema-wide stats
-        // query (cached) is cheaper than a COUNT(*) per table and leaves the historical order
-        // untouched when the product cannot report statistics.
-        if (ctx.getConfig().isSyncData() && properties.isSmallTablesFirst()
-                && ctx.getSourceReader().reportsTableStats()) {
-            Map<String, MetadataReader.TableStat> stats = schemaStatsFor(sourceConn, ctx);
-            if (!stats.isEmpty()) {
-                for (TableMeta table : meta.getTables()) {
-                    if (table.getApproximateRowCount() != null) {
-                        continue;
-                    }
-                    MetadataReader.TableStat stat = null;
-                    for (Map.Entry<String, MetadataReader.TableStat> entry : stats.entrySet()) {
-                        if (entry.getKey().equalsIgnoreCase(table.getName())) {
-                            stat = entry.getValue();
-                            break;
-                        }
-                    }
-                    if (stat != null && stat.rows() != null) {
-                        table.setApproximateRowCount(stat.rows());
-                    }
                 }
             }
         }
@@ -1204,20 +1205,22 @@ public class SyncEngine {
         List<TableMeta> selected = allTables.stream()
                 .filter(table -> ctx.getConfig().includesTable(table.getName()))
                 .toList();
-        if (!properties.isSmallTablesFirst()
-                || selected.stream().anyMatch(t -> t.getApproximateRowCount() == null)
-                || hasUnresolvedForeignKeys(selected)) {
+        if (hasUnresolvedForeignKeys(selected)) {
             return structureSync.sortByDependency(selected);
         }
         List<List<TableMeta>> levels = structureSync.dependencyLevels(selected);
-        if (levels.isEmpty() && !selected.isEmpty()) {
+        if (levels == null || levels.isEmpty()) {
             // Hand-built test doubles / a reader that could not produce a graph: the
             // dependency-only order is the safe fallback, not an empty data phase.
             return structureSync.sortByDependency(selected);
         }
+        // Topological waves are needed even when small-table estimates are missing: the
+        // legacy count-based sort puts a child with one FK alongside its parent with one FK,
+        // and the source listing order can then load the child first. Sorting inside a wave
+        // only changes order between tables that do not depend on each other.
         List<TableMeta> ordered = new ArrayList<>();
         for (List<TableMeta> level : levels) {
-            ordered.addAll(sortedBySize(level));
+            ordered.addAll(properties.isSmallTablesFirst() ? sortedBySize(level) : level);
         }
         return ordered;
     }

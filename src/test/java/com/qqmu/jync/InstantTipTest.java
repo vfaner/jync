@@ -29,9 +29,11 @@ class InstantTipTest {
     void theTipShowsOnHoverAndFocusWithoutATimer() throws Exception {
         String body = functionBody(read(JS), "function bindInstantTips(");
 
-        assertThat(body).contains("'mouseenter'");
+        // 事件委托：轮询会替换单元格 innerHTML，逐个绑定会漏掉新插入的提示图标。
+        assertThat(body).contains("'mouseover'");
         assertThat(body).as("键盘用户也要能看到，不能只认鼠标")
-                .contains("'focus'");
+                .contains("'focusin'");
+        assertThat(body).as("替换内容后仍能找到宿主").contains("data-tip");
         assertThat(body).as("延迟正是要摆脱的东西").doesNotContain("setTimeout");
     }
 

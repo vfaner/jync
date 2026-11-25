@@ -531,7 +531,6 @@ class CdcOperationsServiceTest {
     @Test
     void rebaselineRefusedWhileLeaseHeldByAnotherLiveNode() {
         when(projectRepository.findById(1L)).thenReturn(Optional.of(cdcProject("proj")));
-        when(cdcManager.statsFor(1L)).thenReturn(null);
         when(lockService.isLeaseHeldByAnotherLiveOwner(1L)).thenReturn(true);
 
         assertThatThrownBy(() -> service.rebaseline(1L))
@@ -556,14 +555,13 @@ class CdcOperationsServiceTest {
         Project fresh = cdcProject("fresh");
         when(projectRepository.findById(1L))
                 .thenReturn(Optional.of(stale), Optional.of(fresh));
-        when(cdcManager.statsFor(1L)).thenReturn(new CdcRuntimeStats());
-
         service.rebaseline(1L);
 
         verify(cdcManager).ensureStopped(1L);
         verify(positionStore).delete(1L);
         verify(cdcManager).ensureStarted(same(fresh));
-        verifyNoInteractions(lockService);
+        // The lease is always consulted now: a local registration can outlive its lease.
+        verify(lockService).isLeaseHeldByAnotherLiveOwner(1L);
     }
 
     /**
@@ -577,7 +575,6 @@ class CdcOperationsServiceTest {
         Project fresh = cdcProject("fresh");
         when(projectRepository.findById(1L))
                 .thenReturn(Optional.of(stale), Optional.of(fresh));
-        when(cdcManager.statsFor(1L)).thenReturn(null);
         when(lockService.isLeaseHeldByAnotherLiveOwner(1L)).thenReturn(false);
 
         service.rebaseline(1L);

@@ -385,6 +385,11 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             } else if (!running || Thread.currentThread().isInterrupted()) {
                 log.info("LogMiner consumer for project {} stopped by request while unwinding"
                         + " ({}); not parking it in ERROR", projectId, e.toString());
+            } else if (CdcFailureClassifier.isTransient(e)) {
+                String detail = CdcFailureClassifier.describe(e);
+                stats.setLastError(detail);
+                log.warn("LogMiner consumer for project {} hit a transient failure;"
+                        + " supervision will retry: {}", projectId, detail);
             } else {
                 String detail = CdcFailureClassifier.describe(e);
                 stats.setLastError(detail);

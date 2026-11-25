@@ -2,20 +2,27 @@
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
 <!--/* Hidden polling carrier for the merged progress card. The 2-second endpoint returns
-       this fragment; app.js copies the two summary panels and the four read-only status
-       cells into the visible row, leaving cursor inputs and action buttons untouched. */-->
+       this fragment; app.js copies the two summary panels and the five read-only status
+       cells (strategy/cursor plus the four states) into the visible row, leaving cursor
+       inputs and action buttons untouched. */-->
+<div th:fragment="missing"></div>
+
 <div id="full-load-card" th:fragment="data"
      th:attr="data-refresh-url=@{/projects/{id}/full-load-card(id=${project.id})},
               data-full-load-active=${tableStatusInProgress > 0},
-              data-project-active=${project.enabled}">
-    <div id="progress-summary-data" hidden>
+              data-full-load-pending=${fullLoadTableCount != null and fullLoadTableCount > 0},
+              data-project-active=${project.enabled and tableStatuses != null and !#lists.isEmpty(tableStatuses)},
+              data-status-refresh-ms=${tableStatuses != null and tableStatuses.size() > 200 ? 10000 : 5000}">
+    <div id="progress-summary-data" hidden th:if="${statusFragmentData}">
         <th:block th:replace="~{project-detail/table-progress-summary :: panels}"/>
     </div>
-    <table id="table-status-data" hidden th:if="${tableStatuses != null}">
+    <table id="table-status-data" hidden
+           th:if="${statusFragmentData and tableStatuses != null}">
         <tbody>
         <th:block th:each="s : ${tableStatuses}">
             <tr data-table-status-row
                 th:attr="data-table-status-name=${s.name}">
+                <th:block th:replace="~{project-detail/table-status :: strategyCell(${s})}"/>
                 <th:block th:replace="~{project-detail/table-status :: fullState(${s})}"/>
                 <th:block th:replace="~{project-detail/table-status :: incState(${s})}"/>
                 <th:block th:replace="~{project-detail/table-status :: lastSync(${s})}"/>

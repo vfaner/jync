@@ -169,7 +169,7 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 - **Oracle LogMiner / 达梦 LogMiner**：`V$LOGMNR_CONTENTS` 的行时间。
 - **PostgreSQL 系**：COMMIT 行里的 `(at <时刻>)`。原生 PostgreSQL 由 Jync 打开 `include-timestamp '1'` 取得；openGauss 自带该后缀。服务器不给时间戳时只刷新「上次事件」，延迟维持连接建立时的 0。
 - **崖山 YStream**：DML 的 SCN 时间戳；COMMIT / DDL / 元数据 LCR 没有源时间，只算活动。
-- **SQL Server**：变更表不携带提交时间，当前版本不测量，延迟显示为 0。要核对真实延迟，请查源库的 `cdc.lsn_time_mapping`，或改用其他引擎的 CDC。
+- **SQL Server**：变更表不携带提交时间，Jync 在每个扫描窗口结束时按最后折叠的事务 LSN 查一次 `cdc.lsn_time_mapping`，用服务端 `SYSUTCDATETIME()` 求差（避免驱动按本地时区重解释 UTC datetime）。映射行已被清理时保持上一次采样；窗口内没有事务则维持原值。
 
 所有引擎在「重启后回放旧事件」时仍会刷新「上次事件」，但不会把重放事件的年龄算成当前延迟 —— 否则空闲源库上的一次重启会把面板钉在最后一条旧事件的时间上，直到源库再次写入。
 

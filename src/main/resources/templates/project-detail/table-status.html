@@ -1,9 +1,37 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
-<!--/* Shared status cells for the merged table-progress card. The same fragments are rendered
+<!--/* Shared status cells for the merged table-progress card. Full-load progress hides itself
+       when every load finished (no checkpoints), but stays visible for a stopped load that can
+       still resume. The same fragments are rendered
        into the hidden polling rows, so the 2-second refresh can replace only these read-only
        cells and never touch a cursor input or a preview button. */-->
+<!--/* Strategy badge / cursor column, shared by the visible row and the polling
+       carrier. A full load records the resolved cursor column at its last chunk, and without
+       this cell the row kept its "—" until a page reload. */-->
+<td th:fragment="strategyCell(s)" data-status-cell="strategy">
+    <th:block th:replace="~{project-detail/table-status :: strategy(${s})}"/>
+</td>
+
+<th:block th:fragment="strategy(s)">
+    <span class="badge" th:if="${s.cursorStrategy != null}"
+          th:classappend="${s.cursorStrategy == 'TIMESTAMP' or s.cursorStrategy == 'ROW_SCN'} ? 'badge-ok'
+                        : (${s.cursorStrategy == 'IDENTITY'} ? 'badge-info'
+                        : (${s.cursorStrategy == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
+          th:title="#{'cursor.strategy.' + ${s.cursorStrategy} + '.help'}">
+        <span th:text="#{'cursor.' + ${s.cursorStrategy}}">strategy</span>
+    </span>
+    <span class="tip-icon tip-warn" tabindex="0" role="img"
+          th:if="${s.cursorStrategy == 'IDENTITY' or s.cursorStrategy == 'NONE'}"
+          th:attr="aria-label=#{project.strategyWarn}, data-tip=#{project.strategyWarn}">
+        <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
+    </span>
+    <span class="mono small" th:if="${s.cursorStrategy != null}"
+          th:text="${s.cursorColumn ?: '—'}">col</span>
+    <span class="muted" th:if="${s.cursorStrategy == null}"
+          th:text="#{tablesync.noActive}">—</span>
+</th:block>
+
 <td th:fragment="fullState(s)" data-status-cell="fullState">
     <span class="badge"
           th:classappend="${s.state.name() == 'COMPLETED'} ? 'badge-ok'
@@ -29,7 +57,11 @@
              ? ${#temporals.format(s.lastSyncTime, 'MM-dd HH:mm:ss')}
              : #{common.never}">never</td>
 
-<td th:fragment="fullProgress(s)" class="num small" data-status-cell="fullProgress">
+<td th:fragment="fullProgress(s)" class="num small" data-status-cell="fullProgress"
+    data-role="progress-full"
+    th:classappend="${(fullLoadTableCount != null and fullLoadTableCount > 0)
+                      or (tableStatusInProgress != null and tableStatusInProgress > 0)}
+                     ? '' : 'is-hidden'">
     <th:block th:if="${s.rowsCopied != null}">
         <span th:text="#{tablesync.copied(${s.rowsCopied ?: 0})}">rows</span>
         <span class="small muted" th:if="${s.lastUpdatedAt != null}"

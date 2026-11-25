@@ -164,6 +164,7 @@ class SqlServerCdcConsumerDrainTest {
         String from = "0x00000000000000000000";
         consumer.drain(conn, from); // picks up dbo_orders
 
+        consumer.expireDiscoveryForTests();
         ListAppender<ILoggingEvent> logs = LogCapture.attach(SqlServerCdcConsumer.class);
         try {
             consumer.drain(conn, from); // the instance is gone

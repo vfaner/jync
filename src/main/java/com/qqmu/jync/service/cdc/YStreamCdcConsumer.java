@@ -131,6 +131,8 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
     private YStreamPosition lastSeen;
     /** The last position reported to the open stream; never ahead of {@link #attachFrom}. */
     private YStreamPosition acknowledged;
+    /** Throttles acknowledgements (and their synchronous durable flush) to once per second. */
+    private long lastAckAtMs;
 
     public YStreamCdcConsumer(Project project, SyncLockService.LockHandle lock,
                               SyncContext ctx, CdcPositionStore positionStore,
@@ -355,13 +357,18 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                 // in the panel instead of as a bare message.
                 CdcFailureClassifier.Kind kind = CdcFailureClassifier.classify(e);
                 String detail = CdcFailureClassifier.describe(e);
-                String labelled = kind == CdcFailureClassifier.Kind.TRANSIENT
-                        ? detail : kind.name() + ": " + detail;
-                stats.setLastError(labelled);
-                taskStore.recordCdcFailure(projectId, labelled);
-                stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
-                        ChangeType.ERROR, "YStream consumer failed: " + labelled, false, 0L);
-                log.error("YStream consumer for project {} failed", projectId, e);
+                if (kind == CdcFailureClassifier.Kind.TRANSIENT) {
+                    stats.setLastError(detail);
+                    log.warn("YStream consumer for project {} hit a transient failure;"
+                            + " supervision will retry: {}", projectId, detail);
+                } else {
+                    String labelled = kind.name() + ": " + detail;
+                    stats.setLastError(labelled);
+                    taskStore.recordCdcFailure(projectId, labelled);
+                    stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
+                            ChangeType.ERROR, "YStream consumer failed: " + labelled, false, 0L);
+                    log.error("YStream consumer for project {} failed", projectId, e);
+                }
             }
         } finally {
             YStreamClientAdapter adapter = currentAdapter;
@@ -505,9 +512,20 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         if (position == null || position.equals(acknowledged)) {
             return;
         }
+        long now = System.currentTimeMillis();
+        if (now - lastAckAtMs < 1_000L) {
+            return;
+        }
+        // Tell the source only what is durable in the metadata DB: a hard kill after an ack
+        // but before the throttled position write would let the source release redo for a
+        // range the restarted consumer no longer knows it applied.
+        if (!positionStore.flushDurably(project.getId())) {
+            return;
+        }
         try {
             adapter.setAppliedPosition(position);
             acknowledged = position;
+            lastAckAtMs = now;
         } catch (RuntimeException e) {
             log.debug("Project {}: the stream refused applied position {}: {}", project.getId(),
                     position.text(), e.toString());

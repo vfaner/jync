@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import com.qqmu.jync.dto.ProgressStatusRow;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.SyncProgress;
 
@@ -17,6 +18,18 @@ public interface SyncProgressRepository extends JpaRepository<SyncProgress, Long
             Long projectId, ObjectType objectType, String objectName);
 
     List<SyncProgress> findByProjectId(Long projectId);
+
+    /**
+     * Columns needed by the detail page's per-table status; never loads the cursor LOB.
+     * The status endpoint is polled every five seconds, so a full-entity read for hundreds
+     * of tables was pure metadata-store I/O.
+     */
+    @Query("select new com.qqmu.jync.dto.ProgressStatusRow(p.objectName, p.initialLoadDone, "
+            + "p.rowsSyncedTotal, p.lastSyncTime, p.cursorStrategy, p.cursorColumn, "
+            + "p.resumableLoad, p.fullLoadWithoutCursor) from SyncProgress p "
+            + "where p.projectId = :projectId and p.objectType = :objectType")
+    List<ProgressStatusRow> findStatusRowsByProjectId(@Param("projectId") Long projectId,
+                                                      @Param("objectType") ObjectType objectType);
 
     /**
      * Delivered rows for one project, summed in the database. Loading the rows instead pulled

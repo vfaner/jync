@@ -37,6 +37,7 @@ import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.dto.RedisProjectionConfig;
+import com.qqmu.jync.dto.ProgressStatusRow;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.meta.ProcedureMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -2042,12 +2043,14 @@ public class ProjectService {
      * not finished"; the counts tell how far it got and whether it will resume.
      */
     public Map<String, FullLoadProgress> findFullLoadProgress(Long projectId) {
-        Map<String, List<ChunkCheckpoint>> byTable = new LinkedHashMap<>();
-        for (ChunkCheckpoint c : checkpointRepository.findByProjectId(projectId)) {
-            byTable.computeIfAbsent(c.getTableName(), k -> new ArrayList<>()).add(c);
+        Map<String, java.util.List<com.qqmu.jync.dto.ChunkCheckpointStatusRow>> byTable =
+                new LinkedHashMap<>();
+        for (com.qqmu.jync.dto.ChunkCheckpointStatusRow c
+                : checkpointRepository.findStatusRowsByProjectId(projectId)) {
+            byTable.computeIfAbsent(c.tableName(), k -> new ArrayList<>()).add(c);
         }
         Map<String, FullLoadProgress> result = new LinkedHashMap<>();
-        byTable.forEach((table, rows) -> result.put(table, FullLoadProgress.of(rows)));
+        byTable.forEach((table, rows) -> result.put(table, FullLoadProgress.ofStatusRows(rows)));
         return result;
     }
 
@@ -2090,6 +2093,8 @@ public class ProjectService {
      */
     public List<TableSyncStatus> findTableSyncStatuses(Long projectId, SyncConfig config,
                                                        Map<String, FullLoadProgress> inFlight) {
+        Map<String, FullLoadProgress> loads = inFlight == null
+                ? findFullLoadProgress(projectId) : inFlight;
         Project project = projectRepository.findById(projectId).orElse(null);
         boolean enabled = project != null && Boolean.TRUE.equals(project.getEnabled());
         SyncTask task = taskStore.find(projectId).orElse(null);
@@ -2097,31 +2102,37 @@ public class ProjectService {
         boolean leaseHeld = task != null && task.getLockOwner() != null
                 && (task.getLockExpiresAt() == null
                 || task.getLockExpiresAt().isAfter(Instant.now()));
-        boolean running = enabled || leaseHeld;
-        // A progress row is created when a table's work starts, before the first chunk
-        // checkpoint. While the project is live that row means "loading now", not
-        // "interrupted"; calling it INCOMPLETE hid the first minutes of every large full load.
-        boolean working = running && !taskError;
         CaptureStrategy strategy = config.getCaptureStrategyOrDefault();
         boolean cdc = strategy.isLogCdc();
+        // A progress row is created when a table's work starts, before the first chunk
+        // checkpoint. For polling, a live lease — not merely the enabled flag — proves a round
+        // is executing; otherwise an interrupted table would look "in progress" forever while
+        // the project idles between schedules. CDC keeps the project-level enabled signal
+        // because its consumer lease is not the sync_task lock.
+        boolean fullActive = cdc ? enabled : leaseHeld;
+        boolean working = fullActive && !taskError;
         boolean baselinePending = false;
         if (cdc) {
             CdcPosition position = positionStore.find(projectId).orElse(null);
             baselinePending = position == null
                     || !Boolean.TRUE.equals(position.isBaselineDone());
         }
-        Map<String, SyncProgress> progressByName = new LinkedHashMap<>();
-        for (SyncProgress progress : progressRepository.findByProjectId(projectId)) {
-            if (progress.getObjectName() != null) {
-                progressByName.put(progress.getObjectName().toUpperCase(Locale.ROOT), progress);
+        Map<String, ProgressStatusRow> progressByName = new LinkedHashMap<>();
+        for (ProgressStatusRow progress : progressRepository.findStatusRowsByProjectId(
+                projectId, ObjectType.TABLE)) {
+            if (progress.objectName() != null) {
+                progressByName.put(progress.objectName().toUpperCase(Locale.ROOT), progress);
             }
         }
+        Map<String, FullLoadProgress> loadsByUpper = new LinkedHashMap<>();
+        loads.forEach((table, load) ->
+                loadsByUpper.put(table.toUpperCase(Locale.ROOT), load));
         Set<String> names = new java.util.LinkedHashSet<>(config.getTables());
         if (names.isEmpty()) {
             // A legacy project selected "all" and has no source metadata here; the progress
             // rows are the only names this server-side view can prove without dialing source.
-            for (SyncProgress progress : progressByName.values()) {
-                names.add(progress.getObjectName());
+            for (ProgressStatusRow progress : progressByName.values()) {
+                names.add(progress.objectName());
             }
         }
         List<TableSyncStatus> result = new ArrayList<>();
@@ -2130,15 +2141,15 @@ public class ProjectService {
                 continue;
             }
             String key = name.toUpperCase(Locale.ROOT);
-            SyncProgress progress = progressByName.get(key);
-            FullLoadProgress load = inFlight.get(name);
+            ProgressStatusRow progress = progressByName.get(key);
+            FullLoadProgress load = loadsByUpper.get(key);
             SyncState state;
             if (load != null) {
                 // Checkpoints survive a stop; only call it "in progress" when the project is
                 // enabled or a round still holds a live lease. A stopped partial load is
                 // INCOMPLETE, not a phantom running load.
                 state = working ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
-            } else if (progress != null && Boolean.TRUE.equals(progress.getInitialLoadDone())) {
+            } else if (progress != null && Boolean.TRUE.equals(progress.initialLoadDone())) {
                 state = SyncState.COMPLETED;
             } else if (progress != null) {
                 state = working ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
@@ -2155,22 +2166,22 @@ public class ProjectService {
             } else if (cdc && baselinePending) {
                 incremental = IncrementalState.WAITING;
             } else if (!cdc && (progress != null
-                    && ("IDENTITY".equalsIgnoreCase(progress.getCursorStrategy())
-                    || "NONE".equalsIgnoreCase(progress.getCursorStrategy())
-                    || Boolean.TRUE.equals(progress.getFullLoadWithoutCursor())))) {
+                    && ("IDENTITY".equalsIgnoreCase(progress.cursorStrategy())
+                    || "NONE".equalsIgnoreCase(progress.cursorStrategy())
+                    || Boolean.TRUE.equals(progress.fullLoadWithoutCursor())))) {
                 incremental = IncrementalState.LIMITED;
             } else {
                 incremental = IncrementalState.RUNNING;
             }
             result.add(new TableSyncStatus(name, state,
-                    progress == null ? null : progress.getRowsSyncedTotal(),
-                    progress == null ? null : progress.getLastSyncTime(),
+                    progress == null ? null : progress.rowsSyncedTotal(),
+                    progress == null ? null : progress.lastSyncTime(),
                     load == null ? null : load.getRowsCopied(),
                     load == null ? null : load.getLastUpdatedAt(),
-                    progress == null ? null : progress.getCursorStrategy(),
-                    progress == null ? null : progress.getCursorColumn(),
-                    progress == null ? null : progress.getResumableLoad(),
-                    progress == null ? null : progress.getFullLoadWithoutCursor(),
+                    progress == null ? null : progress.cursorStrategy(),
+                    progress == null ? null : progress.cursorColumn(),
+                    progress == null ? null : progress.resumableLoad(),
+                    progress == null ? null : progress.fullLoadWithoutCursor(),
                     incremental));
         }
         return result;
@@ -2235,6 +2246,41 @@ public class ProjectService {
                     lastUpdatedAt = c.getUpdatedAt();
                 }
                 int range = c.getRangeIndex() == null ? 0 : c.getRangeIndex();
+                rangesSeen = Math.max(rangesSeen, range + 1);
+            }
+            return new FullLoadProgress(chunks, rangesSeen, rangesDone,
+                    keyedRows + keylessRows, lastUpdatedAt);
+        }
+
+        /** Same aggregation as {@link #of(List)} over the projection (no LOB columns). */
+        public static FullLoadProgress ofStatusRows(
+                java.util.List<com.qqmu.jync.dto.ChunkCheckpointStatusRow> rows) {
+            int chunks = 0;
+            int rangesDone = 0;
+            int rangesSeen = 0;
+            long keyedRows = 0;
+            long keylessRows = 0;
+            Instant lastUpdatedAt = null;
+            for (var c : rows) {
+                if (c.chunkIndex() != null && c.chunkIndex() < 0) {
+                    continue;
+                }
+                if (ChunkCheckpoint.STATUS_RANGE_DONE.equals(c.status())) {
+                    rangesDone++;
+                } else {
+                    chunks++;
+                }
+                if (ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(c.status())) {
+                    keylessRows = Math.max(keylessRows,
+                            c.rowsCopied() == null ? 0L : c.rowsCopied());
+                } else if (ChunkCheckpoint.STATUS_CHUNK.equals(c.status())) {
+                    keyedRows += c.rowsCopied() == null ? 0L : c.rowsCopied();
+                }
+                if (c.updatedAt() != null
+                        && (lastUpdatedAt == null || c.updatedAt().isAfter(lastUpdatedAt))) {
+                    lastUpdatedAt = c.updatedAt();
+                }
+                int range = c.rangeIndex() == null ? 0 : c.rangeIndex();
                 rangesSeen = Math.max(rangesSeen, range + 1);
             }
             return new FullLoadProgress(chunks, rangesSeen, rangesDone,

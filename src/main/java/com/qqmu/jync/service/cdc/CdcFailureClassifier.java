@@ -49,6 +49,11 @@ public final class CdcFailureClassifier {
 
     private CdcFailureClassifier() { }
 
+    /** True when reconnecting is the correct response and the project must not be parked. */
+    public static boolean isTransient(Throwable t) {
+        return classify(t) == Kind.TRANSIENT;
+    }
+
     public static Kind classify(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
             String message = c.getMessage() == null
@@ -80,6 +85,11 @@ public final class CdcFailureClassifier {
                     // ensureSlot). The WAL in between is unreachable; re-baseline.
                     || message.contains("pg cdc purge")) {
                 return Kind.PURGED;
+            }
+            if (message.contains("without a recorded scn anchor")
+                    || message.contains("slot-prefix") || message.contains("slot prefix")) {
+                // Configuration/state that a reconnect cannot repair; park for a human.
+                return Kind.SCHEMA_CONFLICT;
             }
             if (message.contains("same server_id") || message.contains("same server_uuid")
                     || message.contains("a slave with the same server")) {

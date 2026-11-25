@@ -118,6 +118,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
 
     /** P1-6: discovery throttle + the CI names this consumer has already logged. */
     private long lastDiscoveryAtMs;
+    private List<CaptureInstance> cachedCaptureInstances = List.of();
     private final Set<String> knownCaptureInstances = new HashSet<>();
     /**
      * Capture instance → the missing-column description last warned about. A CI whose
@@ -138,6 +139,14 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * a stop cannot sit behind a slow/hung scan of a large LSN window.
      */
     private volatile Statement activeStatement;
+    /** One warning for a broken lag lookup, not one per scanned window. */
+    private volatile boolean lagLookupWarned;
+    /**
+     * Newest transaction LSN folded in this drain window, across capture instances. One lag
+     * lookup per window instead of one per scanned table: a 700-table project would otherwise
+     * pay 700 round trips per cycle for a panel number.
+     */
+    private volatile String lastScannedTxLsn;
 
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
     /** F-13: consecutive failed drain cycles; reset to 0 on every successful flush. */
@@ -369,6 +378,11 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             } else if (!running || Thread.currentThread().isInterrupted()) {
                 log.info("SQLServer consumer for project {} stopped by request while unwinding"
                         + " ({}); not parking it in ERROR", projectId, e.toString());
+            } else if (CdcFailureClassifier.isTransient(e)) {
+                String detail = CdcFailureClassifier.describe(e);
+                stats.setLastError(detail);
+                log.warn("SQLServer consumer for project {} hit a transient failure;"
+                        + " supervision will retry: {}", projectId, detail);
             } else {
                 String detail = CdcFailureClassifier.describe(e);
                 stats.setLastError(detail);
@@ -499,6 +513,7 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     private DrainResult drainWindow(Connection conn, String fromLsn) throws Exception {
         long projectId = project.getId();
         DrainResult out = new DrainResult();
+        lastScannedTxLsn = null;
         String maxLsn = readMaxLsn(conn);
         if (maxLsn == null) {
             // #4: a NULL here used to be silent, so an idle consumer spun forever with no
@@ -560,15 +575,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             // cdc.change_tables on a throttled cadence so a newly enabled capture
             // instance is seen (and logged) now, not at its first DML. Refresh only:
             // the (fromLsn, maxLsn] interval is empty by definition here.
-            long now = System.currentTimeMillis();
-            if (now - lastDiscoveryAtMs >= DISCOVERY_REFRESH_MS) {
-                lastDiscoveryAtMs = now;
-                discoverCaptureInstances(conn);
-            }
+            captureInstances(conn);
             return out; // nothing new
         }
-        lastDiscoveryAtMs = System.currentTimeMillis();
-        List<CaptureInstance> instances = discoverCaptureInstances(conn);
+        List<CaptureInstance> instances = captureInstances(conn);
         if (instances.isEmpty()) {
             // Nothing will ever show up past fromLsn without DBA action: do NOT advance the
             // watermark — that would hide the gap. Advance to maxLsn only when at least one
@@ -688,6 +698,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
             }
             boundedTo = earlierLsn(boundedTo, scanEnd);
         }
+        if (lastScannedTxLsn != null) {
+            recordTxLag(conn, lastScannedTxLsn);
+            lastScannedTxLsn = null;
+        }
         // The scan phase finished while running on every CI — only now does the fold
         // contain COMPLETE transactions. If a stop/interrupt cut a scan short, abandon the
         // whole window: the fold may hold a multi-table transaction missing tables, or an
@@ -778,6 +792,10 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         long maxRows = properties.getCdc().getMssql().getMaxRowsPerCycle();
         long rows = 0;
         String currentTx = null;
+        // A budget cut returns from here; the lag sample still runs for the transaction
+        // actually folded, so the helper is called after the result set is closed.
+        String resumeAt = null;
+        boolean skippedInstance = false;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, fromBind);
             ps.setString(2, toLsn);
@@ -818,7 +836,8 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                             }
                             stats.addSkippedUnsupported(skipped);
                             warnMissingCapturedColumns(ci, missingCols);
-                            return null;   // the whole instance was consumed (as skips)
+                            skippedInstance = true;
+                            break;   // the whole instance was consumed (as skips)
                         }
                         missingColumnWarnings.remove(ci.captureInstance);
                         reader = RowReader.of(rs, binding, availableCols);
@@ -846,7 +865,8 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                             // holds whole transactions only, so everything above `currentTx`
                             // is re-read next cycle — the row just fetched is dropped, not
                             // half-folded.
-                            return currentTx;
+                            resumeAt = currentTx;
+                            break;
                         }
                         currentTx = startLsn;
                     }
@@ -866,11 +886,54 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     fold.accept(startLsn, binding, op, row);
                     out.rows++;
                     rows++;
-                    stats.touchEvent(System.currentTimeMillis());
                 }
             }
         }
+        if (currentTx != null && (lastScannedTxLsn == null
+                || currentTx.compareToIgnoreCase(lastScannedTxLsn) > 0)) {
+            lastScannedTxLsn = currentTx;
+        }
+        if (skippedInstance) {
+            return null;
+        }
+        if (resumeAt != null) {
+            return resumeAt;
+        }
         return null;   // the whole window was read
+    }
+
+    /**
+     * Samples how far behind the newest folded transaction was, once per scanned window.
+     * Failure is ignored on purpose: a panel metric must never stop replication, and the
+     * worst case is the previous sample staying on screen.
+     */
+    private void recordTxLag(Connection conn, String commitLsn) {
+        if (commitLsn == null || commitLsn.isBlank()) {
+            return;
+        }
+        try (PreparedStatement ps = conn.prepareStatement(TX_LAG_SQL)) {
+            ps.setString(1, commitLsn);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    long lagMs = rs.getLong(1);
+                    if (!rs.wasNull() && lagMs >= 0) {
+                        stats.touchEvent(System.currentTimeMillis() - lagMs);
+                    }
+                }
+            }
+        } catch (SQLException | RuntimeException e) {
+            // Hand-built contexts and odd drivers may return no handle at all; a panel
+            // metric must never take the drain down with it. Warn once so a real permission
+            // or SQL problem does not stay invisible at DEBUG.
+            if (!lagLookupWarned) {
+                lagLookupWarned = true;
+                log.warn("SQLServer CDC lag lookup for project {} failed ({}); the lag panel"
+                        + " keeps its previous sample", project.getId(), e.toString());
+            } else {
+                log.debug("SQLServer CDC lag lookup for project {} failed: {}",
+                        project.getId(), e.toString());
+            }
+        }
     }
 
     /**
@@ -911,6 +974,24 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                 + "(CONVERT(binary(10), ?, 1), CONVERT(binary(10), ?, 1),'all update old')"
                 + " ORDER BY __$start_lsn, __$seqval";
     }
+
+    /**
+     * The lag card needs the source time of the newest change. The change table only carries
+     * {@code __$start_lsn}; {@code cdc.lsn_time_mapping} maps that commit LSN to its commit
+     * time, and doing the subtraction server-side ({@code SYSUTCDATETIME()}) avoids the
+     * driver's local-timezone reinterpretation of the stored UTC datetime. This stayed at
+     * zero while the consumer passed {@code System.currentTimeMillis()} to
+     * {@code touchEvent} — a number that can never be late against itself.
+     *
+     * <p>Deliberately a separate PK lookup per scanned window rather than a join in
+     * {@link #changesSql}: joining the mapping table into the change pull invites the
+     * optimizer to hash/scan a mapping table that holds days of commits, for a number only
+     * the panel reads.
+     */
+    static final String TX_LAG_SQL =
+            "SELECT CASE WHEN tran_end_time > SYSUTCDATETIME() THEN 0"
+            + " ELSE DATEDIFF(SECOND, tran_end_time, SYSUTCDATETIME()) * 1000 END"
+            + " FROM cdc.lsn_time_mapping WHERE start_lsn = CONVERT(binary(10), ?, 1)";
 
     /**
      * The change function of one capture instance, as a delimited identifier:
@@ -1118,6 +1199,26 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * instance, so the project captures nothing. Silent before, which made a CDC project that
      * had never been enabled on the source look identical to one that was simply idle.
      */
+    /**
+     * The capture-instance set changes only when a DBA enables/repairs CDC, so the busy path
+     * uses the same 60-second cache as the idle path instead of running a catalog query for
+     * every coalesced poll.
+     */
+    /** Test seam: make the next drain re-read cdc.change_tables. */
+    void expireDiscoveryForTests() {
+        lastDiscoveryAtMs = 0L;
+    }
+
+    private List<CaptureInstance> captureInstances(Connection conn) throws SQLException {
+        long now = System.currentTimeMillis();
+        if (now - lastDiscoveryAtMs < DISCOVERY_REFRESH_MS) {
+            return cachedCaptureInstances;
+        }
+        lastDiscoveryAtMs = now;
+        cachedCaptureInstances = discoverCaptureInstances(conn);
+        return cachedCaptureInstances;
+    }
+
     private void warnNoCaptureInstances() {
         if (!knownCaptureInstances.isEmpty()) {
             // Discovery already named each instance as it vanished; a second, vaguer line

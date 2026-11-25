@@ -373,6 +373,14 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 // the lease and records the ordinary INFO stop line.
                 log.info("CDC consumer for project {} stopped by request while unwinding"
                         + " ({}); not parking it in ERROR", projectId, e.toString());
+            } else if (CdcFailureClassifier.isTransient(e)) {
+                // Transient never earns the ERROR hat: supervision restarts this project
+                // on its next tick, and a reconnect is exactly the remedy the classifier
+                // already recommends on the in-loop path.
+                String detail = CdcFailureClassifier.describe(e);
+                stats.setLastError(detail);
+                log.warn("CDC consumer for project {} hit a transient failure; supervision"
+                        + " will retry: {}", projectId, detail);
             } else {
                 String detail = CdcFailureClassifier.describe(e);
                 stats.setLastError(detail);  // C3:catch-all 停机也让面板说出原因

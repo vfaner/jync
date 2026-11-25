@@ -320,8 +320,10 @@ public class CdcOperationsService {
         // mirrors SyncTaskRepository.acquireLock's "lockExpiresAt < now = takeable" clause.
         // statsFor != null means this node runs the consumer, so the lease cannot belong to
         // another LIVE owner — the local registration wins and the lookup is skipped.
-        if (cdcManager.statsFor(projectId) == null
-                && lockService.isLeaseHeldByAnotherLiveOwner(projectId)) {
+        // Always consult the lease: a local registration can exist for a thread that has
+        // already lost the lease (force-unlock / takeover) until supervise prunes it, and
+        // deleting the position then would strand the real owner's stream.
+        if (lockService.isLeaseHeldByAnotherLiveOwner(projectId)) {
             throw new CdcNotHolderException("cdc.rebaseline.not.holder");
         }
         log.info("Rebuilding the CDC baseline of project {} ('{}') on request",
@@ -383,8 +385,10 @@ public class CdcOperationsService {
         if (!CaptureStrategyParser.parse(project.getSyncConfig()).isLogCdc()) {
             throw new IllegalArgumentException("error.project.cdc.not.cdc");
         }
-        if (cdcManager.statsFor(projectId) == null
-                && lockService.isLeaseHeldByAnotherLiveOwner(projectId)) {
+        // Always consult the lease: a local registration can exist for a thread that has
+        // already lost the lease (force-unlock / takeover) until supervise prunes it, and
+        // deleting the position then would strand the real owner's stream.
+        if (lockService.isLeaseHeldByAnotherLiveOwner(projectId)) {
             throw new CdcNotHolderException("cdc.rebaseline.not.holder");
         }
         var position = positionStore.find(projectId).orElse(null);

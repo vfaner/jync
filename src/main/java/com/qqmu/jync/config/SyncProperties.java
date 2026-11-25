@@ -497,6 +497,14 @@ public class SyncProperties {
         public static class Pg {
             /** Rows fetched per pg_logical_slot_get_changes batch. */
             private long batchSize = 1_000L;
+            /**
+             * Rows one drain cycle may consume before it stops at the next transaction
+             * boundary. A cycle owns a fresh connection, a dialect probe, the slot checks
+             * and a retained-WAL sample; draining exactly one {@link #batchSize} batch per
+             * cycle paid all of that every 1 000 changes. Stopping at this budget instead
+             * keeps a busy stream on one connection. 0 falls back to {@code batchSize}.
+             */
+            private long maxRowsPerCycle = 100_000L;
             /** Idle poll interval when the slot drained (nothing pending). */
             private long idlePollMs = 500L;
             /** Prefix for the per-project replication slot name; final name is {@code jync_<projectId>}. */

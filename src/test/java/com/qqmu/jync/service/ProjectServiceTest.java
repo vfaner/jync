@@ -40,6 +40,8 @@ import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTargetKind;
+import com.qqmu.jync.dto.ChunkCheckpointStatusRow;
+import com.qqmu.jync.dto.ProgressStatusRow;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.SyncTask;
 import com.qqmu.jync.model.TaskStatus;
@@ -121,15 +123,15 @@ class ProjectServiceTest {
 
     @Test
     void fullLoadProgressGroupsCheckpointsPerTableAndCountsRanges() {
-        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of(
-                new com.qqmu.jync.model.ChunkCheckpoint(1L, "A", 0, 0, "[1]", 2,
-                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK),
-                new com.qqmu.jync.model.ChunkCheckpoint(1L, "A", 0, 1, "[3]", 2,
-                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK),
-                new com.qqmu.jync.model.ChunkCheckpoint(1L, "B", 0, 2, null, 0,
-                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_RANGE_DONE),
-                new com.qqmu.jync.model.ChunkCheckpoint(1L, "B", 1, 0, "[9]", 2,
-                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK)));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("A", 0, 0, 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, java.time.Instant.now()),
+                new ChunkCheckpointStatusRow("A", 0, 1, 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, java.time.Instant.now()),
+                new ChunkCheckpointStatusRow("B", 0, 2, 0,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_RANGE_DONE, java.time.Instant.now()),
+                new ChunkCheckpointStatusRow("B", 1, 0, 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, java.time.Instant.now())));
 
         java.util.Map<String, ProjectService.FullLoadProgress> progress =
                 service.findFullLoadProgress(1L);
@@ -149,11 +151,11 @@ class ProjectServiceTest {
         // The keyless walk writes a marker (chunk index -1) before its first page so a crash
         // there is not read as a target somebody else filled. It commits no rows, so the
         // panel must not tell the user a chunk has landed.
-        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of(
-                new com.qqmu.jync.model.ChunkCheckpoint(1L, "EVENTS", 0, -1, null, 0,
-                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_KEYLESS_CHUNK),
-                new com.qqmu.jync.model.ChunkCheckpoint(1L, "EVENTS", 0, 0, null, 2,
-                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_KEYLESS_CHUNK)));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("EVENTS", 0, -1, 0,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_KEYLESS_CHUNK, java.time.Instant.now()),
+                new ChunkCheckpointStatusRow("EVENTS", 0, 0, 2,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_KEYLESS_CHUNK, java.time.Instant.now())));
 
         java.util.Map<String, ProjectService.FullLoadProgress> progress =
                 service.findFullLoadProgress(1L);
@@ -166,7 +168,7 @@ class ProjectServiceTest {
 
     @Test
     void fullLoadProgressIsEmptyWhenNoLoadIsInFlight() {
-        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
 
         assertThat(service.findFullLoadProgress(1L)).isEmpty();
     }
@@ -1645,14 +1647,13 @@ class ProjectServiceTest {
         project.setEnabled(true);
         SyncConfig config = new SyncConfig();
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
-        SyncProgress done = new SyncProgress();
-        done.setObjectName("ORDERS");
-        done.setInitialLoadDone(true);
-        done.setCursorStrategy("TIMESTAMP");
+        ProgressStatusRow done = new ProgressStatusRow("ORDERS", true, 0L, null,
+                "TIMESTAMP", null, null, null);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
         when(taskStore.find(1L)).thenReturn(Optional.empty());
-        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(done));
-        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(done));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
 
         assertThat(service.findTableSyncStatuses(1L, config).get(0).incremental())
                 .isEqualTo(ProjectService.IncrementalState.RUNNING);
@@ -1677,13 +1678,13 @@ class ProjectServiceTest {
         SyncConfig cdc = new SyncConfig();
         cdc.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
         cdc.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
-        SyncProgress done = new SyncProgress();
-        done.setObjectName("ORDERS");
-        done.setInitialLoadDone(true);
+        ProgressStatusRow done = new ProgressStatusRow("ORDERS", true, 0L, null,
+                null, null, null, null);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
         when(taskStore.find(1L)).thenReturn(Optional.empty());
-        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(done));
-        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(done));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
         when(positionStore.find(1L)).thenReturn(Optional.empty());
 
         assertThat(service.findTableSyncStatuses(1L, cdc).get(0).incremental())
@@ -1692,7 +1693,9 @@ class ProjectServiceTest {
         SyncConfig polling = new SyncConfig();
         polling.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.POLLING);
         polling.setTables(cdc.getTables());
-        done.setCursorStrategy("NONE");
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(new ProgressStatusRow("ORDERS", true, 0L, null,
+                        "NONE", null, null, null)));
         assertThat(service.findTableSyncStatuses(1L, polling).get(0).incremental())
                 .isEqualTo(ProjectService.IncrementalState.LIMITED);
     }
@@ -1704,13 +1707,16 @@ class ProjectServiceTest {
         project.setEnabled(true);
         SyncConfig config = new SyncConfig();
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("COURSE")));
-        SyncProgress started = new SyncProgress();
-        started.setObjectName("COURSE");
-        started.setInitialLoadDone(false);
+        ProgressStatusRow started = new ProgressStatusRow("COURSE", false, 0L, null,
+                null, null, null, null);
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a");
+        running.setLockExpiresAt(java.time.Instant.now().plusSeconds(60));
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
-        when(taskStore.find(1L)).thenReturn(Optional.empty());
-        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(started));
-        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of());
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(started));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
 
         ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
 
@@ -1720,21 +1726,47 @@ class ProjectServiceTest {
     }
 
     @Test
+    void aCheckpointStoredInDifferentCaseStillMarksTheTableInProgress() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("orders")));
+        ProgressStatusRow started = new ProgressStatusRow("orders", false, 0L, null,
+                null, null, null, null);
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a");
+        running.setLockExpiresAt(java.time.Instant.now().plusSeconds(60));
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(started));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("ORDERS", 0, 0, 100,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, java.time.Instant.now())));
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
+
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
+        assertThat(status.rowsCopied()).isEqualTo(100L);
+    }
+
+    @Test
     void checkpointsOnAStoppedProjectAreIncompleteNotStillRunning() {
         Project project = project(1L);
         project.setOwnerUsername("admin");
         project.setEnabled(false);
         SyncConfig config = new SyncConfig();
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
-        SyncProgress partial = new SyncProgress();
-        partial.setObjectName("ORDERS");
-        partial.setInitialLoadDone(false);
+        ProgressStatusRow partial = new ProgressStatusRow("ORDERS", false, 0L, null,
+                null, null, null, null);
         when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
         when(taskStore.find(1L)).thenReturn(Optional.empty());
-        when(progressRepository.findByProjectId(1L)).thenReturn(java.util.List.of(partial));
-        when(checkpointRepository.findByProjectId(1L)).thenReturn(java.util.List.of(
-                new com.qqmu.jync.model.ChunkCheckpoint(1L, "ORDERS", 0, 0, "[10]", 10,
-                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK)));
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(partial));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("ORDERS", 0, 0, 10,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, java.time.Instant.now())));
 
         ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
 

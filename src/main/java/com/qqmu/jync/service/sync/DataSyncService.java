@@ -2069,6 +2069,11 @@ public class DataSyncService {
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
                         sqlColumns, statementKeys, typeByColumn, canGuard, declarationByColumn);
                 List<String> bindOrder = targetDialect.upsertBindOrder(sqlColumns, statementKeys);
+                // Keyless incremental windows have no key to absorb a partial replay. Commit
+                // only at the end of the pass so a mid-window failure rolls the whole window
+                // back; per-batch commits would leave rows that the unadvanced cursor sends
+                // again as plain INSERT duplicates. Keyed tables keep the batch cadence.
+                boolean commitEachBatch = !pkColumns.isEmpty() || !guardReplayedRows;
 
                 if (pkColumns.isEmpty()) {
                     // Without a key there is no way to identify an existing row, so repeated
@@ -2106,7 +2111,7 @@ public class DataSyncService {
                                     sink, throughput, batchSize, spillSession, guardEmulated)
                             : writeWithNativeUpsert(targetConn, upsertSql, bindOrder, typeByColumn,
                                     rs, readPlan, ctx, cleanser, pkTrack,
-                                    sink, throughput, batchSize, spillSession);
+                                    sink, throughput, batchSize, spillSession, commitEachBatch);
                 } finally {
                     if (spillSession != null) {
                         spillSession.close();
@@ -2461,7 +2466,8 @@ public class DataSyncService {
                                              SyncContext ctx, ColumnCleanser cleanser,
                                              List<String> pkTrack, PkCursor sink,
                                              ThroughputMeter throughput, int batchSize,
-                                             LobSpillSession spillSession)
+                                             LobSpillSession spillSession,
+                                             boolean commitEachBatch)
             throws SQLException {
         WriteStats stats = new WriteStats();
         int inBatch = 0;
@@ -2515,7 +2521,7 @@ public class DataSyncService {
                     if ((immediate || budgetFlush) && inBatch > 0) {
                         // The stream is valid only until the cursor moves, and an oversized row
                         // must not be added to a batch that is already over budget.
-                        executeBatch(upsert, targetConn, stats, ctx, throughput);
+                        executeBatch(upsert, targetConn, stats, ctx, throughput, commitEachBatch);
                         releaseAll(pendingLobs);
                         lobTracker.releaseAll();
                         inBatch = 0;
@@ -2535,7 +2541,9 @@ public class DataSyncService {
                         if (oneShotRows >= batchSize
                                 || (oneShotCommitBytes > 0
                                     && oneShotBytes >= oneShotCommitBytes)) {
-                            commitAndRecord(targetConn, throughput);
+                            if (commitEachBatch) {
+                                commitAndRecord(targetConn, throughput);
+                            }
                             ctx.requireLease();
                             oneShotRows = 0;
                             oneShotBytes = 0L;
@@ -2546,7 +2554,7 @@ public class DataSyncService {
                         byteBudget.add(rowBytes);
                         trackRowLobs(row, pendingLobs);
                         if (inBatch >= batchSize) {
-                            executeBatch(upsert, targetConn, stats, ctx, throughput);
+                            executeBatch(upsert, targetConn, stats, ctx, throughput, commitEachBatch);
                             releaseAll(pendingLobs);
                             lobTracker.releaseAll();
                             inBatch = 0;
@@ -2571,7 +2579,7 @@ public class DataSyncService {
             }
             if (inBatch > 0) {
                 long tailStart = System.nanoTime();
-                executeBatch(upsert, targetConn, stats, ctx, throughput);
+                executeBatch(upsert, targetConn, stats, ctx, throughput, commitEachBatch);
                 releaseAll(pendingLobs);
                 throughput.recordWrite(System.nanoTime() - tailStart);
             }
@@ -4118,7 +4126,8 @@ public class DataSyncService {
      * rather than failing the whole table anonymously.
      */
     private void executeBatch(PreparedStatement ps, Connection conn, WriteStats stats,
-                              SyncContext ctx, ThroughputMeter throughput) throws SQLException {
+                              SyncContext ctx, ThroughputMeter throughput,
+                              boolean commitEachBatch) throws SQLException {
         try {
             int[] counts = ps.executeBatch();
             // A rewritten batch (MySQL with rewriteBatchedStatements) answers SUCCESS_NO_INFO
@@ -4129,9 +4138,12 @@ public class DataSyncService {
                     ? readAffectedRowCount(conn) : -1L;
             int rewrittenChanged = rewrittenBatchChangedRows(counts, affected);
             throughput.recordBatch();
-            commitAndRecord(conn, throughput);
-            // The batch is a commit boundary and hence a safe renewal point: the rows it holds
-            // are durable and idempotent. Stop now if the lease was lost, before the next batch.
+            if (commitEachBatch) {
+                commitAndRecord(conn, throughput);
+            }
+            // A commit boundary is a safe renewal point for idempotent rows. A keyless
+            // incremental window has no commit here but still checks ownership between
+            // batches.
             ctx.requireLease();
             boolean classify = ctx.upsertCountsDistinguishInsertFromUpdate();
             if (rewrittenChanged >= 0) {

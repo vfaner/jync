@@ -56,6 +56,9 @@
                     <th th:text="#{tablesync.incState}">Incremental state</th>
                     <th th:text="#{dashboard.lastSync}">Last sync</th>
                     <th class="num" data-role="progress-full"
+                        th:classappend="${(fullLoadTableCount != null and fullLoadTableCount > 0)
+                                          or (tableStatusInProgress != null and tableStatusInProgress > 0)}
+                                         ? '' : 'is-hidden'"
                         th:text="#{tablesync.fullLoad}">Full-load progress</th>
                     <th class="cursor-col"
                         th:classappend="${(access.canEdit(project.ownerUsername) and !cdcActive)} ? '' : 'is-hidden'"
@@ -77,22 +80,12 @@
                     </td>
                     <td data-role="progress-strategy" data-cdc-visibility="non-cdc"
                         th:classappend="${cdcActive} ? 'is-hidden' : ''">
-                        <div class="strategy-inline" th:if="${s.cursorStrategy != null}"
-                             th:with="strat=${s.cursorStrategy}">
-                            <span class="badge"
-                                  th:classappend="${strat == 'TIMESTAMP' or strat == 'ROW_SCN'} ? 'badge-ok'
-                                                : (${strat == 'IDENTITY'} ? 'badge-info'
-                                                : (${strat == 'FULL_COMPARE'} ? 'badge-warn' : 'badge-danger'))"
-                                  th:title="#{'cursor.strategy.' + ${strat} + '.help'}">
-                                <span th:text="#{'cursor.' + ${strat}}">strategy</span>
+                        <div class="strategy-inline">
+                            <span class="strategy-status" data-status-cell="strategy">
+                                <th:block th:replace="~{project-detail/table-status :: strategy(${s})}"/>
                             </span>
-                            <span class="tip-icon tip-warn" tabindex="0" role="img"
-                                  th:if="${strat == 'IDENTITY' or strat == 'NONE'}"
-                                  th:attr="aria-label=#{project.strategyWarn},
-                                           data-tip=#{project.strategyWarn}">
-                                <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
-                            </span>
-                            <span class="mono small" th:text="${s.cursorColumn ?: '—'}">col</span>
+                            <!--/* 索引提示要连源库探测，页面加载时算一次；轮询只替换左边
+                                   可变的策略/游标内容，不把这条静态提示冲掉。 */-->
                             <span class="tip-icon tip-warn" tabindex="0" role="img"
                                   th:if="${unindexedCursorTables != null
                                            and s.cursorColumn != null
@@ -102,8 +95,6 @@
                                 <svg class="ico" aria-hidden="true"><use href="#exclamation-triangle-fill"/></svg>
                             </span>
                         </div>
-                        <span class="muted" th:if="${s.cursorStrategy == null}"
-                              th:text="#{tablesync.noActive}">—</span>
                     </td>
                     <th:block th:replace="~{project-detail/table-status :: fullState(${s})}"/>
                     <th:block th:replace="~{project-detail/table-status :: incState(${s})}"/>

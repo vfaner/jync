@@ -266,14 +266,29 @@ class CdcBaselineServiceTest {
     void failureRecordsErrorAndKeepsTheAnchorForResume() throws SQLException {
         Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
         when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
-        doThrow(new IllegalStateException("full load exploded"))
+        doThrow(new IllegalStateException("ORA-01031: insufficient privileges"))
                 .when(engine).runCycle(any(SyncContext.class));
 
         assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> true))
                 .isInstanceOf(IllegalStateException.class);
         verify(positionStore, never()).delete(7L);              // 保留锚点与检查点，供继续基线使用
         verify(positionStore, never()).markBaselineDone(anyLong());
-        verify(taskStore).recordCdcFailure(eq(7L), org.mockito.ArgumentMatchers.contains("exploded"));
+        verify(taskStore).recordCdcFailure(eq(7L),
+                org.mockito.ArgumentMatchers.contains("ORA-01031"));
+    }
+
+    @Test
+    void aTransientBaselineFailureKeepsTheAnchorWithoutParking() throws SQLException {
+        Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
+        when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
+        doThrow(new IllegalStateException("Connection refused"))
+                .when(engine).runCycle(any(SyncContext.class));
+
+        assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> true))
+                .isInstanceOf(IllegalStateException.class);
+        verify(positionStore, never()).delete(7L);
+        verify(positionStore, never()).markBaselineDone(anyLong());
+        verify(taskStore, never()).recordCdcFailure(anyLong(), any());
     }
 
     @Test
@@ -285,7 +300,7 @@ class CdcBaselineServiceTest {
         // baseline_done=true,流从记下的位点回放,漏掉的行永久丢失(任务书 B4:
         // 全量失败整体重来)。
         SyncResult failed = new SyncResult();
-        failed.addError("lease lost mid-load");
+        failed.addError("ORA-01031: insufficient privileges");
         when(engine.runCycle(any(SyncContext.class))).thenReturn(failed);
 
         assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> true))
@@ -293,7 +308,7 @@ class CdcBaselineServiceTest {
         verify(positionStore, never()).delete(7L);              // 保留锚点与检查点，供继续基线使用
         verify(positionStore, never()).markBaselineDone(anyLong());
         verify(taskStore).recordCdcFailure(eq(7L),
-                org.mockito.ArgumentMatchers.contains("lease lost"));
+                org.mockito.ArgumentMatchers.contains("ORA-01031"));
     }
 
     /**
@@ -345,7 +360,7 @@ class CdcBaselineServiceTest {
     void leaseLostOnTheExceptionPathLeavesThePositionRowAndSkipsTheErrorHat() throws SQLException {
         Connection sourceConn = stubSource("mysql-bin.000003", 154L, "OFF", null);
         when(dataSourceManager.getConnection(any())).thenReturn(sourceConn);
-        doThrow(new IllegalStateException("full load exploded"))
+        doThrow(new IllegalStateException("ORA-01031: insufficient privileges"))
                 .when(engine).runCycle(any(SyncContext.class));
 
         assertThatThrownBy(() -> service.runBaseline(ctx(7L), () -> false))  // renew 返回 false
@@ -685,12 +700,12 @@ class CdcBaselineServiceTest {
 
     @Test
     void aFailedRedisBaselineKeepsTheCacheContractAndRecordsTheError() {
-        doThrow(new IllegalStateException("redis projection exploded"))
+        doThrow(new IllegalStateException("ORA-01031: insufficient privileges"))
                 .when(redisBaseline).run(any(SyncContext.class), any(), any());
 
         assertThatThrownBy(() -> service.runBaseline(redisCtx(12L), () -> true))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("redis projection exploded");
+                .hasMessageContaining("ORA-01031");
 
         // The keys written before the failure are still in Redis. Deleting the row would
         // drop the only record of their value format, and the rerun's baseline could then
@@ -698,7 +713,7 @@ class CdcBaselineServiceTest {
         // the contract until a completed baseline replaces it.
         verify(positionStore).resetAnchorKeepingProjectionSignature(12L);
         verify(positionStore, never()).delete(anyLong());
-        verify(taskStore).recordCdcFailure(eq(12L), contains("redis projection exploded"));
+        verify(taskStore).recordCdcFailure(eq(12L), contains("ORA-01031"));
         verify(positionStore, never()).markBaselineDone(anyLong());
     }
 

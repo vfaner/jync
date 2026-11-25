@@ -3558,9 +3558,23 @@
     var timer = null;
     var timerDelay = 0;
     var inFlight = false;
-    var active = false;
+    var active = card.getAttribute('data-full-load-active') === 'true';
+    var pending = card.getAttribute('data-full-load-pending') === 'true';
     var projectActive = card.getAttribute('data-project-active') === 'true';
+    var statusInterval = parseInt(card.getAttribute('data-status-refresh-ms'), 10)
+      || STATUS_REFRESH_INTERVAL;
     var watchUntil = 0;
+
+    /**
+     * The 「全量进度」 column only has something to say while a load is unfinished. Hide it once
+     * every load completed, but keep it for a stopped load whose checkpoints can still resume;
+     * toggling here (instead of re-rendering the table) keeps cursor inputs untouched.
+     */
+    function applyProgressColumn() {
+      var show = pending || active;
+      document.querySelectorAll('#progress-card [data-role="progress-full"]')
+        .forEach(function (el) { el.classList.toggle('is-hidden', !show); });
+    }
 
     function stopTimer() {
       if (timer) {
@@ -3575,7 +3589,7 @@
           || (!active && !projectActive && Date.now() >= watchUntil)) {
         return;
       }
-      var delay = active ? FULL_LOAD_REFRESH_INTERVAL : STATUS_REFRESH_INTERVAL;
+      var delay = active ? FULL_LOAD_REFRESH_INTERVAL : statusInterval;
       if (timer && timerDelay === delay) return;
       stopTimer();
       timer = setInterval(refresh, delay);
@@ -3583,7 +3597,8 @@
     }
 
     /**
-     * Refresh only the four read-only cells and the two summary panels. Replacing the whole
+     * Refresh only the five read-only cells (strategy/cursor + the four state cells) and the
+     * two summary panels. Replacing the whole
      * row would wipe a cursor input the operator is typing into; replacing the whole card
      * would also drop the preview buttons' state.
      */
@@ -3631,7 +3646,11 @@
           updateTableStatus(fresh);
           card.innerHTML = freshCard.innerHTML;
           active = freshCard.getAttribute('data-full-load-active') === 'true';
+          pending = freshCard.getAttribute('data-full-load-pending') === 'true';
+          applyProgressColumn();
           projectActive = freshCard.getAttribute('data-project-active') === 'true';
+          statusInterval = parseInt(freshCard.getAttribute('data-status-refresh-ms'), 10)
+            || STATUS_REFRESH_INTERVAL;
           if (active) {
             watchUntil = 0;
           }
@@ -3645,8 +3664,13 @@
           }
         })
         .catch(function () {
-          // 网络抖动保留当前内容，下一轮再试；但观察窗口结束后不能无限重试。
-          if (!active && !projectActive && Date.now() >= watchUntil) stopTimer();
+          // 网络抖动保留当前内容，下一轮再试；但停止/完成的项目和观察窗口结束后
+          // 不能无限重试。
+          if (active || projectActive || Date.now() < watchUntil) {
+            startTimer();
+          } else {
+            stopTimer();
+          }
         })
         .then(function () { inFlight = false; });
     }
@@ -3668,6 +3692,7 @@
       refresh();
     });
 
+    applyProgressColumn();
     refresh();
   }
 
@@ -5325,8 +5350,6 @@
    * 就收起（fixed 坐标不会跟着滚）。
    */
   function bindInstantTips() {
-    var hosts = document.querySelectorAll('[data-tip]');
-    if (!hosts.length) { return; }
     var bubble = null;
 
     function bubbleEl() {
@@ -5361,11 +5384,34 @@
       tip.style.top = top + 'px';
     }
 
-    hosts.forEach(function (host) {
-      host.addEventListener('mouseenter', function () { show(host); });
-      host.addEventListener('mouseleave', hide);
-      host.addEventListener('focus', function () { show(host); });
-      host.addEventListener('blur', hide);
+    // Delegated instead of bound per host at load: the 2-second progress refresh and the CDC
+    // card replace innerHTML, so a host created (or re-created) after DOMContentLoaded would
+    // otherwise have no tooltip at all. `closest` is avoided for the old in-house browsers.
+    function tipHost(node) {
+      while (node && node.getAttribute) {
+        if (node.getAttribute('data-tip')) { return node; }
+        node = node.parentNode;
+      }
+      return null;
+    }
+
+    document.addEventListener('mouseover', function (e) {
+      var host = tipHost(e.target);
+      if (host) { show(host); }
+    });
+    document.addEventListener('mouseout', function (e) {
+      var host = tipHost(e.target);
+      if (!host) { return; }
+      var to = e.relatedTarget;
+      if (to && host.contains && host.contains(to)) { return; }
+      hide();
+    });
+    document.addEventListener('focusin', function (e) {
+      var host = tipHost(e.target);
+      if (host) { show(host); }
+    });
+    document.addEventListener('focusout', function (e) {
+      if (tipHost(e.target)) { hide(); }
     });
     window.addEventListener('scroll', hide, true);
     window.addEventListener('resize', hide);

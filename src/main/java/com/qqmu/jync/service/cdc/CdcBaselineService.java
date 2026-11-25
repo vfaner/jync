@@ -442,7 +442,15 @@ public class CdcBaselineService {
                 log.info("CDC baseline for project {} failed; keeping its anchor and chunk"
                         + " checkpoints for resume (use rebuild for a fresh anchor)", projectId);
             }
-            taskStore.recordCdcFailure(projectId, CdcFailureClassifier.describe(e));
+            String detail = CdcFailureClassifier.describe(e);
+            if (CdcFailureClassifier.isTransient(e)) {
+                // A blip during a multi-hour baseline must not become the permanent ERROR
+                // hat; the anchor and chunk checkpoints stay, so the next start resumes.
+                log.warn("CDC baseline for project {} hit a transient failure; keeping the"
+                        + " anchor for a retry: {}", projectId, detail);
+            } else {
+                taskStore.recordCdcFailure(projectId, detail);
+            }
             throw e;
         }
     }

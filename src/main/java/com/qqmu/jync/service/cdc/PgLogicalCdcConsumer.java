@@ -416,6 +416,11 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
             } else if (!running || Thread.currentThread().isInterrupted()) {
                 log.info("PG consumer for project {} stopped by request while unwinding"
                         + " ({}); not parking it in ERROR", projectId, e.toString());
+            } else if (CdcFailureClassifier.isTransient(e)) {
+                String detail = CdcFailureClassifier.describe(e);
+                stats.setLastError(detail);
+                log.warn("PG consumer for project {} hit a transient failure;"
+                        + " supervision will retry: {}", projectId, detail);
             } else {
                 String detail = CdcFailureClassifier.describe(e);
                 stats.setLastError(detail);
@@ -488,6 +493,13 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     int drain(Connection conn, String slotName) throws Exception {
         long projectId = project.getId();
         int batchSize = (int) Math.min(Integer.MAX_VALUE, properties.getCdc().getPg().getBatchSize());
+        // One cycle = one connection + dialect probe + slot checks + WAL sample. Ending the
+        // cycle after a single peek batch paid that overhead every 1 000 changes; a busy
+        // backlog now stays on this connection until the cycle budget (or an empty slot).
+        long configuredBudget = properties.getCdc().getPg().getMaxRowsPerCycle();
+        int cycleBudget = configuredBudget <= 0
+                ? batchSize
+                : (int) Math.min(Integer.MAX_VALUE, configuredBudget);
         int total = 0;
         int consecutiveHalfPeeks = 0;
         CdcTransactionBuffer tx = new CdcTransactionBuffer();
@@ -726,7 +738,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                     continue;
                 }
                 consecutiveHalfPeeks = 0;
-                if (total >= batchSize || rowsThisCall < batchSize) {
+                if (total >= cycleBudget || rowsThisCall < batchSize) {
                     break; // cycle budget spent at a tx boundary, or slot empty
                 }
             }

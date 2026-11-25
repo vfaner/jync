@@ -443,15 +443,21 @@ public class CdcConsumerManager {
      * load's chunk-boundary interrupt check and the consumer's quiet stop-requested exit
      * make death within the grace window the expected case; the signature is unchanged.
      */
-    public synchronized void ensureStopped(Long projectId) {
-        // Bump FIRST, even when nothing is registered here: a start that is inside its
-        // out-of-monitor context build reads this on re-entry and must not register.
-        stopGenerations.merge(projectId, 1L, Long::sum);
-        parkedWarned.remove(projectId);                          // 停/启边界:下次启动重新提示
-        Registration registration = registry.remove(projectId);
+    public void ensureStopped(Long projectId) {
+        Registration registration;
+        synchronized (this) {
+            // Bump FIRST, even when nothing is registered here: a start that is inside its
+            // out-of-monitor context build reads this on re-entry and must not register.
+            stopGenerations.merge(projectId, 1L, Long::sum);
+            parkedWarned.remove(projectId);                      // 停/启边界:下次启动重新提示
+            registration = registry.remove(projectId);
+        }
         if (registration == null) {
             return;                                              // 本节点没有该消费者
         }
+        // The join can take up to shutdown-wait + grace. Do not hold the manager monitor:
+        // one stuck target write would otherwise block start/stop and supervise for every
+        // other CDC project on this node.
         registration.consumer.requestStop();
         try {
             registration.thread.join(properties.getShutdownWaitMs());

@@ -235,6 +235,11 @@ public class CdcPositionStore {
         synchronized (pending) {
             seedIfNeeded(projectId, pending);
             if (!pending.seeded) {
+                if (pending.seedUnavailable) {
+                    log.debug("CDC position for project {} not advanced: the position row"
+                            + " could not be read", projectId);
+                    return;
+                }
                 log.warn("CDC position for project {} not advanced to {}:{}: no position row"
                         + " (deleted underneath the consumer?); the transaction replays after"
                         + " the next reconnect", projectId, file, pos);
@@ -333,8 +338,56 @@ public class CdcPositionStore {
 
     /** Reads the stored anchor once; later advances compare against the buffered copy. */
     private void seedIfNeeded(Long projectId, Pending pending) {
-        if (!pending.seeded) {
+        if (pending.seeded) {
+            return;
+        }
+        long now = clock.getAsLong();
+        if (now < pending.nextSeedAttemptAt) {
+            return;
+        }
+        try {
             repository.findByProjectId(projectId).ifPresent(pending::seedFrom);
+            pending.seedUnavailable = false;
+            pending.seedWarned = false;
+        } catch (RuntimeException e) {
+            // A live stream must not die because the app's own metadata store blinked after
+            // the target commit. Keep the buffered position; retry the read shortly.
+            pending.seedUnavailable = true;
+            pending.nextSeedAttemptAt = now + 5_000L;
+            if (!pending.seedWarned) {
+                pending.seedWarned = true;
+                log.warn("Could not read the CDC position of project {} ({}); the stream"
+                        + " keeps its buffered position and retries in 5 seconds",
+                        projectId, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Persists the buffered position now, ignoring the normal throttle. Used before telling
+     * a source that a position is applied: an acknowledgement must never get ahead of the
+     * durable resume point.
+     *
+     * @return true when nothing was pending or the write committed
+     */
+    public boolean flushDurably(Long projectId) {
+        Pending pending = pendingByProject.get(projectId);
+        if (pending == null) {
+            return true;
+        }
+        synchronized (pending) {
+            if (!pending.dirty) {
+                return true;
+            }
+            try {
+                persist(projectId, pending, clock.getAsLong());
+                return true;
+            } catch (RuntimeException e) {
+                log.warn("CDC position for project {} could not be persisted before an"
+                        + " acknowledgement ({}); the acknowledgement is deferred",
+                        projectId, e.getMessage());
+                return false;
+            }
         }
     }
 
@@ -562,6 +615,11 @@ public class CdcPositionStore {
         synchronized (pending) {
             seedIfNeeded(projectId, pending);
             if (!pending.seeded) {
+                if (pending.seedUnavailable) {
+                    log.debug("CDC position for project {} not advanced: the position row"
+                            + " could not be read", projectId);
+                    return;
+                }
                 log.warn("CDC position for project {} not advanced to SCN {}: no position row"
                         + " (deleted underneath the consumer?); the transaction replays after"
                         + " the next reconnect", projectId, scn);
@@ -611,6 +669,11 @@ public class CdcPositionStore {
         synchronized (pending) {
             seedIfNeeded(projectId, pending);
             if (!pending.seeded) {
+                if (pending.seedUnavailable) {
+                    log.debug("CDC position for project {} not advanced: the position row"
+                            + " could not be read", projectId);
+                    return;
+                }
                 log.warn("CDC position for project {} not advanced to LSN {}: no position row"
                         + " (deleted underneath the consumer?); the transaction replays after"
                         + " the next reconnect", projectId, lsn);
@@ -756,6 +819,9 @@ public class CdcPositionStore {
         private boolean replaceLayouts;
         private boolean dirty;
         private boolean seeded;
+        private boolean seedUnavailable;
+        private boolean seedWarned;
+        private long nextSeedAttemptAt;
         private boolean discarded;
         private long persistedAt;
 

@@ -443,6 +443,7 @@ table.tbl th.cursor-col, table.tbl td.cursor-col {
   width: 112px; text-align: center; white-space: nowrap;
 }
 .strategy-inline { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.strategy-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 table.tbl th[data-role="progress-strategy"],
 table.tbl td[data-role="progress-strategy"] { white-space: nowrap; min-width: 180px; }
 table.tbl th[data-role="progress-full"],

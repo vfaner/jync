@@ -3,8 +3,11 @@ package com.qqmu.jync.repository;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.qqmu.jync.dto.ChunkCheckpointStatusRow;
 import com.qqmu.jync.model.ChunkCheckpoint;
 
 public interface ChunkCheckpointRepository extends JpaRepository<ChunkCheckpoint, Long> {
@@ -18,6 +21,12 @@ public interface ChunkCheckpointRepository extends JpaRepository<ChunkCheckpoint
 
     /** Every in-flight load of the project, for the detail page's progress panel. */
     List<ChunkCheckpoint> findByProjectId(Long projectId);
+
+    /** Status-panel projection: no resume LOBs. */
+    @Query("select new com.qqmu.jync.dto.ChunkCheckpointStatusRow(c.tableName, c.rangeIndex, "
+            + "c.chunkIndex, c.rowsCopied, c.status, c.updatedAt) from ChunkCheckpoint c "
+            + "where c.projectId = :projectId")
+    List<ChunkCheckpointStatusRow> findStatusRowsByProjectId(@Param("projectId") Long projectId);
 
     @Transactional
     void deleteByProjectIdAndTableName(Long projectId, String tableName);

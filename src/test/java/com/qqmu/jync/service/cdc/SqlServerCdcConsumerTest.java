@@ -18,6 +18,22 @@ import org.junit.jupiter.api.Test;
  */
 class SqlServerCdcConsumerTest {
 
+    /**
+     * 延迟卡片曾经永远显示 0:consumer 把 {@code System.currentTimeMillis()} 传给
+     * {@code touchEvent},等于告诉面板「最新事件就是现在」。现在每个扫描窗口结束时用
+     * {@code cdc.lsn_time_mapping} 做一次主键查,服务端 UTC 时钟算差(避免驱动按本地时区
+     * 重新解释 UTC datetime)。刻意不把映射表 join 进变更拉取。
+     */
+    @Test
+    void theCommitLagIsASingleMappingLookupPerWindow() {
+        assertThat(SqlServerCdcConsumer.TX_LAG_SQL)
+                .contains("cdc.lsn_time_mapping")
+                .contains("SYSUTCDATETIME()")
+                .contains("WHERE start_lsn = CONVERT(binary(10), ?, 1)");
+        assertThat(SqlServerCdcConsumer.changesSql("dbo_orders_CT"))
+                .doesNotContain("lsn_time_mapping");
+    }
+
     @Test
     void changesSqlOrdersByStartLsnAndSeqval() {
         String sql = SqlServerCdcConsumer.changesSql("dbo_orders_CT");

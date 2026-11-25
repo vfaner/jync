@@ -138,8 +138,11 @@ MySQL 源连接由程序自动追加 `netTimeoutForStreamingResults=0`（URL 或
 | `sync.cdc.logminer.batch-size` | `10000` | LogMiner 单批行数 |
 | `sync.cdc.logminer.idle-poll-ms` | `1000` | LogMiner 真空闲休眠 |
 | `sync.cdc.logminer.missing-lob-policy` | `skip` | 行外 LOB 无法还原时：`skip` 计数继续，`fail` 停车 |
+| `sync.cdc.pg.batch-size` | `1000` | `pg_logical_slot_get_changes` 单批行数 |
+| `sync.cdc.pg.max-rows-per-cycle` | `100000` | 一个 drain 周期最多消费的变更行数，余额在下一周期继续；`0` 回退为 `batch-size` |
 | `sync.cdc.pg.idle-poll-ms` | `500` | PostgreSQL 逻辑解码真空闲休眠 |
 | `sync.cdc.pg.wal-retention-warn-bytes` | `4294967296` | 复制槽滞留 WAL 的面板告警阈值（4 GiB） |
+| `sync.cdc.mssql.max-rows-per-cycle` | `100000` | SQL Server CDC 单周期折叠行数上限，在事务边界停下；`0` 不限 |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲休眠 |
 | `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口；`0` 关闭 |
 | `sync.cdc.target-table-repair-enabled` | `true` | 回放发现目标表被删时，只重建并重灌这张（这几张）表，位点不动 |

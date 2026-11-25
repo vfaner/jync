@@ -629,6 +629,8 @@ class YStreamCdcConsumerTest {
         when(lifecycle.ensure(eq(PROJECT), anyList(), any()))
                 .thenReturn(new Outcome(SERVICE, ANCHOR, false));
         when(clientFactory.open(any(), any(), any())).thenReturn(adapter);
+        // The acknowledgement now requires a durable position write first.
+        when(positionStore.flushDurably(PROJECT)).thenReturn(true);
 
         consumer.run();
 

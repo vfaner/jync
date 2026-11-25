@@ -154,6 +154,61 @@ class FullLoadProgressViewTest {
         assertThat(fragment).contains("200");
     }
 
+    /**
+     * 全量都完成后，「全量进度」列没有内容可显示：隐藏该列，而不是给每一行留一个「—」。
+     */
+    @Test
+    void theFullProgressColumnIsHiddenOnceEveryLoadFinished() throws Exception {
+        stubDetail(Map.of());
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.COMPLETED,
+                        null, null, null, null)));
+
+        String html = render();
+
+        assertThat(html).contains("class=\"num is-hidden\" data-role=\"progress-full\"");
+    }
+
+    /**
+     * 停在中途的全量仍有可续传的进度，列必须保留；这一列也随轮询出现/消失，不用刷新页面。
+     */
+    @Test
+    void theFullProgressColumnStaysVisibleForAnUnfinishedLoad() throws Exception {
+        stubDetail(Map.of("ITEMS", ProjectService.FullLoadProgress.of(List.of(
+                checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK)))));
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
+                        null, null, 300L, java.time.Instant.now())));
+
+        String html = render();
+
+        assertThat(html).contains("class=\"num\" data-role=\"progress-full\"");
+        assertThat(html).contains("data-full-load-pending=\"true\"");
+    }
+
+    /**
+     * A full load records the resolved cursor column with its last chunk. The polled fragment
+     * must therefore carry the strategy/cursor cell too — without it the row kept its "—"
+     * until the operator reloaded the page (the 2-second refresh only copied the four state
+     * cells).
+     */
+    @Test
+    void thePolledFragmentCarriesTheCursorColumnSoTheRowUpdatesWithoutAReload() throws Exception {
+        stubDetail(Map.of());
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("COURSE",
+                        ProjectService.SyncState.COMPLETED, 10L, java.time.Instant.now(),
+                        null, null, "TIMESTAMP", "UPDATE_TIME", true, false,
+                        ProjectService.IncrementalState.RUNNING)));
+
+        String fragment = mvc.perform(get("/projects/1/full-load-card").with(asAdmin()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(fragment).contains("data-status-cell=\"strategy\"");
+        assertThat(fragment).contains("UPDATE_TIME");
+    }
+
     @Test
     void theFragmentIsAnEmptyPlaceholderWhenNoFullLoadIsRunning() throws Exception {
         stubDetail(Map.of());

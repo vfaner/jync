@@ -499,12 +499,13 @@ class PgLogicalCdcConsumerDrainTest {
                 new String[]{"0/1001", insert(1L, "x")},
                 new String[]{"0/1002", insert(2L, "y")},
                 new String[]{"0/1003", COMMIT});
+        scriptCall(); // 提交后槽已空:满批之后还要再 peek 一次才能判定槽空
 
         int total = consumer.drain(source, "jync_1");
 
         assertThat(total).isEqualTo(6);
         assertThat(targetRowCount()).isEqualTo(2);
-        verify(peekPs, times(2)).executeQuery();
+        verify(peekPs, times(3)).executeQuery();
         verify(advancePs, times(1)).setString(eq(2), eq("0/1003"));
         verify(advancePs, times(1)).executeQuery();
         verify(source, never()).rollback();

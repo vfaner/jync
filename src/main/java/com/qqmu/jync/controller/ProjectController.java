@@ -376,6 +376,7 @@ public class ProjectController {
         model.addAttribute("progressByTable", progressByTable);
         Map<String, ProjectService.FullLoadProgress> fullLoad =
                 projectService.findFullLoadProgress(id);
+        model.addAttribute("statusFragmentData", false);
         addTableStatuses(id, config, fullLoad, model);
         Set<String> columnRuleTables = new TreeSet<>();
         for (ColumnRule r : config.getColumnRules()) {
@@ -607,12 +608,18 @@ public class ProjectController {
      */
     @GetMapping("/{id}/full-load-card")
     public String fullLoadCardFragment(@PathVariable Long id, Model model) {
+        Project project = projectService.findById(id).orElse(null);
+        if (project == null) {
+            // The browser treats a missing #full-load-card as "reload"; rendering the normal
+            // fragment here would dereference project.id and turn a deleted project into a
+            // 500 that the poller keeps retrying.
+            return "project-detail/full-load-progress :: missing";
+        }
         Map<String, ProjectService.FullLoadProgress> fullLoad =
                 projectService.findFullLoadProgress(id);
-        projectService.findById(id).ifPresent(project -> {
-            model.addAttribute("project", project);
-            addTableStatuses(id, projectService.loadConfig(project), fullLoad, model);
-        });
+        model.addAttribute("project", project);
+        model.addAttribute("statusFragmentData", true);
+        addTableStatuses(id, projectService.loadConfig(project), fullLoad, model);
         addFullLoadProgress(fullLoad, model);
         return "project-detail/full-load-progress :: data";
     }
