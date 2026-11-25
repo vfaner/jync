@@ -98,8 +98,11 @@ public enum DatabaseType {
             "jdbc:gaussdb://%s:%d/%s",
             8000, DialectFamily.POSTGRES),
 
+    // No path segment: the DM driver treats the URL path as a SCHEMA and rejects the
+    // connection with "无效的模式名[DAMENG]" when the user puts the database name there.
+    // The schema Jync reads is the connection's schemaName, exactly as for every product.
     DM("db.type.DM", "dm.jdbc.driver.DmDriver",
-            "jdbc:dm://%s:%d/%s",
+            "jdbc:dm://%s:%d",
             5236, DialectFamily.ORACLE),
 
     KINGBASE("db.type.KINGBASE", "com.kingbase8.Driver",

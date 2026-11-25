@@ -58,8 +58,11 @@ public final class FanoutEngineConsumer implements ManagedCdcConsumer {
             if (CdcFailureClassifier.isTransient(e)) {
                 log.warn("Fan-out runtime for project {} could not start (transient, the next"
                         + " supervise tick retries): {}", projectId, detail);
+                // Stack at DEBUG: the retry loop runs every supervise tick, and a stack per
+                // tick buries the one-line cause the operator needs.
+                log.debug("Fan-out runtime start failure for project {}", projectId, e);
             } else {
-                log.error("Fan-out runtime for project {} failed: {}", projectId, detail);
+                log.error("Fan-out runtime for project {} failed: {}", projectId, detail, e);
                 taskStore.recordCdcFailure(projectId, detail);
             }
         } finally {

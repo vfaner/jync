@@ -75,6 +75,14 @@ class DataSourceManagerJdbcUrlTest {
     // —— URL 属性注入:黑名单必须覆盖 customUrl 与模板插值,不只是 extraParams ——
 
     @Test
+    void aDamengUrlCarriesNoPathBecauseTheDriverReadsItAsASchema() {
+        DatabaseConfig c = config(DatabaseType.DM, "h", 5236);
+        c.setDatabaseName("DAMENG");
+
+        assertThat(manager.buildJdbcUrl(c)).isEqualTo("jdbc:dm://h:5236");
+    }
+
+    @Test
     void aCustomUrlCarryingADangerousPropertyIsRefused() {
         DatabaseConfig c = config(DatabaseType.MYSQL, "h", 3306);
         c.setCustomUrl("jdbc:mysql://h/db?autoDeserialize=true&queryInterceptors=x");
