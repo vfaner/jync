@@ -89,7 +89,7 @@ no outbound request, and `sync.ai.enabled=false` removes the feature entirely.
   is started from the page button and re-checks role and ownership. It can tune project
   parameters (batch size, parallelism, poll interval, CDC idle poll, cursor columns, cron) and a
   connection's JDBC extraParams on stopped tasks via confirmation cards, and administrators can
-  override nine system performance parameters (batch/fetch/chunk/retry); it cannot run SQL, edit
+  override ten system performance parameters (batch/fetch/chunk/retry); it cannot run SQL, edit
   other configuration or delete tasks, and connection identity fields and non-whitelisted
   application.yml properties are advice only.
 - **Knowledge ships with the jar**: parameters, prerequisites and known limits come from the
