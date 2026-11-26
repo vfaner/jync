@@ -584,4 +584,54 @@ class CdcOperationsServiceTest {
         verify(cdcManager).ensureStarted(same(fresh));
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), anyString());
     }
+
+    @Test
+    void adoptionRecordsTheExternalDumpPositionAsACompletedBaseline() throws SQLException {
+        Project project = project();
+        project.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
+        source(DatabaseType.MYSQL);
+        when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
+        when(clientFactory.serverIdFor(1L)).thenReturn(612001L);
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        java.sql.Statement st = org.mockito.Mockito.mock(java.sql.Statement.class);
+        java.sql.ResultSet rs = org.mockito.Mockito.mock(java.sql.ResultSet.class);
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery("SHOW BINARY LOGS")).thenReturn(rs);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getString(1)).thenReturn("mysql-bin.000123");
+        when(rs.getLong(2)).thenReturn(4096L);
+
+        service.adoptExternalBaseline(1L, " mysql-bin.000123 ", 2048L, null);
+
+        verify(cdcManager).ensureStopped(1L);
+        verify(positionStore).delete(1L);
+        verify(positionStore).recordBaselineStart(1L, "mysql-bin.000123", 2048L, null, 612001L);
+        verify(positionStore).markBaselineDone(1L);
+        verify(taskStore).markStoppedClearingResult(1L);
+        verify(changeLogRepository).save(any(ChangeLog.class));
+        verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), any());
+    }
+
+    @Test
+    void adoptionRefusesAFileTheSourceDoesNotList() throws SQLException {
+        Project project = project();
+        project.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
+        source(DatabaseType.MYSQL);
+        when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        java.sql.Statement st = org.mockito.Mockito.mock(java.sql.Statement.class);
+        java.sql.ResultSet rs = org.mockito.Mockito.mock(java.sql.ResultSet.class);
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery("SHOW BINARY LOGS")).thenReturn(rs);
+        when(rs.next()).thenReturn(false);
+
+        assertThatThrownBy(() -> service.adoptExternalBaseline(
+                1L, "mysql-bin.000999", 100L, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.cdc.external.fileMissing");
+        verify(positionStore, never()).recordBaselineStart(anyLong(), anyString(), anyLong(),
+                anyString(), anyLong());
+    }
 }

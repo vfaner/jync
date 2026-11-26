@@ -126,6 +126,13 @@
                              data-busy-text=#{common.loading}">
                 <svg class="ico"><use href="#arrow-repeat"/></svg><span th:text="#{project.syncNow}">Sync now</span>
             </button>
+            <button type="button" class="btn btn-ghost btn-sm"
+                    th:if="${externalBaselineEligible}"
+                    data-cdc-visibility="cdc"
+                    data-open-modal="external-baseline-modal">
+                <svg class="ico"><use href="#database"/></svg>
+                <span th:text="#{cdc.external.button}">Adopt external baseline</span>
+            </button>
             <button type="button" class="btn btn-primary btn-sm"
                     th:if="${cdcActive and !isRedisTarget}"
                     data-role="api-btn" data-reload="true" data-cdc-visibility="cdc"

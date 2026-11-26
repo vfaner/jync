@@ -479,6 +479,35 @@ public class ProjectController {
      * warning on the page rather than an error page — the rest of the detail view is still
      * useful when the source is temporarily unreachable.
      */
+    /**
+     * Adopts an externally dumped MySQL target as a completed baseline. The operator supplies
+     * the dump's binlog file/position; Jync only verifies the file is still listed and the
+     * position is inside it, then starts streaming from there instead of running a full load.
+     */
+    @PostMapping("/{id}/cdc/adopt-baseline")
+    public String adoptExternalBaseline(@PathVariable Long id,
+            @RequestParam(name = "binlogFile", required = false) String binlogFile,
+            @RequestParam(name = "binlogPos", required = false) Long binlogPos,
+            @RequestParam(name = "gtidSet", required = false) String gtidSet,
+            @RequestParam(name = "confirmed", required = false) String confirmed,
+            RedirectAttributes flash) {
+        if (!AccessGuard.current().isAdmin()) {
+            flash.addFlashAttribute("error", "error.forbidden");
+            return "redirect:/projects/" + id;
+        }
+        if (confirmed == null || confirmed.isBlank()) {
+            flash.addFlashAttribute("error", "error.cdc.external.confirmRequired");
+            return "redirect:/projects/" + id;
+        }
+        try {
+            cdcOperationsService.adoptExternalBaseline(id, binlogFile, binlogPos, gtidSet);
+            flash.addFlashAttribute("message", "msg.cdc.external.adopted");
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            flash.addFlashAttribute("error", e.getMessage());
+        }
+        return "redirect:/projects/" + id;
+    }
+
     @GetMapping("/{id}")
     public String detail(@PathVariable Long id, Model model, RedirectAttributes flash) {
         var maybeProject = projectService.findById(id);
@@ -700,6 +729,16 @@ public class ProjectController {
         // by design (T13), so holder-ship comes from statsFor and the snapshot alone.
         boolean cdcActive = current.isLogCdc();
         model.addAttribute("cdcActive", cdcActive);
+        // External baseline adoption is a strict admin-only, MySQL-binlog, single-target,
+        // stopped-project operation; keep the entry point off every other page state.
+        boolean externalBaselineEligible = cdcActive
+                && current == CaptureStrategy.BINLOG_CDC
+                && !isRedisTarget
+                && !Boolean.TRUE.equals(project.getEnabled())
+                && AccessGuard.current().isAdmin()
+                && (config == null || config.getFanoutTargetDbIds() == null
+                        || config.getFanoutTargetDbIds().isEmpty());
+        model.addAttribute("externalBaselineEligible", externalBaselineEligible);
         // Cursor priority is meaningful only for an incremental polling cycle. Full compare
         // re-reads every row and never consults a cursor column, so hiding the editor avoids
         // a setting that would silently do nothing.

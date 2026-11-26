@@ -13,6 +13,7 @@ import com.qqmu.jync.service.audit.AuditDetail;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
@@ -237,6 +238,85 @@ public class CdcOperationsService {
         } catch (SQLException | RuntimeException e) {
             // No answer → the probe falls back to "public", its pre-v1.9.0 behavior.
             return null;
+        }
+    }
+
+    /**
+     * Adopts a target populated by an external consistent dump: records the dump's binlog
+     * file/position as an already-completed baseline, so starting the project streams from
+     * there instead of running another full load.
+     *
+     * <p>Only MySQL binlog, a database target and a single-target project are supported in
+     * this first version. The operator owns the dump's consistency; this method only proves
+     * the source still lists the named binlog file and that the position is inside it. It
+     * never copies rows. The project must be stopped so no live consumer changes the
+     * position underneath the adoption.
+     */
+    public void adoptExternalBaseline(Long projectId, String binlogFile, Long binlogPos,
+                                      String gtidSet) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        if (CaptureStrategyParser.parse(project.getSyncConfig()) != CaptureStrategy.BINLOG_CDC) {
+            throw new IllegalArgumentException("error.cdc.external.notBinlog");
+        }
+        if (project.getTargetKindOrDefault() != com.qqmu.jync.model.SyncTargetKind.JDBC) {
+            throw new IllegalArgumentException("error.cdc.external.jdbcOnly");
+        }
+        SyncConfig config = contextFactory.parseConfig(project);
+        if (config != null && config.getFanoutTargetDbIds() != null
+                && !config.getFanoutTargetDbIds().isEmpty()) {
+            throw new IllegalArgumentException("error.cdc.external.fanout");
+        }
+        if (Boolean.TRUE.equals(project.getEnabled())
+                || cdcManager.statsFor(projectId) != null
+                || lockService.isLeaseHeldByLiveOwner(projectId)) {
+            throw new IllegalArgumentException("error.cdc.external.stopFirst");
+        }
+        String file = binlogFile == null ? "" : binlogFile.trim();
+        if (file.isEmpty() || binlogPos == null) {
+            throw new IllegalArgumentException("error.cdc.external.positionRequired");
+        }
+        DatabaseConfig source = project.getSourceDbId() == null ? null
+                : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
+        if (source == null) {
+            throw new IllegalArgumentException("error.cdc.external.notBinlog");
+        }
+        long fileSize = binlogFileSize(source, file);
+        if (binlogPos < 4L || binlogPos > fileSize) {
+            throw new IllegalArgumentException("error.cdc.external.positionInvalid");
+        }
+        String gtid = gtidSet == null || gtidSet.isBlank() ? null : gtidSet.trim();
+        cdcManager.ensureStopped(projectId);
+        positionStore.delete(projectId);
+        positionStore.recordBaselineStart(projectId, file, binlogPos, gtid,
+                clientFactory.serverIdFor(projectId));
+        positionStore.markBaselineDone(projectId);
+        taskStore.markStoppedClearingResult(projectId); // lift an old ERROR hat
+        changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
+                project.getName(), ChangeType.INFO,
+                "external baseline adopted at " + file + ":" + binlogPos));
+        auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
+                AuditDetail.of("audit.detail.cdcRebaseline", String.valueOf(projectId),
+                        "@adoptExternalBaseline:" + file + ":" + binlogPos));
+        log.info("Project {} adopted an external baseline at {}:{} (gtid={})",
+                projectId, file, binlogPos, gtid == null ? "none" : "provided");
+    }
+
+    /** Reads the size of one binlog file; a missing file or unreadable list fails closed. */
+    private long binlogFileSize(DatabaseConfig source, String file) {
+        try (Connection conn = dataSourceManager.getConnection(source);
+             java.sql.Statement st = conn.createStatement();
+             java.sql.ResultSet rs = st.executeQuery("SHOW BINARY LOGS")) {
+            while (rs.next()) {
+                if (file.equals(rs.getString(1))) {
+                    return rs.getLong(2);
+                }
+            }
+            throw new IllegalArgumentException("error.cdc.external.fileMissing");
+        } catch (SQLException e) {
+            log.warn("Could not read SHOW BINARY LOGS for the external baseline: {}",
+                    e.getMessage());
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
         }
     }
 
