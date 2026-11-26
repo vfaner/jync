@@ -141,6 +141,18 @@ public final class EtlSqlSupport {
      */
     static boolean exists(Connection target, String qualifiedTable, int timeoutSeconds)
             throws SQLException {
+        return exists(target, qualifiedTable, timeoutSeconds, false);
+    }
+
+    /**
+     * @param oraclePermissionAmbiguous Oracle/DM report ORA-00942 both for an absent table
+     *     and for an object the account may not see. When true, a 942 is rethrown so the
+     *     precheck can warn instead of claiming the table is absent; the runner keeps the
+     *     old "missing" reading because it must still be able to create a genuinely absent
+     *     table.
+     */
+    static boolean exists(Connection target, String qualifiedTable, int timeoutSeconds,
+                          boolean oraclePermissionAmbiguous) throws SQLException {
         try (Statement probe = target.createStatement()) {
             if (timeoutSeconds > 0) {
                 probe.setQueryTimeout(timeoutSeconds);
@@ -153,6 +165,9 @@ public final class EtlSqlSupport {
             // the caller's CREATE TABLE; nothing has been written to the target at this point.
             rollbackQuietly(target);
             if (isMissingTable(e)) {
+                if (oraclePermissionAmbiguous && hasErrorCode(e, 942)) {
+                    throw e;
+                }
                 return false;
             }
             throw e;
@@ -165,6 +180,17 @@ public final class EtlSqlSupport {
      * <p>SQLSTATE alone is not enough: Oracle and DM keep SQLSTATE 42000 for everything and
      * distinguish by vendor code, while DB2 and SQL Server use their own states.
      */
+    /** True when the exception or any linked exception carries this vendor code. */
+    static boolean hasErrorCode(SQLException failure, int code) {
+        for (SQLException e = failure; e != null;
+                e = e.getNextException() == e ? null : e.getNextException()) {
+            if (e.getErrorCode() == code) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public static boolean isMissingTable(SQLException failure) {
         for (SQLException e = failure; e != null;
                 e = e.getNextException() == e ? null : e.getNextException()) {

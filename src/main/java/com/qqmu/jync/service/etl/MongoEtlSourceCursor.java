@@ -1,6 +1,8 @@
 package com.qqmu.jync.service.etl;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.bson.Document;
 
@@ -18,6 +20,7 @@ final class MongoEtlSourceCursor implements EtlSourceCursor {
 
     private final MongoCursorHandle handle;
     private final List<EtlSourceColumn> columns;
+    private final Set<String> knownFields = new HashSet<>();
     private final int resumeKeyIndex;
     private Document current;
 
@@ -26,6 +29,9 @@ final class MongoEtlSourceCursor implements EtlSourceCursor {
         this.handle = handle;
         this.columns = columns;
         this.resumeKeyIndex = resumeKeyIndex;
+        for (EtlSourceColumn column : columns) {
+            knownFields.add(column.name());
+        }
     }
 
     @Override
@@ -43,6 +49,15 @@ final class MongoEtlSourceCursor implements EtlSourceCursor {
         try {
             boolean more = handle.next();
             current = more ? handle.current() : null;
+            if (current != null) {
+                for (String field : current.keySet()) {
+                    if (!knownFields.contains(field)) {
+                        // A field the 200-document sample never saw has no target column.
+                        // Skipping it silently lost data; fail with the field name instead.
+                        throw new EtlSourceException("error.etl.mongo.field.unsampled", field);
+                    }
+                }
+            }
             return more;
         } catch (MongoException e) {
             // The connection opened, so query() cannot classify this one: a server that goes

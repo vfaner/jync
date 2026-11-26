@@ -470,4 +470,20 @@ class MongoEtlSourceTest {
         task.setResumeKeyColumn(resumeKey);
         return task;
     }
+
+    @Test
+    void aFieldOutsideTheSampleStopsTheRunInsteadOfBeingDropped() {
+        when(handle.next()).thenReturn(true);
+        when(handle.current()).thenReturn(new Document("_id", ID)
+                .append("seq", 1)
+                .append("name", "first")
+                .append("nested", new Document("a", 1))
+                .append("lateField", "appeared after the sample"));
+
+        EtlSourceCursor cursor = source().query(task(EtlWriteMode.OVERWRITE, null), null);
+
+        assertThatThrownBy(cursor::next)
+                .isInstanceOf(EtlSourceException.class)
+                .hasMessage("lateField");
+    }
 }

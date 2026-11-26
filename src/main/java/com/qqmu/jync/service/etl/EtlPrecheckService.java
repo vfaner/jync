@@ -170,7 +170,27 @@ public class EtlPrecheckService {
                              Map<String, String> resultColumns) throws SQLException {
         String name = EtlSqlSupport.qualified(targetConfig, task.getTargetTable());
         boolean tdengine = targetConfig.effectiveType() == DatabaseType.TDENGINE;
-        if (!EtlSqlSupport.exists(target, name, timeout)) {
+        boolean oracleAmbiguous = targetConfig.resolvedFamily()
+                == DatabaseType.DialectFamily.ORACLE;
+        boolean targetExists;
+        try {
+            targetExists = EtlSqlSupport.exists(target, name, timeout, oracleAmbiguous);
+        } catch (SQLException e) {
+            if (oracleAmbiguous && EtlSqlSupport.hasErrorCode(e, 942)) {
+                // ORA-00942 is both "no such table" and "no privilege to see it". Claiming
+                // the table is missing turned this into a green precheck that failed only
+                // when the run reached CREATE TABLE over an object that already existed.
+                checks.add(warn("etl.precheck.target.ambiguous", name));
+                if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE) {
+                    checks.add(rangeConditionBlank(task)
+                            ? error("error.etl.range.required", null)
+                            : ok("etl.precheck.range.skipped", null));
+                }
+                return;
+            }
+            throw e;
+        }
+        if (!targetExists) {
             // Creating the table is the runner's first step for ordinary targets, so a missing
             // one is information. TDengine's generated DDL is rejected by the server (no
             // PRIMARY KEY/NOT NULL in this form), and a super table cannot be a target at
