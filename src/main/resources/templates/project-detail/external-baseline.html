@@ -27,6 +27,8 @@
                         <input type="text" class="input mono" id="external-binlog-file"
                                name="binlogFile" required maxlength="512"
                                placeholder="mysql-bin.000123">
+                        <div class="help" th:text="#{cdc.external.fileHint}">Use the File
+                            name from SHOW BINARY LOGS, not an absolute path.</div>
                     </div>
                     <div class="field">
                         <label for="external-binlog-pos">
@@ -64,7 +66,7 @@
                     <input type="number" class="input mono" id="external-scn" name="scn"
                            required min="1">
                 </div>
-                <label class="check-inline">
+                <label class="check-inline is-wrap">
                     <input type="checkbox" name="confirmed" required>
                     <span th:text="#{cdc.external.confirm}">I confirm...</span>
                 </label>

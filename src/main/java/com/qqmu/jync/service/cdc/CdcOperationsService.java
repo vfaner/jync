@@ -293,6 +293,12 @@ public class CdcOperationsService {
         switch (strategy) {
             case BINLOG_CDC -> {
                 String file = binlogFile == null ? "" : binlogFile.trim();
+                // SHOW BINARY LOGS returns a name, not a path. Accept a pasted absolute path
+                // for convenience but validate the basename the source actually lists.
+                int slash = Math.max(file.lastIndexOf('/'), file.lastIndexOf('\\'));
+                if (slash >= 0) {
+                    file = file.substring(slash + 1);
+                }
                 if (file.isEmpty() || binlogPos == null) {
                     throw new IllegalArgumentException("error.cdc.external.positionRequired");
                 }

@@ -427,6 +427,9 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 }
 .check-inline { display: inline-flex; align-items: center; font-size: 13px; white-space: nowrap; cursor: pointer; }
 .check-inline input { width: 15px; height: 15px; margin-right: 7px; accent-color: var(--brand); cursor: pointer; }
+/* 长确认文案（外部基线接入）必须换行，否则 nowrap 会把后半句裁掉并撑出横向滚动条 */
+.check-inline.is-wrap { white-space: normal; align-items: flex-start; line-height: 1.5; }
+.check-inline.is-wrap input { flex: 0 0 auto; margin-top: 2px; }
 .btn-row { display: flex; flex-wrap: wrap; margin-bottom: -9px; }
 .btn-row > * { margin: 0 9px 9px 0; }
 .pager-foot { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; }
