@@ -18,13 +18,15 @@
             <span th:if="${s.file == null and s.lsn == null and s.scn != null}" class="mono"
                   th:text="|SCN ${s.scn}|">SCN</span>
             <span th:if="${s.file == null and s.lsn == null and s.scn == null}"
+                  class="fanout-status-state"
                   th:text="#{option.fanoutNoPosition}">not consumed yet</span>
-            <span th:if="${s.ageSeconds != null}" th:text="#{option.fanoutAge(${s.ageSeconds})}">age</span>
-            <span th:if="${s.transport != 'REDIS'}"
-                  th:text="#{option.fanoutSpool(${s.spoolBytes})}">spool</span>
+            <span th:if="${s.ageSeconds != null}" class="fanout-status-meta"
+                  th:text="#{option.fanoutAge(${s.ageSeconds})}">age</span>
+            <span th:if="${s.transport != 'REDIS'}" class="fanout-spool-metric"
+                  th:text="#{option.fanoutSpool(${s.spoolText})}">spool</span>
             <span th:if="${s.transport == 'REDIS'}" class="fanout-transport-badge"
                   th:text="#{option.fanoutRedisQueue}">Redis Stream</span>
-            <span th:if="${s.appliedTransactions != null}"
+            <span th:if="${s.appliedTransactions != null}" class="fanout-status-meta"
                   th:text="#{option.fanoutApplied(${s.appliedTransactions})}">applied</span>
             <span th:if="${s.workerError != null}" class="fanout-worker-error"
                   th:text="#{option.fanoutWorkerStopped(${s.workerError})}">stopped</span>

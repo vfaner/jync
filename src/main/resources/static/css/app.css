@@ -1252,7 +1252,12 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .target-menu-type { color: var(--ink-mute); font-size: 11px; }
 .target-menu-empty { padding: 8px 9px; color: var(--ink-mute); font-size: 12.5px; }
-.fanout-worker-error { color: var(--danger); }
+.fanout-status-list li { color: var(--ink-soft); }
+.fanout-status-list li > b { color: var(--ink); font-weight: 650; }
+.fanout-status-state { color: var(--warn); font-weight: 600; }
+.fanout-status-meta { color: var(--ink-mute); }
+.fanout-spool-metric { color: var(--brand); font-weight: 600; }
+.fanout-worker-error { color: var(--danger); font-weight: 600; }
 .fanout-transport-badge { color: var(--brand); }
 .fanout-chip-type { color: var(--ink-mute); font-size: 10.5px; }
 .fanout-target-picker .tag-chip { font-family: inherit; font-size: 12.5px; cursor: default; }

@@ -100,6 +100,8 @@ class ProjectDetailFanoutStatusViewTest {
         assertThat(html).contains("#2", "#3");
         assertThat(html).contains("mysql-bin.000007:1024");
         assertThat(html).contains("fanout-status-list");
+        // Size is rendered in human units and styled apart from the muted notes.
+        assertThat(html).contains("fanout-spool-metric");
     }
 
     @Test

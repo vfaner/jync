@@ -865,10 +865,13 @@ public class ProjectController {
             java.nio.file.Path spool = java.nio.file.Path.of("data", "fanout",
                     String.valueOf(projectId), targetId + ".log");
             try {
-                row.put("spoolBytes", java.nio.file.Files.exists(spool)
-                        ? java.nio.file.Files.size(spool) : 0L);
+                long spoolBytes = java.nio.file.Files.exists(spool)
+                        ? java.nio.file.Files.size(spool) : 0L;
+                row.put("spoolBytes", spoolBytes);
+                row.put("spoolText", com.qqmu.jync.util.SizeFormat.bytes(spoolBytes));
             } catch (java.io.IOException e) {
                 row.put("spoolBytes", 0L);
+                row.put("spoolText", com.qqmu.jync.util.SizeFormat.bytes(0L));
             }
             statuses.add(row);
         }
