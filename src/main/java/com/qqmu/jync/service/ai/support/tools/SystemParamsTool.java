@@ -32,7 +32,7 @@ public class SystemParamsTool implements SupportTool {
 
     public String description() {
         return "Administrator-only read of the editable system performance parameters: "
-                + "batch/fetch sizes, chunking and retry count. Returns each key, effective "
+                + "batch/fetch sizes, chunking, retry count, and the one-source-many-targets cap (sync.fanout.max-targets, 2-100). Returns each key, effective "
                 + "value, application.yml base value, whether an override is active, and the "
                 + "allowed range. Call it before proposing a change. No write. Cheap.";
     }

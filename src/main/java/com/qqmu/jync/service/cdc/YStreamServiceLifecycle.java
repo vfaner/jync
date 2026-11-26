@@ -85,6 +85,17 @@ public class YStreamServiceLifecycle {
         Service service = mine.get(0);
         reconcileTables(service.name(), wanted, ops);
         resetIfRunning(service, ops);
+        // The stored anchor must not predate what the service can still deliver. A service
+        // recreated while the project was stopped restarts at "now"; resuming from the old
+        // anchor would silently lose the gap. The same rule PgLogicalCdcConsumer.ensureSlot
+        // applies to a missing/re-created slot.
+        YStreamPosition current = anchorOf(service);
+        if (YStreamPositionCodec.encode(stored)
+                .compareTo(YStreamPositionCodec.encode(current)) < 0) {
+            throw new IllegalStateException("YStream cdc blocked: stored position "
+                    + stored.text() + " predates the service RESTART_POSITION "
+                    + current.text() + "; rebuild the baseline");
+        }
         boolean baselineRequired = !Boolean.TRUE.equals(row.isBaselineDone());
         log.info("Attaching to YStream service {} for project {} at {} (baseline {})",
                 service.name(), projectId, stored.text(),

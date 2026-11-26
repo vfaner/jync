@@ -115,7 +115,14 @@ public class ConstraintStateHealer {
                 return;   // keep the marker; the next startup/scheduled pass retries
             }
         }
-        states.clear(state);
+        // A cycle may have acquired the lease while the restore was running. Re-check and
+        // only delete the exact marker we healed; a fresh marker belongs to that live cycle.
+        if (lockService.isLeaseHeldByLiveOwner(state.getProjectId())) {
+            log.debug("Keeping the disabled-constraint marker of project {}: a cycle started"
+                    + " while it was being restored", state.getProjectId());
+            return;
+        }
+        states.clearIfUnchanged(state);
         log.info("Restored target constraints left disabled by an earlier crash for project {}"
                 + " ({} table(s))", state.getProjectId(), tables.size());
     }

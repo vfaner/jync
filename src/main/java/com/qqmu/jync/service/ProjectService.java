@@ -824,9 +824,37 @@ public class ProjectService {
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
+        cleanupRemovedSpoolTargets(projectId, old, clean);
         cleanupRedisAfterFanoutChange(projectId, existingTransport, existingRedisTarget,
                 cleanTransport, cleanRedisTarget, old, clean);
         return saved;
+    }
+
+    /**
+     * A removed target's local spool files are a previous generation's queue. Re-adding the
+     * same connection would otherwise resume from its old offset, replaying stale events
+     * before the fresh baseline rows. Best-effort: a file-system error must not fail the
+     * saved configuration.
+     */
+    private void cleanupRemovedSpoolTargets(Long projectId, java.util.List<Long> oldTargets,
+                                            java.util.List<Long> newTargets) {
+        java.util.Set<Long> removed = new java.util.LinkedHashSet<>(oldTargets);
+        removed.removeAll(newTargets);
+        if (removed.isEmpty()) {
+            return;
+        }
+        java.nio.file.Path dir = java.nio.file.Path.of("data", "fanout",
+                String.valueOf(projectId));
+        for (Long targetId : removed) {
+            for (String suffix : List.of(".log", ".offset", ".failed")) {
+                try {
+                    java.nio.file.Files.deleteIfExists(dir.resolve(targetId + suffix));
+                } catch (java.io.IOException e) {
+                    log.warn("Could not remove the fan-out spool file {}{} of project {}: {}",
+                            targetId, suffix, projectId, e.toString());
+                }
+            }
+        }
     }
 
     /**

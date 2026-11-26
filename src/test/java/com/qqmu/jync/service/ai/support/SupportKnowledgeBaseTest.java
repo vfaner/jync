@@ -230,4 +230,22 @@ class SupportKnowledgeBaseTest {
         var hits = kb.search("zh", "同步 连接 任务", 2);
         assertThat(hits).hasSizeLessThanOrEqualTo(2);
     }
+
+    @Test
+    void aChineseQuestionAboutExternalBaselineFindsTheAdoptionSection() {
+        var hits = kb.search("zh", "外部基线 dump 跳过全量 binlog 位点", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("外部基线接入（跳过首次全量）");
+            assertThat(hit.body()).contains("RESTART_POSITION").contains("NOT_STARTED");
+        });
+    }
+
+    @Test
+    void anEnglishQuestionAboutKeylessTablesFindsTheLimitationSection() {
+        var hits = kb.search("en", "keyless table no primary key full load", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit ->
+                assertThat(hit.title()).isEqualTo("Keyless tables"));
+    }
 }

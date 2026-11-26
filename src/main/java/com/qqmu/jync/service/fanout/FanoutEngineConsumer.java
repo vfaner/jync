@@ -32,16 +32,25 @@ public final class FanoutEngineConsumer implements ManagedCdcConsumer {
     private final SyncTaskStore taskStore;
     private final CdcRuntimeStats stats;
     private final RuntimeOpener opener;
+    private final com.qqmu.jync.service.cdc.CdcPositionStore positionStore;
 
     public FanoutEngineConsumer(Project project, ManagedCdcConsumer engine,
                                 FanoutRuntimeRegistry registry, SyncTaskStore taskStore,
                                 CdcRuntimeStats stats, RuntimeOpener opener) {
+        this(project, engine, registry, taskStore, stats, opener, null);
+    }
+
+    public FanoutEngineConsumer(Project project, ManagedCdcConsumer engine,
+                                FanoutRuntimeRegistry registry, SyncTaskStore taskStore,
+                                CdcRuntimeStats stats, RuntimeOpener opener,
+                                com.qqmu.jync.service.cdc.CdcPositionStore positionStore) {
         this.project = project;
         this.engine = engine;
         this.registry = registry;
         this.taskStore = taskStore;
         this.stats = stats;
         this.opener = opener;
+        this.positionStore = positionStore;
     }
 
     @Override
@@ -51,6 +60,16 @@ public final class FanoutEngineConsumer implements ManagedCdcConsumer {
         try {
             runtime = opener.open();
             registry.register(projectId, runtime);
+            if (positionStore != null && runtime.needsRebaseline()) {
+                // A target's queue overflowed in an earlier run (spool cap / Redis trim):
+                // the engine would otherwise resume from the advanced shared anchor and the
+                // lost window would become permanent. Drop the anchor so its start path
+                // re-runs the fan-out baseline and then clears the marks.
+                log.warn("Fan-out project {} lost events for a target earlier; dropping the"
+                        + " shared anchor before starting {}", projectId, engine.getClass()
+                        .getSimpleName());
+                positionStore.delete(projectId);
+            }
             engine.run();
         } catch (Exception e) {
             String detail = CdcFailureClassifier.describe(e);

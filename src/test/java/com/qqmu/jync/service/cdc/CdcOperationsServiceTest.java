@@ -605,9 +605,8 @@ class CdcOperationsServiceTest {
         service.adoptExternalBaseline(1L, " mysql-bin.000123 ", 2048L, null, null, null);
 
         verify(cdcManager).ensureStopped(1L);
-        verify(positionStore).delete(1L);
-        verify(positionStore).recordBaselineStart(1L, "mysql-bin.000123", 2048L, null, 612001L);
-        verify(positionStore).markBaselineDone(1L);
+        verify(positionStore).adoptExternalBaseline(1L, "mysql-bin.000123", 2048L, null,
+                612001L, null, null);
         verify(taskStore).markStoppedClearingResult(1L);
         verify(changeLogRepository).save(any(ChangeLog.class));
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), any());
@@ -644,8 +643,8 @@ class CdcOperationsServiceTest {
 
         service.adoptExternalBaseline(1L, null, null, null, " 0/16B6C50 ", null);
 
-        verify(positionStore).recordBaselineStartLsn(1L, "0/16B6C50");
-        verify(positionStore).markBaselineDone(1L);
+        verify(positionStore).adoptExternalBaseline(1L, null, null, null, null,
+                "0/16B6C50", null);
     }
 
     @Test
@@ -663,9 +662,15 @@ class CdcOperationsServiceTest {
                 .thenReturn(rs);
         when(rs.next()).thenReturn(true, false);
         when(rs.getString(1)).thenReturn("ORDERS");
+        java.sql.ResultSet max = org.mockito.Mockito.mock(java.sql.ResultSet.class);
+        when(st.executeQuery(org.mockito.ArgumentMatchers.contains("fn_cdc_get_max_lsn")))
+                .thenReturn(max);
+        when(max.next()).thenReturn(true);
+        when(max.getString(1)).thenReturn("0x0000002a43d7e1a50031");
 
         service.adoptExternalBaseline(1L, null, null, null, "0000002A43D7E1A50030", null);
 
-        verify(positionStore).recordBaselineStartLsn(1L, "0x0000002a43d7e1a50030");
+        verify(positionStore).adoptExternalBaseline(1L, null, null, null, null,
+                "0x0000002a43d7e1a50030", null);
     }
 }

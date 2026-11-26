@@ -420,6 +420,16 @@ public class SyncStateWriter {
         snapshotService.delete(projectId, type, name);
     }
 
+    /**
+     * Drops full-load chunk checkpoints without touching progress rows. An external baseline
+     * replaces the target's contents, so any checkpoint left by an interrupted Jync load
+     * describes rows that are no longer the ones the next targeted reload would skip.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void clearFullLoadCheckpoints(Long projectId) {
+        checkpointRepository.deleteByProjectId(projectId);
+    }
+
     /** Clears every cursor and snapshot for a project, forcing a full reload next run. */
     @Transactional
     public void resetProject(Long projectId) {

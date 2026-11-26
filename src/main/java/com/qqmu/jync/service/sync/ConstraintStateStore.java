@@ -57,4 +57,19 @@ public class ConstraintStateStore {
             repository.deleteById(state.getProjectId());
         }
     }
+
+    /**
+     * Deletes the marker only if the row still has the timestamp the healer read. A live
+     * cycle may have rewritten the marker while the restore was running; deleting that new
+     * marker would leave constraints off with no record after a crash.
+     */
+    public void clearIfUnchanged(ConstraintState state) {
+        if (state == null || state.getProjectId() == null) {
+            return;
+        }
+        repository.findById(state.getProjectId())
+                .filter(current -> java.util.Objects.equals(
+                        current.getUpdatedAt(), state.getUpdatedAt()))
+                .ifPresent(current -> repository.deleteById(state.getProjectId()));
+    }
 }

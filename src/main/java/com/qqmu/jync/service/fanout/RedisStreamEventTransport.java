@@ -95,7 +95,9 @@ public final class RedisStreamEventTransport implements EventTransport {
         byte[] bytes = EventCodec.serialize(event);
         synchronized (publishLock) {
             publisher.sync().xadd(streamKey, Map.of("e", bytes));
-            if (maxLen > 0L && !trimDisabled) {
+            boolean baselineEvent = event.transactionId() != null
+                    && event.transactionId().startsWith("baseline");
+            if (maxLen > 0L && !trimDisabled && !baselineEvent) {
                 try {
                     // Approximate trimming is deliberate: exact MAXLEN is O(stream) and
                     // Redis recommends ~. 0 means the operator chose never to trim.

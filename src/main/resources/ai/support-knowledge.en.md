@@ -73,6 +73,17 @@ Auto-resolution (an explicit cursor wins):
 Deletes: under sync.full-compare-max-rows (20000) both key sets are compared each cycle;
 above that it is skipped.
 
+## Pausing target foreign keys during a load
+
+- "Pause target foreign keys during the load" is on by default. MySQL uses session-level `SET FOREIGN_KEY_CHECKS=0/1`; SQL Server uses per-table `ALTER TABLE ... NOCHECK` / `WITH CHECK CHECK CONSTRAINT ALL`, which is persistent table state.
+- SQL Server records a marker before disabling. The data phase restores constraints in `finally`; a failed restore aborts the physical connection so NOCHECK cannot return to the pool. A killed process leaves the marker, and startup plus a 5-minute job restore it (unless the target connection is gone or another node holds the lease). The assistant cannot change this switch.
+
+## Keyless tables
+
+- Without a primary key there is no upsert: the first full load uses plain INSERT. A non-empty target (or one that cannot be proven empty) is refused; empty it or enable "truncate target before initial load" and retry.
+- A keyless full load prefers OFFSET paging and resumes from the target row count; concurrent writes can shift offsets and duplicate or skip rows, so it is not a consistent snapshot. Add a primary key, or migrate through CDC/a read-only window.
+- Log CDC can only seed a keyless table; later changes cannot address its target rows. Fan-out baselines skip keyless tables. FULL_COMPARE seeds once and then skips.
+
 ## How the progress card refreshes
 
 - The task-detail table-progress card refreshes itself: about every 2 seconds while a full
@@ -425,6 +436,13 @@ executes once when a worker becomes free.
 - Multiple instances: run the rebuild on the node holding the consumer lease; other nodes refuse
   it by design. A full load of a large table is heavy, so avoid peak hours.
 
+## External baseline adoption (skip the first full load)
+
+- The entry lives on the project detail page and is admin-only. The task must be stopped, a single database target, and log CDC. Redis cache targets and one-source-many-target projects are not supported. The assistant can explain it but cannot execute it.
+- Use it when the target was populated by a **consistent dump** and the dump's source position is known. Jync records that position as a completed baseline, streams from it after start, copies no rows and does not backfill table progress; the operator confirms target consistency.
+- Position by engine: MySQL uses the File name from `SHOW BINARY LOGS` plus position (4..file size, optional GTID); PostgreSQL uses `pg_lsn` and requires an existing slot whose `restart_lsn` / `confirmed_flush_lsn` is not ahead; SQL Server uses a canonical `0x` LSN and requires capture instances for the selected tables, not later than `fn_cdc_get_max_lsn()`; Oracle/Dameng uses a SCN between the oldest mineable redo and the current SCN; Yashan uses the existing unique YStream service's `RESTART_POSITION`.
+- Adoption clears the old position, old full-load checkpoints and the ERROR hat; a validation or cleanup failure never marks the baseline done. After adoption `project_table_status` may legitimately show `NOT_STARTED`; do not treat it as "never synced". Use Rebuild baseline to reload.
+
 ## When data stops arriving
 
 When the source has new or changed rows and the target shows nothing, split the question by task
@@ -477,15 +495,17 @@ variables change. It suits a window that advances by run, e.g. `WHERE slot = ${r
 
 ## ETL caveats
 
-- The customer's SELECT defines the target columns; bad SQL fails early.
-- Overwrite clears the target first; append resumes from its resume key.
+- The customer's SELECT defines the target columns for a newly created table. For an existing target, Jync writes the intersection of result and target columns and warns about missing ones. Identity / GENERATED ALWAYS / computed columns are not written explicitly; using one as an UPSERT key fails.
+- Overwrite commits the write-mode DELETE in the same transaction as the first batch, so a failed first batch rolls it back; an empty extraction commits the DELETE and empties the target. Append resumes from its resume key.
 - Range overwrite deletes by range_condition; a resumed run skips the delete, a finished run
   clears the checkpoint.
 - UPSERT updates rows matching upsert_key_columns; it replays every row, ignoring checkpoints.
 - Editing the SQL, variables, target table, range condition, resume key or upsert keys clears
   it.
 - A native MongoDB resume key must not mix BSON types or be all null.
-- preSql runs before extraction, postSql after the load.
+- preSql runs after target creation and before the write-mode DELETE/extraction, committed immediately; it is skipped when resuming. APPEND keeps its checkpoint after success, so preSql normally runs only on the first run; OVERWRITE clears the checkpoint each run, so preSql runs every time. postSql runs after the load.
+- Source and target must not be the same physical database; two connection rows with the same type/host/port/database/schema are refused (different schemas on one server are allowed).
+- A native MongoDB source infers target columns from a sample; a later unseen field aborts the run instead of being dropped. Oracle precheck ORA-00942 is only a warning: it can mean missing or invisible to the account.
 
 ## Schema sync
 
@@ -863,7 +883,7 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   prepared for tasks the caller may edit (administrators may edit anything). Each card lists the
   old and new values; nothing is written until Confirm, the change takes effect on the next start,
   and the audit row carries the field names and new values.
-- Administrators can read and override nine system performance parameters
+- Administrators can read and override ten system performance parameters
   (system_params / update_system_params): batch, fetch, chunk sizing and retry count, all with
   the sync. prefix, as strings; set overrides, reset restores the application.yml base. The change
   applies to subsequent sync rounds and converges across nodes in about 30 seconds; administrator
@@ -969,6 +989,7 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - The LOB table list shows per-table counts. With `LOGMNR_PARSE_LOB=0` (default), CLOB/BLOB appear as `OUT_CLOB`/`OUT_BLOB`. `CALL SP_SET_PARA_VALUE(1,'LOGMNR_PARSE_LOB',1)` plus `LOB_MAX_INROW_LEN=8000` (restart if needed) makes values up to 8 KB minable.
 - LOB content above 8 KB or stored out of row is not in the archived redo; standard LogMiner cannot recover it. Split those tables into polling/ETL tasks, or move large LOBs to separate tables and keep a reference.
 - `sync.cdc.logminer.missing-lob-policy=skip` keeps the old target value and counts the skip; `fail` stops at the first missing LOB.
+- A LogMiner `PURGED` (ORA-01291) detail includes the resume SCN and oldest still-available redo. If the oldest is EARLIER than resume but a file is still missing, it is an archive gap/deleted file/thread/resetlogs issue — raising retention will not help; check `V$ARCHIVED_LOG` continuity. If the oldest is LATER than resume, retention is too short. Rows with `DELETED=YES` are no longer selected or counted in the floor.
 
 ## Target identifier case and type precision
 
@@ -998,7 +1019,8 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - **Event transport**: task detail → sync options → event transport:
   - Local queue (default): `data/fanout/<project id>/<target id>.log`, 2 GB cap per target, no external dependency;
   - Redis Stream: pick a configured **single-node** Redis target (the same connection and encrypted password the cache projection uses). One stream `jync:fanout:<project id>:events` per project, one consumer group per target, transaction-level ACK, pending entries re-read after a worker restart. Cluster targets are not supported; the stream is not trimmed by default — monitor with `XINFO STREAM`. `sync.fanout.redis-max-len` (0 = off) enables an approximate MAXLEN; if enabled, a slow target can lose unread events, so size it above the slowest target's backlog.
+  - Deleting a project, switching back to the local queue, or changing the Redis target deletes the whole stream; removing some targets runs XGROUP DESTROY for their groups. Cleanup is best-effort. Do not recommend enabling `sync.fanout.redis-max-len` to save disk: a slow target can lose unread events.
   - Multi-instance / cross-node deployments must use Redis (or a shared data directory); otherwise undelivered events in a node-local spool are invisible after a failover.
-- **Performance**: one source log stream, one baseline read, one catalog scan a minute and one metadata read per table — independent of target count; target writes run in parallel. Costs sit on Jync and the targets: one worker, one pool seat and one queue/consumer group per target. For 20 targets check each target's `max_connections` and the spool disk cap (2 GB per target).
+- **Performance**: one source log stream, one baseline read, one catalog scan a minute and one metadata read per table — independent of target count; target writes run in parallel. Costs sit on Jync and the targets: one worker, one pool seat and one queue/consumer group per target. For 20 targets check each target's `max_connections` and the spool disk cap (2 GB per target). Change-log and per-table change counts are claimed once per source transaction, so they do not multiply by target count.
 - **Positions**: the detail page shows each target's file:offset / LSN / SCN, applied transactions, the worker's last error and spool backlog. Positions are display/diagnostic state, written at most once a second per target; recovery uses the transport's acknowledged offset. A backlog that only grows with a worker error means that target cannot accept writes — read the table/column named in the error.
 - **Troubleshooting**: one target behind — backlog and worker error; all targets behind — source log/network and capture error; no data after adding a target — the project must have been stopped so the baseline re-ran; Redis transport won't start — the selected Redis target must be reachable and not a cluster.

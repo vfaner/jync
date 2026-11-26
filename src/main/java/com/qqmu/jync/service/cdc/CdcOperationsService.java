@@ -288,7 +288,10 @@ public class CdcOperationsService {
             throw new IllegalArgumentException("error.cdc.external.notCdc");
         }
         cdcManager.ensureStopped(projectId);
-        // Validate everything before deleting the existing position: a typo must not
+        // The target was replaced by the external dump: old chunk checkpoints would make a
+        // later targeted reload skip ranges that belong to the previous target contents.
+        stateWriter.clearFullLoadCheckpoints(projectId);
+        // Validate everything before replacing the existing position: a typo must not
         // destroy the anchor of a project the operator can still resume.
         switch (strategy) {
             case BINLOG_CDC -> {
@@ -306,38 +309,37 @@ public class CdcOperationsService {
                 if (binlogPos < 4L || binlogPos > fileSize) {
                     throw new IllegalArgumentException("error.cdc.external.positionInvalid");
                 }
-                positionStore.delete(projectId);
-                positionStore.recordBaselineStart(projectId, file, binlogPos,
-                        blankToNull(gtidSet), clientFactory.serverIdFor(projectId));
+                positionStore.adoptExternalBaseline(projectId, file, binlogPos,
+                        blankToNull(gtidSet), clientFactory.serverIdFor(projectId), null, null);
             }
             case PG_LOGICAL_CDC -> {
                 String value = normalizedLsn(strategy, lsn);
                 assertPgSlotCovers(projectId, source, value);
-                positionStore.delete(projectId);
-                positionStore.recordBaselineStartLsn(projectId, value);
+                positionStore.adoptExternalBaseline(projectId, null, null, null, null, value, null);
             }
             case SQLSERVER_CDC -> {
                 String value = normalizedLsn(strategy, lsn);
                 assertSqlServerCapture(source, config);
-                positionStore.delete(projectId);
-                positionStore.recordBaselineStartLsn(projectId, value);
+                assertSqlServerLsnNotFuture(source, value);
+                positionStore.adoptExternalBaseline(projectId, null, null, null, null, value, null);
             }
             case LOGMINER_CDC -> {
                 if (scn == null || scn <= 0L) {
                     throw new IllegalArgumentException("error.cdc.external.positionRequired");
                 }
                 assertScnStillMineable(source, scn);
-                positionStore.delete(projectId);
-                positionStore.recordBaselineStartScn(projectId, scn);
+                positionStore.adoptExternalBaseline(projectId, null, null, null, null, null, scn);
             }
             case YSTREAM_CDC -> {
                 String packed = yStreamPosition(projectId, source, lsn);
-                positionStore.delete(projectId);
-                positionStore.recordBaselineStartLsn(projectId, packed);
+                positionStore.adoptExternalBaseline(projectId, null, null, null, null, packed, null);
             }
             default -> throw new IllegalArgumentException("error.cdc.external.notCdc");
         }
-        positionStore.markBaselineDone(projectId);
+        // The target was replaced by the external dump: old chunk checkpoints would make a
+        // later targeted reload skip ranges that belong to the previous target contents.
+        // Do this BEFORE marking the baseline done: if clearing fails, the project stays
+        // not-done and the next start performs a safe full load instead of trusting them.
         taskStore.markStoppedClearingResult(projectId); // lift an old ERROR hat
         String adopted = switch (strategy) {
             case BINLOG_CDC -> binlogFile.trim() + ":" + binlogPos;
@@ -374,6 +376,27 @@ public class CdcOperationsService {
             throw new IllegalArgumentException("error.cdc.external.positionInvalid");
         }
         return value;
+    }
+
+    /** SQL Server: an LSN above the source's max change LSN cannot be resumed from yet. */
+    private void assertSqlServerLsnNotFuture(DatabaseConfig source, String lsn) {
+        try (Connection conn = dataSourceManager.getConnection(source);
+             java.sql.Statement st = conn.createStatement();
+             java.sql.ResultSet rs = st.executeQuery(
+                     "SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)")) {
+            if (rs.next()) {
+                String max = rs.getString(1);
+                if (max != null && !max.isBlank()
+                        && SqlServerCdcConsumer.canonicalLsn(max)
+                                .compareTo(SqlServerCdcConsumer.canonicalLsn(lsn)) < 0) {
+                    throw new IllegalArgumentException("error.cdc.external.sqlserverLsnFuture");
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("Could not read sys.fn_cdc_get_max_lsn for the external baseline: {}",
+                    e.getMessage());
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
+        }
     }
 
     /**
@@ -429,14 +452,21 @@ public class CdcOperationsService {
         }
         try (Connection conn = dataSourceManager.getConnection(source);
              java.sql.PreparedStatement ps = conn.prepareStatement(
-                     "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = ?")) {
+                     "SELECT restart_lsn, confirmed_flush_lsn FROM pg_replication_slots"
+                             + " WHERE slot_name = ?")) {
             ps.setString(1, slot);
             try (java.sql.ResultSet rs = ps.executeQuery()) {
                 if (!rs.next()) {
                     throw new IllegalArgumentException("error.cdc.external.pgSlotMissing");
                 }
-                String confirmed = rs.getString(1);
-                if (confirmed != null && CdcPositionStore.compareLsn(confirmed, lsn) > 0) {
+                // A never-consumed slot reports confirmed_flush_lsn = NULL; restart_lsn is
+                // the real earliest WAL the slot can still deliver.
+                String restart = rs.getString(1);
+                String confirmed = rs.getString(2);
+                if (restart == null
+                        || CdcPositionStore.compareLsn(restart, lsn) > 0
+                        || (confirmed != null
+                                && CdcPositionStore.compareLsn(confirmed, lsn) > 0)) {
                     throw new IllegalArgumentException("error.cdc.external.pgSlotAhead");
                 }
             }
@@ -450,9 +480,14 @@ public class CdcOperationsService {
     /** LogMiner: reject a SCN the source's retained redo can no longer mine. */
     private void assertScnStillMineable(DatabaseConfig source, long scn) {
         try (Connection conn = dataSourceManager.getConnection(source)) {
-            Long floor = MiningDialects.detect(conn).oldestMineableScn(conn);
+            MiningDialect dialect = MiningDialects.detect(conn);
+            Long floor = dialect.oldestMineableScn(conn);
             if (floor != null && floor > scn) {
                 throw new IllegalArgumentException("error.cdc.external.scnPurged");
+            }
+            long high = dialect.highWaterScn(conn);
+            if (high > 0L && scn > high) {
+                throw new IllegalArgumentException("error.cdc.external.scnFuture");
             }
         } catch (SQLException e) {
             log.warn("Could not read the oldest mineable SCN for the external baseline: {}",

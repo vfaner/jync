@@ -755,6 +755,16 @@ class SupportAssistantServiceTest {
     }
 
     @Test
+    void theSystemPromptExplainsExternalBaselineAndRealtimeBoundaries() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("外部基线接入")
+                .contains("不回填表进度")
+                .contains("PURGED")
+                .contains("无主键表")
+                .contains("redis-max-len");
+    }
+
+    @Test
     void theSystemPromptExplainsArm64ForDeploymentQuestions() {
         assertThat(SupportAssistantService.SYSTEM_PROMPT)
                 .contains("exec format error")

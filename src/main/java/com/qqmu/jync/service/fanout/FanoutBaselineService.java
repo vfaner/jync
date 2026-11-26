@@ -84,8 +84,12 @@ public final class FanoutBaselineService {
             ensureTargetTables(target, keyed);
         }
         List<TableLoad> loads = new ArrayList<>();
+        // A run token makes baseline events unique across generations; otherwise a second
+        // baseline in the same consumer run reuses the first one's metrics-dedup keys and
+        // its row counts never reach the change log.
+        String baselineRun = java.util.UUID.randomUUID().toString();
         for (TableMeta table : keyed) {
-            long rows = publishTable(sourceCtx, sourceConn, table, transport);
+            long rows = publishTable(sourceCtx, sourceConn, table, transport, baselineRun);
             loads.add(new TableLoad(table.getName(), rows));
             log.info("Fan-out baseline: {} queued {} row(s) for {} target(s)",
                     table.getName(), rows, targets.size());
@@ -135,7 +139,7 @@ public final class FanoutBaselineService {
     }
 
     private long publishTable(SyncContext sourceCtx, Connection sourceConn, TableMeta table,
-                              EventTransport transport) throws Exception {
+                              EventTransport transport, String baselineRun) throws Exception {
         String sql = "SELECT * FROM " + sourceCtx.getSourceDialect()
                 .qualify(sourceCtx.getSourceSchema(), table.getName());
         long rows = 0;
@@ -166,13 +170,13 @@ public final class FanoutBaselineService {
                     rows++;
                     batchBytes += estimateBytes(row);
                     if (batch.size() >= ROW_BATCH || batchBytes >= ROW_BATCH_BYTES) {
-                        publishBatch(transport, sourceCtx, table, batch, batchIndex++);
+                        publishBatch(transport, sourceCtx, table, batch, batchIndex++, baselineRun);
                         batch = new ArrayList<>(ROW_BATCH);
                         batchBytes = 0L;
                     }
                 }
                 if (!batch.isEmpty()) {
-                    publishBatch(transport, sourceCtx, table, batch, batchIndex);
+                    publishBatch(transport, sourceCtx, table, batch, batchIndex, baselineRun);
                 }
             }
             session.commit();
@@ -237,8 +241,9 @@ public final class FanoutBaselineService {
     }
 
     private void publishBatch(EventTransport transport, SyncContext ctx, TableMeta table,
-                              List<Map<String, Object>> batch, long index) throws Exception {
-        String token = "baseline:" + table.getName() + ":" + index;
+                              List<Map<String, Object>> batch, long index, String baselineRun)
+            throws Exception {
+        String token = "baseline:" + baselineRun + ":" + table.getName() + ":" + index;
         for (Map<String, Object> row : batch) {
             transport.publish(ChangeEvent.row(token, token, ctx.getSourceSchema(),
                     table.getName(), ChangeEvent.ChangeOperation.UPSERT, row, null,

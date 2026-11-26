@@ -64,6 +64,6 @@ public class FanoutCdcConsumerFactory {
                             project, ctx, "fanout-" + project.getId(), lock::renew, stats);
                     runtime.startWorkers();
                     return runtime;
-                });
+                }, positionStore);
     }
 }

@@ -844,12 +844,19 @@ public class DataSyncService {
                 // parsed above, so the safety margin silently disappeared and rows stamped
                 // with the same day/time-of-day were never picked up again.
                 try {
-                    return java.time.LocalDate.parse(text)
-                            .minusDays(Math.max(1L, lagMs / 86_400_000L)).toString();
+                    // A DATE cursor cannot express "the previous day": rewinding it by one
+                    // day re-reads the whole previous day on every poll. Keep the value; the
+                    // next window is the day itself.
+                    java.time.LocalDate.parse(text);
+                    return watermark;
                 } catch (Exception notDate) {
                     try {
-                        return java.time.LocalTime.parse(text)
-                                .minusSeconds(Math.max(1L, lagMs / 1_000L)).toString();
+                        java.time.LocalTime original = java.time.LocalTime.parse(text);
+                        java.time.LocalTime rewound = original.minusSeconds(
+                                Math.max(1L, lagMs / 1_000L));
+                        // Midnight wrap (00:00:05 - 60s) would jump to 23:59:05 and then
+                        // advance past rows in the last minute of the day. Do not rewind.
+                        return rewound.compareTo(original) > 0 ? watermark : rewound.toString();
                     } catch (Exception notTime) {
                         // Not a temporal value at all; leave it alone rather than corrupt it.
                         return watermark;

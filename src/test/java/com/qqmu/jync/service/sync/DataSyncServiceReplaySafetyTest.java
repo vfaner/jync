@@ -399,8 +399,9 @@ class DataSyncServiceReplaySafetyTest {
         DataSyncService.TableSyncResult seed =
                 service.syncTable(source, target, table, dateCursor, progress, ctx);
         assertThat(seed.isSuccess()).as("DATE cursor seed failed: %s", seed.getError()).isTrue();
-        // DATE cursors now get a one-day safety margin instead of silently disabling it.
-        assertThat(seed.getNewCursorValue()).isEqualTo("2025-12-31");
+        // A DATE cursor cannot express a partial-day margin; rewinding it would re-read
+        // the whole previous day on every poll, so the watermark stays unchanged.
+        assertThat(seed.getNewCursorValue()).isEqualTo("2026-01-01");
 
         progress.setInitialLoadDone(true);
         progress.setLastSyncValue(seed.getNewCursorValue());

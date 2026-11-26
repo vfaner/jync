@@ -99,6 +99,32 @@ public class ProjectStatusTool implements SupportTool {
             out.put("syncData", config.isSyncData());
             out.put("syncStructure", config.isSyncStructure());
             out.put("syncDeletes", config.isSyncDeletes());
+            out.put("disableTargetConstraints", config.isDisableTargetConstraints());
+            List<Long> extras = config.getFanoutTargetDbIds() == null
+                    ? List.of() : config.getFanoutTargetDbIds();
+            out.put("fanoutTargetCount", extras.size() + 1);
+            out.put("fanoutTransport", config.getFanoutTransport() == null
+                    || config.getFanoutTransport().isBlank()
+                            ? properties.getFanout().getTransport().name()
+                            : config.getFanoutTransport());
+            List<Map<String, Object>> fanoutTargets = new ArrayList<>();
+            Map<String, Object> primary = connection(project.getTargetDbId());
+            if (primary != null) {
+                Map<String, Object> row = new LinkedHashMap<>(primary);
+                row.put("id", project.getTargetDbId());
+                row.put("primary", true);
+                fanoutTargets.add(row);
+            }
+            for (Long id : extras) {
+                Map<String, Object> target = connection(id);
+                if (target != null) {
+                    Map<String, Object> row = new LinkedHashMap<>(target);
+                    row.put("id", id);
+                    row.put("primary", false);
+                    fanoutTargets.add(row);
+                }
+            }
+            out.put("fanoutTargets", fanoutTargets);
             // A 700-table project can carry 700 overrides; the registry would cut the whole
             // JSON at 8 KB and lose the rest of the answer. Cap the sample and say so.
             Map<String, String> columns = config.getCursorColumns();

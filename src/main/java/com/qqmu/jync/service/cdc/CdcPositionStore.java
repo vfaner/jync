@@ -119,6 +119,34 @@ public class CdcPositionStore {
                 .orElseGet(java.util.Collections::emptyMap);
     }
 
+    /**
+     * One-transaction adoption of an externally seeded baseline: writes the supplied
+     * engine-specific position and marks it done in the same REQUIRES_NEW transaction, so
+     * a failure cannot leave the project with no anchor row at all.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public CdcPosition adoptExternalBaseline(Long projectId, String file, Long pos, String gtid,
+                                             Long serverId, String lsn, Long scn) {
+        discard(projectId);
+        CdcPosition position = repository.findByProjectId(projectId).orElseGet(() -> {
+            CdcPosition created = new CdcPosition();
+            created.setProjectId(projectId);
+            return created;
+        });
+        position.setBinlogFile(file);
+        position.setBinlogPos(pos);
+        position.setGtidSet(gtid);
+        position.setServerId(serverId);
+        position.setLsn(lsn);
+        position.setScn(scn);
+        // An external dump has no Jync-side layout history; the first streamed transaction
+        // records fresh signatures.
+        position.setSchemaSignatures(null);
+        position.setBaselineDone(true);
+        position.setUpdatedAt(Instant.now());
+        return repository.save(position);
+    }
+
     /** Upsert the start-of-baseline position; baselineDone resets to false. */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CdcPosition recordBaselineStart(Long projectId, String file, long pos,
