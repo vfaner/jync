@@ -98,6 +98,22 @@ class ChangeLogAggregationQueryTest {
         });
     }
 
+    @Test
+    void projectLevelRowsAreNotRankedAsTables() {
+        repository.save(change("orders", ChangeType.INSERT, BASE.plusSeconds(1)));
+        ChangeLog projectRow = ChangeLog.of(PROJECT, ObjectType.PROJECT, "proj-name",
+                ChangeType.ERROR, "consumer stopped");
+        projectRow.setOccurredAt(BASE.plusSeconds(2));
+        repository.save(projectRow);
+        repository.flush();
+
+        List<Object[]> rows = repository.topChangedObjects(PROJECT,
+                Timestamp.from(BASE.minusSeconds(60)), Timestamp.from(BASE.plusSeconds(300)),
+                PageRequest.of(0, 10));
+
+        assertThat(rows).extracting(row -> row[0]).containsExactly("orders");
+    }
+
     private ChangeLog change(String object, ChangeType type, Instant at) {
         ChangeLog log = ChangeLog.of(PROJECT, ObjectType.TABLE, object, type, null);
         log.setOccurredAt(at);

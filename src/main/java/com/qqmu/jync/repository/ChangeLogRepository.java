@@ -80,6 +80,7 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
     /** The hottest tables of one project in the window; the caller caps the page size. */
     @Query(value = "select object_name, count(*) from change_log "
             + "where project_id = :projectId and object_name is not null "
+            + "and object_type in ('TABLE', 'DATA') "
             + "and occurred_at >= :since and occurred_at <= :until "
             + "group by object_name order by count(*) desc",
             nativeQuery = true)

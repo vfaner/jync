@@ -774,7 +774,7 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
    的深底浅字，但必须 fixed：表格行在 .tbl-wrap(overflow-x:auto) 与
    .card(overflow:hidden) 里，绝对定位的气泡会被裁掉。 */
 .tip-body.tip-float { position: fixed; top: 0; left: 0; transform: none;
-  max-width: calc(100vw - 16px); z-index: 1080; }
+  max-width: calc(100vw - 16px); max-height: 60vh; overflow: hidden; z-index: 1450; }
 .tip-body.tip-float.is-on { opacity: 1; visibility: visible; }
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 16px; }
@@ -1362,6 +1362,9 @@ table.tbl td .btn-row > * { margin: 0 0 0 6px; }
 table.tbl td .btn-row > *:first-child { margin-left: 0; }
 table.tbl a.truncate { display: block; }
 .wrap-detail { max-width: 420px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
+/* 变更日志的详情可能是整段错误/堆栈：单元格只显示两行，完整内容在悬停提示里。 */
+.wrap-detail.detail-clamp { display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; cursor: help; }
 
 /* 变更日志的 DDL 待办行：折叠的语句与可点击的状态 tag 并排。tag 用 button 实现，
    才能既保留 badge 外观又可聚焦（键盘可达）。 */

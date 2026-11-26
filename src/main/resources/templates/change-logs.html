@@ -98,6 +98,7 @@
                         <td class="num small muted"
                             th:text="${log.durationMs != null and log.durationMs > 0} ? ${log.durationLabel} : '—'">—</td>
                         <td th:with="raw=${log.details},
+                                      detailText=${@changeLogDetailsLocalizer.localize(log.details)},
                                       skippedDdl=${log.details != null and log.details.startsWith('CDC_SKIPPED_DDL:')},
                                       statusKey=${log.resolutionStatus == 'PROCESSED' ? 'log.ddl.processed' : (log.ddlExecuted != null and log.ddlExecuted ? 'log.ddl.awaitingReplay' : 'log.ddl.pending')},
                                       statusCls=${log.resolutionStatus == 'PROCESSED' ? 'badge-ok' : (log.ddlExecuted != null and log.ddlExecuted ? 'badge-brand' : 'badge-warn')}" style="white-space:nowrap">
@@ -117,10 +118,11 @@
                                         th:attr="data-role=ddl-open,data-ddl-id=${log.id},data-ddl-sql=${log.targetDdlSql},data-ddl-src-db=${log.objectName},data-ddl-target-db=${targetDatabaseName},data-ddl-error=${log.errorDetail},data-ddl-executed=${log.ddlExecuted != null and log.ddlExecuted},data-ddl-replayed=${log.replayDone != null and log.replayDone},data-ddl-text-pending=#{log.ddl.pending},data-ddl-text-executed=#{log.ddl.awaitingReplay},data-ddl-text-processed=#{log.ddl.processed},data-ddl-confirm=#{log.ddl.retryConfirm},data-ddl-dismiss-confirm=#{log.ddl.dismissConfirm},data-ddl-needs-ddl=#{log.ddl.retryNeedsDdl},data-ddl-gap=${log.affectedTables}"
                                         th:text="#{${statusKey}}">pending</button>
                             </div>
-                            <div th:unless="${skippedDdl}" class="wrap-detail"
+                            <div th:unless="${skippedDdl}" class="wrap-detail detail-clamp"
                                  th:classappend="${!log.success} ? '' : 'muted'"
                                  th:style="${!log.success} ? 'color:var(--danger)' : ''"
-                                 th:text="${@changeLogDetailsLocalizer.localize(log.details) ?: ''}">details</div>
+                                 th:attr="data-tip=${detailText ?: null}"
+                                 th:text="${detailText ?: ''}">details</div>
                         </td>
                     </tr>
                     </tbody>
