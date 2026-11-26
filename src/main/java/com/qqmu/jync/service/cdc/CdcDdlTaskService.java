@@ -674,6 +674,118 @@ public class CdcDdlTaskService {
     }
 
     /**
+     * Applies only the safe CDC DDL subset automatically: ALTER TABLE ... ADD COLUMN with
+     * every added column nullable and free of key/identity/generated clauses. The project
+     * switch must be on, and fan-out projects stay manual in this version. Any failure leaves
+     * the existing PENDING task untouched for an administrator.
+     */
+    public void tryAutoAddColumn(Long logId, String sql) {
+        if (logId == null || sql == null || sql.isBlank()) {
+            return;
+        }
+        ChangeLog entry = repository.findById(logId).orElse(null);
+        if (entry == null
+                || !SyncStateWriter.SKIPPED_DDL_PREFIX.equals(
+                        entry.getDetails() == null ? null
+                                : entry.getDetails().substring(0,
+                                        Math.min(SyncStateWriter.SKIPPED_DDL_PREFIX.length(),
+                                                entry.getDetails().length())))
+                || !ChangeLog.RESOLUTION_PENDING.equals(entry.getResolutionStatus())
+                || Boolean.TRUE.equals(entry.getDdlExecuted())) {
+            return;
+        }
+        Project project = projectRepository.findById(entry.getProjectId()).orElse(null);
+        if (project == null) {
+            return;
+        }
+        SyncConfig config = contextFactory == null ? null : contextFactory.parseConfig(project);
+        if (config == null || !config.isCdcAutoAddColumns()
+                || (config.getFanoutTargetDbIds() != null
+                        && !config.getFanoutTargetDbIds().isEmpty())
+                || project.getTargetDbId() == null) {
+            return;
+        }
+        boolean backslash = backslashEscapes(project);
+        if (!isAutoAddNullableColumn(sql, backslash)) {
+            return;
+        }
+        DatabaseConfig target = databaseConfigRepository.findById(project.getTargetDbId())
+                .orElse(null);
+        if (target == null) {
+            return;
+        }
+        try (Connection connection = dataSourceManager.getConnection(target)) {
+            String identifierQuote = com.qqmu.jync.util.JdbcUtil.identifierQuote(connection);
+            String statement = targetize(sql, executionSchema(target, connection),
+                    identifierQuote);
+            statement = retargetTables(statement, config::targetTableName, identifierQuote);
+            new DdlExecutor(connection).executeIdempotentCreate(statement);
+            entry.setTargetDdlSql(statement);
+            entry.setDdlExecuted(true);
+            entry.setReplayDone(true);
+            entry.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
+            entry.setHandledBy("auto");
+            entry.setHandledAt(Instant.now());
+            entry.setErrorDetail(null);
+            repository.save(entry);
+            CdcRuntimeStats live = statsFor(entry.getProjectId());
+            if (live != null) {
+                live.invalidateTargetColumns();
+            }
+            invalidateFanoutBindings(entry.getProjectId());
+            log.info("Auto-applied CDC DDL for project {}: {}", entry.getProjectId(),
+                    statement);
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Auto-apply of CDC DDL for project {} failed; leaving the task"
+                    + " pending: {}", entry.getProjectId(), e.toString());
+        }
+    }
+
+    /**
+     * The deliberately narrow whitelist: only plain ADD COLUMN clauses, every added column
+     * nullable, with no key/identity/generated/reference clause. Anything else (MODIFY,
+     * CHANGE, DROP, RENAME, adding keys/constraints) needs human review.
+     */
+    static boolean isAutoAddNullableColumn(String sql, boolean backslashEscapes) {
+        List<String> clauses = alterClauses(sql, backslashEscapes);
+        if (clauses.isEmpty()) {
+            return false;
+        }
+        for (String clause : clauses) {
+            String head = clause.trim().toUpperCase(Locale.ROOT);
+            if (!head.startsWith("ADD ")) {
+                return false;
+            }
+            String rest = head.substring("ADD ".length()).trim();
+            if (rest.startsWith("COLUMN ")) {
+                rest = rest.substring("COLUMN ".length()).trim();
+            }
+            if (rest.isEmpty() || rest.startsWith("(")) {
+                // Parenthesised ADD lists can carry keys/constraints among the columns;
+                // leave them to the administrator rather than parse a second grammar.
+                return false;
+            }
+            for (String object : NON_DATA_ADDITIONS) {
+                if (rest.startsWith(object)) {
+                    return false;
+                }
+            }
+            if (containsWord(rest, "NOT") && containsWord(rest, "NULL")
+                    || containsWord(rest, "PRIMARY") || containsWord(rest, "UNIQUE")
+                    || containsWord(rest, "AUTO_INCREMENT") || containsWord(rest, "GENERATED")
+                    || containsWord(rest, "REFERENCES") || containsWord(rest, "CHECK")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean containsWord(String text, String word) {
+        return java.util.regex.Pattern.compile("\\b" + word + "\\b",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text).find();
+    }
+
+    /**
      * Executes an administrator-edited DDL against the owning project's target database.
      *
      * <p>Deliberately not {@code @Transactional}: the target DDL (implicitly committed by

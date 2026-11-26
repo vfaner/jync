@@ -407,7 +407,7 @@ executes once when a worker becomes free.
   position; more than 3 consecutive repairs stop the consumer.
 - A source DDL that leaves the target missing a column is trimmed in-stream and recorded as a todo;
   the task keeps running.
-- A skipped DDL is recorded as a todo (Change log → execute DDL on target). DROP TABLE / DROP VIEW
+- A skipped DDL is recorded as a todo (Change log → execute DDL on target); with "Auto-add nullable CDC columns" enabled, a single-target project automatically applies ALTER statements containing only ADD COLUMN where every new column is nullable and has no key/unique/identity/generated/reference clause. A failure returns to the todo. Fan-out stays manual. DROP TABLE / DROP VIEW
   is stored with `IF EXISTS`; Oracle/DM/YashanDB strip the clause and treat "object already gone"
   as done, so an already-dropped target table no longer leaves the todo red forever.
 
@@ -1029,7 +1029,7 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - **How to configure**: on the project form, pick several targets in the single target box — the first chip is the primary, the rest are extras. Changing the list requires the project to be stopped; adding a target clears the shared anchor so the next start re-runs the baseline for every target.
 - **How many**: 20 by default (1 primary + 19 extras). The system parameter `sync.fanout.max-targets` (2–100) raises it; an administrator can also have the AI assistant change it. The change applies to later saves; running projects are not stopped.
 - **Baseline**: the source is read once and rows are fanned out; keyless tables are skipped; each target creates its own tables.
-- **DDL**: never applied automatically (same as single-target; it opens a change-log task). When an administrator runs the statement from the change log, it is rewritten for each target (schema, quoting, table mapping) and executed on **every** target; a failing target is named on the task and the task stays retryable. "Replay missing rows" also replays into every target. Cross-engine syntax differences must be adjusted by hand.
+- **DDL**: not applied automatically by default (same as single-target; it opens a change-log task). A single-target project may enable "Auto-add nullable CDC columns"; fan-out still requires manual execution. When an administrator runs the statement from the change log, it is rewritten for each target (schema, quoting, table mapping) and executed on **every** target; a failing target is named on the task and the task stays retryable. "Replay missing rows" also replays into every target. Cross-engine syntax differences must be adjusted by hand.
 - **Auto-sync new tables**: with the switch on, tables created while running join per engine — MySQL binlog at start/reconnect; PG, LogMiner, SQL Server and YStream scan every minute. Oracle tables get ALL COLUMN LOGGING automatically (needs ALTER privilege); Dameng is covered by its system parameter; SQL Server creates a capture instance reusing the role of an existing one; YStream adds the table to the running service after enabling supplemental logging. An extra target creates and reloads the table on its first change.
 - **Target self-heal**: a missing **table** on an extra target is recreated from the source structure, reloaded and the buffered transaction replayed; a missing **column** is not repaired automatically — that worker stops, the backlog grows, and a replay happens after the column is aligned manually.
 - **Event transport**: task detail → sync options → event transport:

@@ -1294,4 +1294,26 @@ class CdcDdlTaskServiceTest {
                 .isEqualTo(CdcDdlTaskService.normalizeDdl(
                         "ALTER TABLE orders ADD COLUMN c INT"));
     }
+
+    @Test
+    void onlyNullableAddColumnStatementsAreAutoApplicable() {
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD COLUMN note VARCHAR(20) NULL", true)).isTrue();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD COLUMN a INT, ADD COLUMN b INT DEFAULT 0", true)).isTrue();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD COLUMN must INT NOT NULL", true)).isFalse();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD COLUMN id INT AUTO_INCREMENT PRIMARY KEY", true)).isFalse();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD COLUMN u INT UNIQUE", true)).isFalse();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD INDEX i (note)", true)).isFalse();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t MODIFY COLUMN note TEXT", true)).isFalse();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD COLUMN d INT, DROP COLUMN old", true)).isFalse();
+        assertThat(CdcDdlTaskService.isAutoAddNullableColumn(
+                "ALTER TABLE t ADD (a INT, b INT)", true)).isFalse();
+    }
 }

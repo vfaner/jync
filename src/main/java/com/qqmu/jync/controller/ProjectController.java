@@ -1261,6 +1261,7 @@ public class ProjectController {
                     config.setAutoSyncKnownTables(null);
                 }
                 config.setAutoSyncNewTables(autoSync);
+                config.setCdcAutoAddColumns(form.isCdcAutoAddColumns());
                 // A strategy switch away from binlog leaves no fan-out to run; stale extra
                 // targets would otherwise sit in the config and surprise a later switch back.
                 CaptureStrategy effectiveForFanout = strategyParam != null

@@ -3,6 +3,7 @@ package com.qqmu.jync.service.sync;
 import java.time.Instant;
 import java.util.Objects;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -32,6 +33,10 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @Slf4j
 public class SyncStateWriter {
+
+    /** Optional: lets the CDC DDL auto-executor run after this task's transaction commits. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ApplicationEventPublisher events;
 
     private final SyncProgressRepository progressRepository;
     private final ChangeLogRepository changeLogRepository;
@@ -334,7 +339,10 @@ public class SyncStateWriter {
         entry.setTargetDdlSql(statement);
         entry.setGapStartFile(ddlFile);
         entry.setGapStartPos(ddlPos);
-        changeLogRepository.save(entry);
+        ChangeLog saved = changeLogRepository.save(entry);
+        if (events != null && saved.getId() != null) {
+            events.publishEvent(new SkippedDdlEvent(projectId, saved.getId(), statement));
+        }
     }
 
     /**

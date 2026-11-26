@@ -154,6 +154,9 @@ public class SupportAssistantService {
                  project_table_status 显示 NOT_STARTED 属正常，不代表没有同步。
                - 产品用法、参数、前提、限制 → search_docs，只依据返回片段回答；片段没有
                  就说没查到，不要补充片段以外的细节
+               - CDC DDL：默认只登记待办，不自动改目标表；单目标项目可开启「CDC 自动补齐新增可空列」，
+                 只自动执行仅含 ADD COLUMN 且所有新列可空、无主键/唯一/自增/生成/引用约束的 ALTER；
+                 其余 DDL 和一源多目标仍需人工执行。缺列时行事件会裁剪该列，不会停摆。
                - 预检里的「列不参与漂移比对」不是不支持同步：LONGTEXT/LONGBLOB 等大字段会
                  正常全量/轮询/CDC 同步，只是不参与内容审计、全表比对和 upsert 的无变化判断。
                  按模式回答：CDC 每次变更都会写入，不要建议更新时间列；全表比对每轮重读写入；

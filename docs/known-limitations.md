@@ -127,7 +127,7 @@ CDC 回放依赖主键定位目标行。没有主键的表无法安全地应用 
 
 ### 4.3 DDL 不会自动同步
 
-- CDC 流里的 DDL 不会被 Jync 自动执行。MySQL binlog 与 Oracle / 达梦 LogMiner 会把语句登记为【变更日志】里的 **DDL 待办**（Webhook 也可收到「CDC DDL 被跳过」告警）；YStream 目前只跳过并记 WARN；PostgreSQL 的逻辑解码流本身不携带 DDL，SQL Server CDC 只捕获行变更。
+- CDC 流里的 DDL 默认不会被 Jync 自动执行；可在任务详情开启「CDC 自动补齐新增可空列」，只自动执行仅含 `ADD COLUMN`、所有新列可空且无主键/唯一/自增/生成/引用约束的 ALTER，失败会保留待办。一源多目标仍必须人工执行。MySQL binlog 与 Oracle / 达梦 LogMiner 会把语句登记为【变更日志】里的 **DDL 待办**（Webhook 也可收到「CDC DDL 被跳过」告警）；YStream 目前只跳过并记 WARN；PostgreSQL 的逻辑解码流本身不携带 DDL，SQL Server CDC 只捕获行变更。
 - DDL 流经时，**目标库尚缺的列会从行事件里裁剪掉，任务继续回放**，不会因为 `Unknown column` 整条停摆。被裁剪的列值不会同步，需在执行 DDL 后点【重试补齐】从源库重读受影响表（upsert 覆盖，不清空目标表，也不删除目标端多出的行）。
 - DDL 待办支持三种收尾：**在目标库执行**（只允许改 COMMENT 与方言细节；库名按目标库改写，表名映射照常生效）、**重试补齐**、**关闭待办**。只接受表与索引类语句（CREATE / ALTER / DROP / TRUNCATE TABLE、CREATE / DROP INDEX）；视图、过程、触发器等其他对象请手工对齐后关闭待办。
 - 缺口列恰好是**主键或唯一键**时无法裁剪，回放会连续失败，项目仍会停摆并提示人工处理；这是有意的——继续写只会写错行。

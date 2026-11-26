@@ -66,6 +66,22 @@
                 <span class="help" th:text="#{option.autoSyncNewTablesHelp}">help</span>
             </span>
         </label>
+        <label class="switch" th:if="${cdcActive}">
+            <input type="checkbox" name="cdcAutoAddColumns" value="true"
+                   th:checked="${config.cdcAutoAddColumns}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong>
+                    <span th:text="#{option.cdcAutoAddColumns}">Auto-add nullable columns</span>
+                    <span class="tip-icon" tabindex="0" role="img"
+                          th:attr="aria-label=#{option.cdcAutoAddColumnsTip},
+                                   data-tip=#{option.cdcAutoAddColumnsTip}">
+                        <svg class="ico" aria-hidden="true"><use href="#question-circle"/></svg>
+                    </span>
+                </strong>
+                <span class="help" th:text="#{option.cdcAutoAddColumnsHelp}">help</span>
+            </span>
+        </label>
         <th:block th:replace="~{project-detail/baseline-options :: group}"/>
     </div>
 </div>

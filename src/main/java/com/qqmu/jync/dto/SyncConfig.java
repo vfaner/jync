@@ -113,6 +113,13 @@ public class SyncConfig {
      * list, so existing unselected tables are not swept in).
      */
     private boolean autoSyncNewTables;
+    /**
+     * CDC only: execute a skipped {@code ALTER TABLE ... ADD COLUMN} automatically when
+     * every added column is nullable and has no identity/key/generated clause. Off by
+     * default; all other DDL (type changes, drops, renames, constraints) stays a manual
+     * change-log task. Fan-out projects keep manual execution in this version.
+     */
+    private boolean cdcAutoAddColumns;
     /** Source tables known when auto-sync was enabled, plus every table it auto-added. */
     private List<String> autoSyncKnownTables;
     /** Tables the operator removed from auto-sync; they are never added again. */
