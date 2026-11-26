@@ -2441,6 +2441,12 @@ public class DataSyncService {
         for (String column : nonKey) {
             keyBuilder.append(column.toUpperCase(java.util.Locale.ROOT)).append(',');
         }
+        // The target connection is part of the identity: switching a project to another
+        // target with the same schema/table names must not reuse the old target's verdict.
+        keyBuilder.append("|target=")
+                .append(ctx.getTargetConfig() == null || ctx.getTargetConfig().getId() == null
+                        ? "-" : ctx.getTargetConfig().getId())
+                .append(':').append(ctx.effectiveTargetType());
         String key = keyBuilder.toString();
         long now = System.currentTimeMillis();
         CachedGuardVerdict cached = guardVerdicts.get(key);

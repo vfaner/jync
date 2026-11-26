@@ -56,7 +56,11 @@ public final class FanoutRuntime implements AutoCloseable {
     /** Next allowed restart per target; dead workers back off instead of being abandoned. */
     private final Map<Long, Long> nextRestartAt = new ConcurrentHashMap<>();
     private static final long MAX_RESTART_DELAY_MS = TimeUnit.MINUTES.toMillis(5);
-    private volatile String baselineMarker;
+    /** Marker + loads as one immutable value, so an ack cannot pair one with the other. */
+    private record BaselineBarrier(String marker, List<FanoutBaselineService.TableLoad> loads) {
+    }
+
+    private volatile BaselineBarrier barrier;
     /** Set by close(): a supervisor tick that is already running must not start workers. */
     private volatile boolean closed;
     private ScheduledExecutorService supervisor;
@@ -236,7 +240,7 @@ public final class FanoutRuntime implements AutoCloseable {
         // the anchor with a target that never consumed the rows.
         String marker = "baseline-done:" + UUID.randomUUID();
         barrierAcked.clear();
-        baselineMarker = marker;
+        barrier = new BaselineBarrier(marker, loads);
         transport.publish(ChangeEvent.commit(marker, marker, System.currentTimeMillis()));
         java.util.Set<Long> wanted = new java.util.LinkedHashSet<>();
         for (FanoutBaselineService.Target target : targets) {
@@ -262,19 +266,9 @@ public final class FanoutRuntime implements AutoCloseable {
                     + " retain the rows, and the target status shows the lag",
                     sourceCtx.projectId(), missing);
         }
-        for (FanoutBaselineService.TableLoad load : loads) {
-            for (FanoutBaselineService.Target target : targets) {
-                if (!barrierAcked.contains(target.targetDbId())) {
-                    continue;
-                }
-                com.qqmu.jync.model.FanoutProgress progress = progressStore.loadOrCreate(
-                        sourceCtx.projectId(), target.targetDbId(), load.table());
-                progress.setInitialLoadDone(true);
-                progress.setRowsSyncedTotal(load.rows());
-                progress.setLastSyncTime(java.time.Instant.now());
-                progressStore.save(progress);
-            }
-        }
+        // Progress was written by onTargetCommit as each marker was acknowledged; a target
+        // that missed the barrier keeps NOT_STARTED until it catches up and acks, instead of
+        // being marked complete by a baseline it never consumed.
         return loads;
     }
 
@@ -342,11 +336,26 @@ public final class FanoutRuntime implements AutoCloseable {
             // target's repair budget until CAP_REACHED never fires.
             targetRepair.resetAttempts(sourceCtx.projectId(), targetDbId);
         }
-        if (position != null && position.equals(baselineMarker)) {
+        BaselineBarrier current = barrier;
+        if (current != null && position != null && position.equals(current.marker())) {
             barrierAcked.add(targetDbId);
+            markBaselineProgress(targetDbId, current.loads());
             return;
         }
         rememberTargetPosition(targetDbId, position);
+    }
+
+    /** Called exactly when a target acknowledges the current baseline marker. */
+    private synchronized void markBaselineProgress(
+            Long targetDbId, List<FanoutBaselineService.TableLoad> loads) {
+        for (FanoutBaselineService.TableLoad load : loads) {
+            com.qqmu.jync.model.FanoutProgress progress = progressStore.loadOrCreate(
+                    sourceCtx.projectId(), targetDbId, load.table());
+            progress.setInitialLoadDone(true);
+            progress.setRowsSyncedTotal(load.rows());
+            progress.setLastSyncTime(java.time.Instant.now());
+            progressStore.save(progress);
+        }
     }
 
     private void rememberTargetPosition(Long targetDbId, String position) {
