@@ -602,7 +602,7 @@ class CdcOperationsServiceTest {
         when(rs.getString(1)).thenReturn("mysql-bin.000123");
         when(rs.getLong(2)).thenReturn(4096L);
 
-        service.adoptExternalBaseline(1L, " mysql-bin.000123 ", 2048L, null);
+        service.adoptExternalBaseline(1L, " mysql-bin.000123 ", 2048L, null, null, null);
 
         verify(cdcManager).ensureStopped(1L);
         verify(positionStore).delete(1L);
@@ -628,10 +628,44 @@ class CdcOperationsServiceTest {
         when(rs.next()).thenReturn(false);
 
         assertThatThrownBy(() -> service.adoptExternalBaseline(
-                1L, "mysql-bin.000999", 100L, null))
+                1L, "mysql-bin.000999", 100L, null, null, null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("error.cdc.external.fileMissing");
         verify(positionStore, never()).recordBaselineStart(anyLong(), anyString(), anyLong(),
                 anyString(), anyLong());
+    }
+
+    @Test
+    void adoptionAcceptsAPostgresLsn() {
+        Project project = project();
+        project.setSyncConfig("{\"captureStrategy\":\"PG_LOGICAL_CDC\"}");
+        source(DatabaseType.POSTGRESQL);
+        when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
+
+        service.adoptExternalBaseline(1L, null, null, null, " 0/16B6C50 ", null);
+
+        verify(positionStore).recordBaselineStartLsn(1L, "0/16B6C50");
+        verify(positionStore).markBaselineDone(1L);
+    }
+
+    @Test
+    void adoptionCanonicalisesASqlServerLsn() throws SQLException {
+        Project project = project();
+        project.setSyncConfig("{\"captureStrategy\":\"SQLSERVER_CDC\"}");
+        source(DatabaseType.SQLSERVER);
+        when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
+        Connection conn = org.mockito.Mockito.mock(Connection.class);
+        java.sql.Statement st = org.mockito.Mockito.mock(java.sql.Statement.class);
+        java.sql.ResultSet rs = org.mockito.Mockito.mock(java.sql.ResultSet.class);
+        when(dataSourceManager.getConnection(any())).thenReturn(conn);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(org.mockito.ArgumentMatchers.contains("cdc.change_tables")))
+                .thenReturn(rs);
+        when(rs.next()).thenReturn(true, false);
+        when(rs.getString(1)).thenReturn("ORDERS");
+
+        service.adoptExternalBaseline(1L, null, null, null, "0000002A43D7E1A50030", null);
+
+        verify(positionStore).recordBaselineStartLsn(1L, "0x0000002a43d7e1a50030");
     }
 }

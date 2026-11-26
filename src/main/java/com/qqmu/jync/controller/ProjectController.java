@@ -489,6 +489,8 @@ public class ProjectController {
             @RequestParam(name = "binlogFile", required = false) String binlogFile,
             @RequestParam(name = "binlogPos", required = false) Long binlogPos,
             @RequestParam(name = "gtidSet", required = false) String gtidSet,
+            @RequestParam(name = "lsn", required = false) String lsn,
+            @RequestParam(name = "scn", required = false) Long scn,
             @RequestParam(name = "confirmed", required = false) String confirmed,
             RedirectAttributes flash) {
         if (!AccessGuard.current().isAdmin()) {
@@ -500,7 +502,8 @@ public class ProjectController {
             return "redirect:/projects/" + id;
         }
         try {
-            cdcOperationsService.adoptExternalBaseline(id, binlogFile, binlogPos, gtidSet);
+            cdcOperationsService.adoptExternalBaseline(id, binlogFile, binlogPos, gtidSet,
+                    lsn, scn);
             flash.addFlashAttribute("message", "msg.cdc.external.adopted");
         } catch (IllegalArgumentException | IllegalStateException e) {
             flash.addFlashAttribute("error", e.getMessage());
@@ -732,13 +735,13 @@ public class ProjectController {
         // External baseline adoption is a strict admin-only, MySQL-binlog, single-target,
         // stopped-project operation; keep the entry point off every other page state.
         boolean externalBaselineEligible = cdcActive
-                && current == CaptureStrategy.BINLOG_CDC
                 && !isRedisTarget
                 && !Boolean.TRUE.equals(project.getEnabled())
                 && AccessGuard.current().isAdmin()
                 && (config == null || config.getFanoutTargetDbIds() == null
                         || config.getFanoutTargetDbIds().isEmpty());
         model.addAttribute("externalBaselineEligible", externalBaselineEligible);
+        model.addAttribute("externalBaselineMode", current.name());
         // Cursor priority is meaningful only for an incremental polling cycle. Full compare
         // re-reads every row and never consults a cursor column, so hiding the editor avoids
         // a setting that would silently do nothing.

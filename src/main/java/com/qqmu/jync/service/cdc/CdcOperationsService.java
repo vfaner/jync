@@ -242,22 +242,25 @@ public class CdcOperationsService {
     }
 
     /**
-     * Adopts a target populated by an external consistent dump: records the dump's binlog
-     * file/position as an already-completed baseline, so starting the project streams from
-     * there instead of running another full load.
+     * Adopts a target populated by an external consistent dump: records the dump's source
+     * position as an already-completed baseline, so starting the project streams from there
+     * instead of running another full load.
      *
-     * <p>Only MySQL binlog, a database target and a single-target project are supported in
-     * this first version. The operator owns the dump's consistency; this method only proves
-     * the source still lists the named binlog file and that the position is inside it. It
-     * never copies rows. The project must be stopped so no live consumer changes the
-     * position underneath the adoption.
+     * <p>Supported first version: MySQL binlog (file/position/GTID), PostgreSQL logical
+     * (pg_lsn), SQL Server CDC (canonical 0x LSN), Oracle/Dameng LogMiner (SCN) and Yashan
+     * YStream (readable RESTART_POSITION, only when the project's existing YStream service
+     * already reports that position). A database target, a single-target project and a
+     * stopped project are required. The operator owns the dump's consistency; Jync only
+     * proves the source still covers the supplied position where it can and never copies
+     * rows.
      */
     public void adoptExternalBaseline(Long projectId, String binlogFile, Long binlogPos,
-                                      String gtidSet) {
+                                      String gtidSet, String lsn, Long scn) {
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-        if (CaptureStrategyParser.parse(project.getSyncConfig()) != CaptureStrategy.BINLOG_CDC) {
-            throw new IllegalArgumentException("error.cdc.external.notBinlog");
+        CaptureStrategy strategy = CaptureStrategyParser.parse(project.getSyncConfig());
+        if (!strategy.isLogCdc()) {
+            throw new IllegalArgumentException("error.cdc.external.notCdc");
         }
         if (project.getTargetKindOrDefault() != com.qqmu.jync.model.SyncTargetKind.JDBC) {
             throw new IllegalArgumentException("error.cdc.external.jdbcOnly");
@@ -272,34 +275,177 @@ public class CdcOperationsService {
                 || lockService.isLeaseHeldByLiveOwner(projectId)) {
             throw new IllegalArgumentException("error.cdc.external.stopFirst");
         }
-        String file = binlogFile == null ? "" : binlogFile.trim();
-        if (file.isEmpty() || binlogPos == null) {
-            throw new IllegalArgumentException("error.cdc.external.positionRequired");
-        }
         DatabaseConfig source = project.getSourceDbId() == null ? null
                 : databaseConfigRepository.findById(project.getSourceDbId()).orElse(null);
         if (source == null) {
-            throw new IllegalArgumentException("error.cdc.external.notBinlog");
+            throw new IllegalArgumentException("error.cdc.external.notCdc");
         }
-        long fileSize = binlogFileSize(source, file);
-        if (binlogPos < 4L || binlogPos > fileSize) {
-            throw new IllegalArgumentException("error.cdc.external.positionInvalid");
-        }
-        String gtid = gtidSet == null || gtidSet.isBlank() ? null : gtidSet.trim();
         cdcManager.ensureStopped(projectId);
-        positionStore.delete(projectId);
-        positionStore.recordBaselineStart(projectId, file, binlogPos, gtid,
-                clientFactory.serverIdFor(projectId));
+        // Validate everything before deleting the existing position: a typo must not
+        // destroy the anchor of a project the operator can still resume.
+        switch (strategy) {
+            case BINLOG_CDC -> {
+                String file = binlogFile == null ? "" : binlogFile.trim();
+                if (file.isEmpty() || binlogPos == null) {
+                    throw new IllegalArgumentException("error.cdc.external.positionRequired");
+                }
+                long fileSize = binlogFileSize(source, file);
+                if (binlogPos < 4L || binlogPos > fileSize) {
+                    throw new IllegalArgumentException("error.cdc.external.positionInvalid");
+                }
+                positionStore.delete(projectId);
+                positionStore.recordBaselineStart(projectId, file, binlogPos,
+                        blankToNull(gtidSet), clientFactory.serverIdFor(projectId));
+            }
+            case PG_LOGICAL_CDC -> {
+                String value = normalizedLsn(strategy, lsn);
+                positionStore.delete(projectId);
+                positionStore.recordBaselineStartLsn(projectId, value);
+            }
+            case SQLSERVER_CDC -> {
+                String value = normalizedLsn(strategy, lsn);
+                assertSqlServerCapture(source, config);
+                positionStore.delete(projectId);
+                positionStore.recordBaselineStartLsn(projectId, value);
+            }
+            case LOGMINER_CDC -> {
+                if (scn == null || scn <= 0L) {
+                    throw new IllegalArgumentException("error.cdc.external.positionRequired");
+                }
+                assertScnStillMineable(source, scn);
+                positionStore.delete(projectId);
+                positionStore.recordBaselineStartScn(projectId, scn);
+            }
+            case YSTREAM_CDC -> {
+                String packed = yStreamPosition(projectId, source, lsn);
+                positionStore.delete(projectId);
+                positionStore.recordBaselineStartLsn(projectId, packed);
+            }
+            default -> throw new IllegalArgumentException("error.cdc.external.notCdc");
+        }
         positionStore.markBaselineDone(projectId);
         taskStore.markStoppedClearingResult(projectId); // lift an old ERROR hat
+        String adopted = switch (strategy) {
+            case BINLOG_CDC -> binlogFile.trim() + ":" + binlogPos;
+            case LOGMINER_CDC -> "SCN " + scn;
+            default -> strategy.name() + " " + (lsn == null ? "" : lsn.trim());
+        };
         changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
                 project.getName(), ChangeType.INFO,
-                "external baseline adopted at " + file + ":" + binlogPos));
+                "external baseline adopted at " + adopted));
         auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
                 AuditDetail.of("audit.detail.cdcRebaseline", String.valueOf(projectId),
-                        "@adoptExternalBaseline:" + file + ":" + binlogPos));
-        log.info("Project {} adopted an external baseline at {}:{} (gtid={})",
-                projectId, file, binlogPos, gtid == null ? "none" : "provided");
+                        "@adoptExternalBaseline:" + adopted));
+        log.info("Project {} adopted an external baseline at {} (strategy {})",
+                projectId, adopted, strategy);
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static String normalizedLsn(CaptureStrategy strategy, String raw) {
+        String value = blankToNull(raw);
+        if (value == null) {
+            throw new IllegalArgumentException("error.cdc.external.positionRequired");
+        }
+        if (strategy == CaptureStrategy.SQLSERVER_CDC) {
+            String canonical = SqlServerCdcConsumer.canonicalLsn(value);
+            if (canonical == null || !canonical.startsWith("0x") || canonical.length() != 22) {
+                throw new IllegalArgumentException("error.cdc.external.positionInvalid");
+            }
+            return canonical;
+        }
+        if (!value.matches("[0-9A-Fa-f]+/[0-9A-Fa-f]+")) {
+            throw new IllegalArgumentException("error.cdc.external.positionInvalid");
+        }
+        return value;
+    }
+
+    /**
+     * SQL Server: with a recorded LSN and no capture instance, the consumer has nothing to
+     * poll and would look healthy forever. Require the selected tables to have a capture
+     * instance before adopting a position.
+     */
+    private void assertSqlServerCapture(DatabaseConfig source, SyncConfig config) {
+        java.util.Set<String> selected = new java.util.HashSet<>();
+        if (config != null && config.getTables() != null) {
+            for (String table : config.getTables()) {
+                if (table != null && !table.isBlank()) {
+                    selected.add(table.trim().toUpperCase(java.util.Locale.ROOT));
+                }
+            }
+        }
+        try (Connection conn = dataSourceManager.getConnection(source);
+             java.sql.Statement st = conn.createStatement();
+             java.sql.ResultSet rs = st.executeQuery(
+                     "SELECT OBJECT_NAME(source_object_id) FROM cdc.change_tables")) {
+            java.util.Set<String> captured = new java.util.HashSet<>();
+            while (rs.next()) {
+                String name = rs.getString(1);
+                if (name != null) {
+                    captured.add(name.toUpperCase(java.util.Locale.ROOT));
+                }
+            }
+            if (captured.isEmpty()
+                    || (!selected.isEmpty() && !captured.containsAll(selected))) {
+                throw new IllegalArgumentException("error.cdc.external.sqlserverCapture");
+            }
+        } catch (SQLException e) {
+            log.warn("Could not read SQL Server CDC capture tables for the external baseline:"
+                    + " {}", e.getMessage());
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
+        }
+    }
+
+    /** LogMiner: reject a SCN the source's retained redo can no longer mine. */
+    private void assertScnStillMineable(DatabaseConfig source, long scn) {
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            Long floor = MiningDialects.detect(conn).oldestMineableScn(conn);
+            if (floor != null && floor > scn) {
+                throw new IllegalArgumentException("error.cdc.external.scnPurged");
+            }
+        } catch (SQLException e) {
+            log.warn("Could not read the oldest mineable SCN for the external baseline: {}",
+                    e.getMessage());
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
+        }
+    }
+
+    /**
+     * YStream: the client position is packed by {@link YStreamPositionCodec}, and the
+     * lifecycle only adopts a stored position when exactly one service exists. Accept the
+     * readable RESTART_POSITION only when that service already reports it; otherwise a new
+     * service would start at "now" and silently skip the gap.
+     */
+    private String yStreamPosition(Long projectId, DatabaseConfig source, String raw) {
+        String text = blankToNull(raw);
+        if (text == null) {
+            throw new IllegalArgumentException("error.cdc.external.positionRequired");
+        }
+        YStreamPositionCodec.YStreamPosition wanted;
+        try {
+            wanted = YStreamPositionCodec.parseText(text);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("error.cdc.external.positionInvalid");
+        }
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            java.util.List<YStreamServiceAdmin.Service> services =
+                    new JdbcYStreamServiceOps(conn).services(projectId);
+            if (services.size() != 1) {
+                throw new IllegalArgumentException("error.cdc.external.ystreamService");
+            }
+            YStreamPositionCodec.YStreamPosition existing =
+                    YStreamPositionCodec.parseText(services.get(0).restartPosition());
+            if (!existing.equals(wanted)) {
+                throw new IllegalArgumentException("error.cdc.external.ystreamPosition");
+            }
+            return YStreamPositionCodec.encode(wanted);
+        } catch (SQLException e) {
+            log.warn("Could not read YStream services for the external baseline: {}",
+                    e.getMessage());
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
+        }
     }
 
     /** Reads the size of one binlog file; a missing file or unreadable list fails closed. */

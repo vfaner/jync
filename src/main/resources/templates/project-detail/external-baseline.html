@@ -19,25 +19,50 @@
         </div>
         <form method="post" th:action="@{/projects/{id}/cdc/adopt-baseline(id=${project.id})}">
             <div class="preview-body" style="text-align:left;border:none;">
-                <div class="field">
-                    <label for="external-binlog-file">
-                        <span th:text="#{cdc.external.file}">Binlog file</span><span class="req">*</span>
+                <th:block th:if="${externalBaselineMode == 'BINLOG_CDC'}">
+                    <div class="field">
+                        <label for="external-binlog-file">
+                            <span th:text="#{cdc.external.file}">Binlog file</span><span class="req">*</span>
+                        </label>
+                        <input type="text" class="input mono" id="external-binlog-file"
+                               name="binlogFile" required maxlength="512"
+                               placeholder="mysql-bin.000123">
+                    </div>
+                    <div class="field">
+                        <label for="external-binlog-pos">
+                            <span th:text="#{cdc.external.position}">Position</span><span class="req">*</span>
+                        </label>
+                        <input type="number" class="input mono" id="external-binlog-pos"
+                               name="binlogPos" required min="4">
+                    </div>
+                    <div class="field">
+                        <label for="external-gtid" th:text="#{cdc.external.gtid}">GTID set</label>
+                        <textarea class="textarea mono" id="external-gtid" name="gtidSet"
+                                  rows="2" placeholder="3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100"></textarea>
+                    </div>
+                </th:block>
+                <div class="field" th:if="${externalBaselineMode == 'PG_LOGICAL_CDC'
+                                           or externalBaselineMode == 'SQLSERVER_CDC'
+                                           or externalBaselineMode == 'YSTREAM_CDC'}">
+                    <label for="external-lsn">
+                        <span th:text="${externalBaselineMode == 'YSTREAM_CDC'}
+                                       ? #{cdc.external.ystreamPosition} : #{cdc.external.lsn}">LSN</span>
+                        <span class="req">*</span>
                     </label>
-                    <input type="text" class="input mono" id="external-binlog-file"
-                           name="binlogFile" required maxlength="512"
-                           placeholder="mysql-bin.000123">
+                    <input type="text" class="input mono" id="external-lsn" name="lsn"
+                           required maxlength="64"
+                           th:placeholder="${externalBaselineMode == 'PG_LOGICAL_CDC'}
+                                           ? '0/16B6C50' : (${externalBaselineMode == 'SQLSERVER_CDC'}
+                                               ? '0x0000002a43d7e1a50030' : 'SCN-INST-LSN-OFFSET-BATCH')">
+                    <div class="help" th:if="${externalBaselineMode == 'YSTREAM_CDC'}"
+                         th:text="#{cdc.external.ystreamHint}">YStream hint</div>
                 </div>
-                <div class="field">
-                    <label for="external-binlog-pos">
-                        <span th:text="#{cdc.external.position}">Position</span><span class="req">*</span>
+                <div class="field" th:if="${externalBaselineMode == 'LOGMINER_CDC'}">
+                    <label for="external-scn">
+                        <span th:text="#{cdc.external.scn}">SCN</span><span class="req">*</span>
                     </label>
-                    <input type="number" class="input mono" id="external-binlog-pos"
-                           name="binlogPos" required min="4">
-                </div>
-                <div class="field">
-                    <label for="external-gtid" th:text="#{cdc.external.gtid}">GTID set</label>
-                    <textarea class="textarea mono" id="external-gtid" name="gtidSet"
-                              rows="2" placeholder="3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100"></textarea>
+                    <input type="number" class="input mono" id="external-scn" name="scn"
+                           required min="1">
                 </div>
                 <label class="check-inline">
                     <input type="checkbox" name="confirmed" required>
