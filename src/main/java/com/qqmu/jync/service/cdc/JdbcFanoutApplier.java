@@ -28,6 +28,7 @@ public final class JdbcFanoutApplier implements EventApplier {
     private final SyncContext targetCtx;
     private final CdcBindingResolver bindings;
     private final CdcEventApplier applier;
+    private final CdcRuntimeStats stats;
 
     public JdbcFanoutApplier(SyncContext targetCtx, CdcRuntimeStats stats,
                              CdcBindingResolver bindings) {
@@ -38,9 +39,12 @@ public final class JdbcFanoutApplier implements EventApplier {
                              CdcBindingResolver bindings, int queryTimeoutSeconds) {
         this.targetCtx = targetCtx;
         this.bindings = bindings;
+        this.stats = stats;
         // Same knob as the single-target path: a locked target row must fail the transaction
-        // instead of parking this target's worker (and its backlog) indefinitely.
-        this.applier = new CdcEventApplier(targetCtx, stats, queryTimeoutSeconds);
+        // instead of parking this target's worker (and its backlog) indefinitely. Table
+        // counters are claimed once after commit: every target applies the same transaction.
+        this.applier = new CdcEventApplier(targetCtx, stats, queryTimeoutSeconds,
+                new CdcWritePlanCache(targetCtx), false);
     }
 
     @Override
@@ -85,6 +89,7 @@ public final class JdbcFanoutApplier implements EventApplier {
                 applier.applyDeletes(conn, e.getKey(), e.getValue());
             }
             conn.commit();
+            countOnce(transactionId == null ? commitPosition : transactionId, upserts, deletes);
         } catch (SQLException | RuntimeException e) {
             rollback(conn);
             throw e;
@@ -104,6 +109,24 @@ public final class JdbcFanoutApplier implements EventApplier {
         // a target worker must not execute arbitrary source DDL on its own.
         log.debug("Fan-out target received DDL for {}.{}: {}", event.schema(), event.table(),
                 event.ddlSql());
+    }
+
+    private void countOnce(String transactionId,
+                           Map<CdcTableBinding, List<Map<String, Object>>> upserts,
+                           Map<CdcTableBinding, List<Map<String, Object>>> deletes) {
+        if (stats == null) {
+            return;
+        }
+        for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : upserts.entrySet()) {
+            if (stats.claimFanoutTableMetric(transactionId, e.getKey().getTable(), true)) {
+                stats.addTableUpserts(e.getKey().getTable(), e.getValue().size());
+            }
+        }
+        for (Map.Entry<CdcTableBinding, List<Map<String, Object>>> e : deletes.entrySet()) {
+            if (stats.claimFanoutTableMetric(transactionId, e.getKey().getTable(), false)) {
+                stats.addTableDeletes(e.getKey().getTable(), e.getValue().size());
+            }
+        }
     }
 
     private static void rollback(Connection conn) {

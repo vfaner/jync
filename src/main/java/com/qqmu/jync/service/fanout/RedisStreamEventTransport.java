@@ -53,13 +53,19 @@ public final class RedisStreamEventTransport implements EventTransport {
 
     private final RedisClient client;
     private final String streamKey;
+    private final long maxLen;
     private final StatefulRedisConnection<String, byte[]> publisher;
     private final Object publishLock = new Object();
     private final List<Sub> subscriptions = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
     public RedisStreamEventTransport(RedisURI uri, String streamKey) {
+        this(uri, streamKey, 0L);
+    }
+
+    public RedisStreamEventTransport(RedisURI uri, String streamKey, long maxLen) {
         this.client = RedisClient.create(uri);
+        this.maxLen = maxLen;
         // A blocking XREADGROUP parks the command for the poll timeout; the command timeout
         // has to sit above it or an idle stream would be cancelled as a failure.
         this.client.setOptions(ClientOptions.builder()
@@ -87,6 +93,11 @@ public final class RedisStreamEventTransport implements EventTransport {
         byte[] bytes = EventCodec.serialize(event);
         synchronized (publishLock) {
             publisher.sync().xadd(streamKey, Map.of("e", bytes));
+            if (maxLen > 0L) {
+                // Approximate trimming is deliberate: exact MAXLEN is O(stream) and Redis
+                // recommends ~. 0 means the operator chose never to trim.
+                publisher.sync().xtrim(streamKey, true, maxLen);
+            }
         }
     }
 

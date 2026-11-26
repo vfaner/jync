@@ -96,7 +96,7 @@ public class FanoutRuntimeFactory {
                         : cryptoUtil.decrypt(target.getPasswordEnc());
                 transport = new RedisStreamEventTransport(
                         com.qqmu.jync.service.projection.redis.RedisUris.from(target, password),
-                        streamKey);
+                        streamKey, properties.getFanout().getRedisMaxLen());
             } else if (targetId != null) {
                 // A selected target that no longer resolves must NOT fall back to the
                 // server-wide URI: the events would move to an unrelated Redis (or the
@@ -114,7 +114,7 @@ public class FanoutRuntimeFactory {
                             + project.getId() + " has no Redis target selected");
                 }
                 transport = new RedisStreamEventTransport(io.lettuce.core.RedisURI.create(uri),
-                        streamKey);
+                        streamKey, properties.getFanout().getRedisMaxLen());
             }
         } else {
             Path spool = Path.of("data", "fanout", String.valueOf(project.getId()));

@@ -228,6 +228,7 @@ Cron：同步任务用 Quartz 语法，6 段或 7 段（含年份）；ETL 与�
 - 参数：sync.content-audit-interval-ms（900000）、sample-size（50）、max-rows（2000000）、
   max-tables-per-cycle（1）、timeout-seconds（60）。
 - LOB、JSON、XML 等不可比列默认排除。
+- openGauss / HANA / Oscar 等无法判断“行是否真的变化”的目标，回放窗口会按目标返回的 affected rows 累计，变更行数可能偏大；需要精确变更数的场景请用 CDC。
 
 ## 大字段与漂移比对（LONGTEXT / LONGBLOB）
 
@@ -786,7 +787,7 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 - **目标自愈**：额外目标缺**表**时自动按源端结构重建、重灌并重放暂存的变更；缺**列**等其它结构漂移不会自动补齐，该目标 worker 会停止、积压增长，人工补齐后自动重放。
 - **事件中转**：任务详情「同步选项 → 事件中转」二选一：
   - 本地队列（默认）：写在 `data/fanout/<任务 id>/<目标 id>.log`，单目标上限 2GB，零外部依赖；
-  - Redis Stream：直接选一个已配置的**单机** Redis 目标（复用缓存投影的连接与加密口令）。每个项目一条 `jync:fanout:<任务 id>:events`、每个目标一个消费组，按事务 ACK，worker 重启先重读 pending。集群 Redis 目标不支持；默认不裁剪，用 `XINFO STREAM` 监控。
+  - Redis Stream：直接选一个已配置的**单机** Redis 目标（复用缓存投影的连接与加密口令）。每个项目一条 `jync:fanout:<任务 id>:events`、每个目标一个消费组，按事务 ACK，worker 重启先重读 pending。集群 Redis 目标不支持；默认不裁剪，用 `XINFO STREAM` 监控。可选 `sync.fanout.redis-max-len`（0=关闭）设近似 MAXLEN，开启后慢目标可能丢未消费事件，必须按最慢目标的积压设置。
   - 多实例 / 跨节点部署必须用 Redis（或让所有节点共享 data 目录），否则节点切换后本地 spool 里未确认的事件新节点读不到。
 - **性能口径**：源端只有一条日志流、一次基线读、一次目录扫描、每表一次元数据读取，与目标数量无关；目标写入按目标并行。成本在 Jync 与目标侧：每个目标一条 worker、一个连接池位、一份中转；20 目标请确认目标库 `max_connections`，并注意 spool 磁盘上限（每目标 2GB）。
 - **位点展示**：项目详情「各目标位点 / 落盘积压」显示每目标的文件:偏移 / LSN / SCN、已应用事务数、worker 最近错误和积压字节。位点是展示与排查用的，按目标每秒最多写一次；恢复以中转的确认位点为准。积压只增且 worker 报错，说明该目标写不进去，先看错误里的表名/列名。

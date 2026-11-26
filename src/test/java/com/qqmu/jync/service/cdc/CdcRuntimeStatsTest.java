@@ -222,4 +222,16 @@ class CdcRuntimeStatsTest {
         CdcPositionMark binlogMark = new CdcPositionMark("mysql-bin.1", 100L, null);
         assertThat(binlogMark.getScn()).isNull();
     }
+
+    @Test
+    void aFanoutTransactionCountsItsTableMetricsOnlyOnce() {
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        assertThat(stats.claimFanoutTableMetric("tx-1", "orders", true)).isTrue();
+        // The second and third targets apply the same transaction; they must not count it.
+        assertThat(stats.claimFanoutTableMetric("tx-1", "orders", true)).isFalse();
+        // Upserts and deletes are separate counters.
+        assertThat(stats.claimFanoutTableMetric("tx-1", "orders", false)).isTrue();
+        // Another transaction is independent.
+        assertThat(stats.claimFanoutTableMetric("tx-2", "orders", true)).isTrue();
+    }
 }

@@ -344,6 +344,9 @@ sync:
   fanout:
     transport: SPOOL
     redis-uri: redis://127.0.0.1:6379/0
+    # 可选：REDIS 中转的流裁剪上限。0=不裁剪（默认）；开启后慢目标可能丢未消费事件，
+    # 必须按最慢目标的积压设置，并用 XINFO STREAM 监控。
+    redis-max-len: 0
   lob:
     streaming-enabled: true
     inline-max-bytes: 65536

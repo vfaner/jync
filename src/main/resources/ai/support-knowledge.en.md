@@ -279,6 +279,7 @@ executes once when a worker becomes free.
 - Settings: sync.content-audit-interval-ms (900000), sample-size (50), max-rows (2000000),
   max-tables-per-cycle (1), timeout-seconds (60).
 - LOB, JSON and XML columns are excluded by default.
+- Targets that cannot tell whether a row really changed (openGauss, HANA, Oscar and similar) count the target's affected rows during replay windows, so changed-row totals can be inflated; use CDC when exact change counts matter.
 
 ## Large columns and drift comparison (LONGTEXT / LONGBLOB)
 
@@ -996,7 +997,7 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - **Target self-heal**: a missing **table** on an extra target is recreated from the source structure, reloaded and the buffered transaction replayed; a missing **column** is not repaired automatically — that worker stops, the backlog grows, and a replay happens after the column is aligned manually.
 - **Event transport**: task detail → sync options → event transport:
   - Local queue (default): `data/fanout/<project id>/<target id>.log`, 2 GB cap per target, no external dependency;
-  - Redis Stream: pick a configured **single-node** Redis target (the same connection and encrypted password the cache projection uses). One stream `jync:fanout:<project id>:events` per project, one consumer group per target, transaction-level ACK, pending entries re-read after a worker restart. Cluster targets are not supported; the stream is not trimmed by default — monitor with `XINFO STREAM`.
+  - Redis Stream: pick a configured **single-node** Redis target (the same connection and encrypted password the cache projection uses). One stream `jync:fanout:<project id>:events` per project, one consumer group per target, transaction-level ACK, pending entries re-read after a worker restart. Cluster targets are not supported; the stream is not trimmed by default — monitor with `XINFO STREAM`. `sync.fanout.redis-max-len` (0 = off) enables an approximate MAXLEN; if enabled, a slow target can lose unread events, so size it above the slowest target's backlog.
   - Multi-instance / cross-node deployments must use Redis (or a shared data directory); otherwise undelivered events in a node-local spool are invisible after a failover.
 - **Performance**: one source log stream, one baseline read, one catalog scan a minute and one metadata read per table — independent of target count; target writes run in parallel. Costs sit on Jync and the targets: one worker, one pool seat and one queue/consumer group per target. For 20 targets check each target's `max_connections` and the spool disk cap (2 GB per target).
 - **Positions**: the detail page shows each target's file:offset / LSN / SCN, applied transactions, the worker's last error and spool backlog. Positions are display/diagnostic state, written at most once a second per target; recovery uses the transport's acknowledged offset. A backlog that only grows with a worker error means that target cannot accept writes — read the table/column named in the error.

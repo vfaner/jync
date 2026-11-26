@@ -63,6 +63,11 @@ public final class CdcRuntimeStats {
     }
 
     private final AtomicLong upserts = new AtomicLong();
+    /** Fan-out: each source transaction may be applied by every target; count it once. */
+    private final Set<String> fanoutMetricClaims = ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.ConcurrentLinkedQueue<String> fanoutClaimOrder =
+            new java.util.concurrent.ConcurrentLinkedQueue<>();
+    private static final int MAX_FANOUT_CLAIMS = 8192;
     private final AtomicLong deletes = new AtomicLong();
     private final AtomicLong skippedDdl = new AtomicLong();
     private final AtomicLong skippedUnsupported = new AtomicLong();
@@ -397,6 +402,32 @@ public final class CdcRuntimeStats {
 
     public void addTableUpserts(String table, long n) {
         addToWindow(table, n, true);
+    }
+
+    /**
+     * Fan-out targets apply the same source transaction. Only the first successful target
+     * may add its table counters, otherwise a three-target project reports three times the
+     * source rows. The claim is bounded; an old retry that fell out of the window may count
+     * again, which is better than an unbounded set growing for the process lifetime.
+     */
+    public boolean claimFanoutTableMetric(String transactionId, String table, boolean upsert) {
+        if (transactionId == null || table == null) {
+            return true;
+        }
+        String key = transactionId + "|" + table.toUpperCase(Locale.ROOT)
+                + (upsert ? "|u" : "|d");
+        if (!fanoutMetricClaims.add(key)) {
+            return false;
+        }
+        fanoutClaimOrder.add(key);
+        while (fanoutMetricClaims.size() > MAX_FANOUT_CLAIMS) {
+            String oldest = fanoutClaimOrder.poll();
+            if (oldest == null) {
+                break;
+            }
+            fanoutMetricClaims.remove(oldest);
+        }
+        return true;
     }
 
     public void addTableDeletes(String table, long n) {

@@ -57,6 +57,8 @@ public final class CdcEventApplier {
      * factory hands over one per run so a burst of transactions builds each statement once.
      */
     private final CdcWritePlanCache plans;
+    /** False for fan-out targets: the shared capture stats count a transaction once. */
+    private final boolean countTableMetrics;
 
     /** No-timeout convenience overload; existing call sites keep their behavior. */
     public CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats) {
@@ -69,10 +71,16 @@ public final class CdcEventApplier {
 
     CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats, int queryTimeoutSeconds,
                     CdcWritePlanCache plans) {
+        this(ctx, stats, queryTimeoutSeconds, plans, true);
+    }
+
+    CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats, int queryTimeoutSeconds,
+                    CdcWritePlanCache plans, boolean countTableMetrics) {
         this.ctx = ctx;
         this.stats = stats;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.plans = plans;
+        this.countTableMetrics = countTableMetrics;
     }
 
     public void applyUpserts(Connection targetConn, CdcTableBinding binding,
@@ -111,8 +119,10 @@ public final class CdcEventApplier {
             // projection above makes the replay succeed.
             throw new SQLException("cdc schema mismatch: " + e.getMessage(), e);
         }
-        // Per-table accumulation also feeds the global rows-applied total.
-        stats.addTableUpserts(binding.getTable(), rows.size());
+        if (countTableMetrics) {
+            // Per-table accumulation also feeds the global rows-applied total.
+            stats.addTableUpserts(binding.getTable(), rows.size());
+        }
     }
 
     /** The actual write, shared by the first attempt and the projected replay. */
@@ -311,7 +321,9 @@ public final class CdcEventApplier {
             }
             throw e;
         }
-        stats.addTableDeletes(binding.getTable(), rows.size());
+        if (countTableMetrics) {
+            stats.addTableDeletes(binding.getTable(), rows.size());
+        }
     }
 
     /** Names the absent target table for the classifier and the targeted repair. */

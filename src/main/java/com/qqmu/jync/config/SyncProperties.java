@@ -430,6 +430,14 @@ public class SyncProperties {
          * genuinely needs more than the default twenty.
          */
         private int maxTargets = 20;
+
+        /**
+         * Optional Redis Stream MAXLEN for the REDIS transport. 0 (default) never trims.
+         * Enabling it trades durability for disk: an event older than the cap can be removed
+         * before its slowest target consumed it, and the target will silently miss it.
+         * Operators must size it above the slowest target's backlog and monitor XINFO.
+         */
+        private long redisMaxLen = 0L;
     }
 
     /** MySQL binlog CDC settings (v1.5.0, task book 阶段 B). Bound from {@code sync.cdc.*}. */
