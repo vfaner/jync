@@ -78,6 +78,7 @@ public final class OracleLogMinerDialect implements MiningDialect {
                     + "SELECT FIRST_CHANGE# FROM V$ARCHIVED_LOG"
                     + " WHERE DELETED = 'NO' AND NAME IS NOT NULL"
                     + " AND NVL(STANDBY_DEST, 'NO') = 'NO'"
+                    + " AND NVL(STATUS, 'A') = 'A'"
                     + " UNION ALL"
                     + " SELECT FIRST_CHANGE# FROM V$LOG WHERE STATUS = 'CURRENT')";
 
@@ -91,7 +92,7 @@ public final class OracleLogMinerDialect implements MiningDialect {
     public boolean archiveCovers(Connection source, long scn) throws SQLException {
         String sql = "SELECT COUNT(*) FROM ("
                 + "SELECT 1 FROM V$ARCHIVED_LOG WHERE DELETED = 'NO' AND NAME IS NOT NULL"
-                + " AND NVL(STANDBY_DEST, 'NO') = 'NO'"
+                + " AND NVL(STANDBY_DEST, 'NO') = 'NO' AND NVL(STATUS, 'A') = 'A'"
                 + " AND FIRST_CHANGE# <= " + scn + " AND NEXT_CHANGE# > " + scn
                 + " UNION ALL "
                 + "SELECT 1 FROM V$LOG WHERE STATUS = 'CURRENT' AND FIRST_CHANGE# <= " + scn
@@ -168,8 +169,17 @@ public final class OracleLogMinerDialect implements MiningDialect {
                 // paths can contain apostrophes (rare, but a single bad path used to
                 // break the whole PL/SQL block with a syntax error).
                 String safePath = path.replace("'", "''");
-                st.execute("BEGIN DBMS_LOGMNR.ADD_LOGFILE(logfilename => '" + safePath + "',"
-                        + " options => " + flag + "); END;");
+                try {
+                    st.execute("BEGIN DBMS_LOGMNR.ADD_LOGFILE(logfilename => '" + safePath + "',"
+                            + " options => " + flag + "); END;");
+                } catch (SQLException e) {
+                    // Name the exact file the source refused. Raw ORA-01291 does not say
+                    // whether the archive was deleted, is on a standby/remote destination, or
+                    // is otherwise unreadable; this is always a source archive problem.
+                    throw new SQLException("LogMiner cannot add archive file '" + path
+                            + "' (missing, deleted or not locally accessible on the source)"
+                            + " — restore the archive/retention or rebuild after fixing it", e);
+                }
                 first = false;
             }
             // SCNs are numeric; inline substitution is injection-free (setLong would

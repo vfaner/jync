@@ -789,7 +789,7 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 - 达梦目标不使用原生 IDENTITY。Jync 为目标表创建 `SEQ_<表>_<列>` 序列和 `TRG_<表>_<列>` BEFORE INSERT 触发器，只在插入值为 NULL 时取序列；源端的显式 ID 会原样写入。目标字典不会显示“自增”，这是正常现象，不代表自增丢失。
 - 首次全量完成后，若自增列是单列主键，Jync 会把序列推进到 `MAX(id)+1`；复合主键或非主键自增列不会自动推进，目标端无 ID 插入可能从 1 开始撞主键。
 - 目标没有对应 SEQ/TRG 时检查：任务是否开启「同步结构」；目标表是否手工预建且结构同步关闭；源端 MySQL 的 AUTO_INCREMENT 是否被元数据读到；是否是旧版本/旧基线。需要重灌时用「重建基线」。不要建议改成达梦原生 IDENTITY——显式 ID 插入会被拒绝。
-- 达梦目标也没有全局大小写开关：未加引号的标识符会折叠为大写；表名可逐表映射，字段名不支持批量改名。不要建议用“全局转小写”解决，容易生成另一个带引号的小写对象。
+- 达梦目标也没有全局大小写开关：未加引号的标识符会折叠为大写；表名可逐表映射，但映射后的目标名仍会按 Oracle 方言转成大写，不能靠表名映射保留小写；字段名不支持批量改名。不要建议用“全局转小写”解决，容易生成另一个带引号的小写对象。
 
 ## LogMiner ORA-01291 反复重建仍失败
 
@@ -798,6 +798,7 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 - 现场检查：`V$ARCHIVED_LOG` 的 `DEST_ID`、`DELETED`、`STATUS`、`SEQUENCE#` 是否连续、相邻 `NEXT_CHANGE#` 是否等于下一个 `FIRST_CHANGE#`；并确认存在 `FIRST_CHANGE# <= resume AND NEXT_CHANGE# > resume` 的行。没有这行说明锚点未被归档覆盖（归档缺口或 resetlogs/incarnation 变化），重建基线也无法恢复。RAC 每个 thread 都必须连续。
 - 当前实现会在基线完成时检查 anchor 是否被归档或 CURRENT redo 覆盖；不覆盖会在标记基线完成前直接报“源端归档缺口”，避免先标完成、稍后才 ORA-01291。
 - 处理：从备份恢复缺失归档，或对确认不需要的已删除 stale 行执行 `CROSSCHECK` + `DELETE EXPIRED` 清理控制文件记录，再重建。日志确实丢失时无法增量恢复，只能重新全量并保证后续保留期。
+- 如果报错是 `LogMiner cannot add archive file '<路径>' (missing, deleted or not locally accessible on the source)`，那是 Jync 已经把要加的具体文件路径报出来了：按这个路径检查 `DEST_ID`/`STANDBY_DEST`（备库/远端不可读）、`DELETED`/`STATUS`、文件是否在本地；不要只看 `V$ARCHIVED_LOG` 的 SCN 是否连续。
 
 ## 目标端列名大小写与类型精度
 

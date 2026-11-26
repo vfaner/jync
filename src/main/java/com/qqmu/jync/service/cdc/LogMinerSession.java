@@ -54,7 +54,8 @@ public class LogMinerSession implements AutoCloseable {
             // thread+sequence below, preferring DEST_ID 1 when both copies exist.
             "SELECT NAME, THREAD#, SEQUENCE#, DEST_ID FROM V$ARCHIVED_LOG"
                     + " WHERE DELETED = 'NO' AND NAME IS NOT NULL"
-                    + " AND NVL(STANDBY_DEST, 'NO') = 'NO' AND NEXT_CHANGE# > ?"
+                    + " AND NVL(STANDBY_DEST, 'NO') = 'NO' AND NVL(STATUS, 'A') = 'A'"
+                    + " AND NEXT_CHANGE# > ?"
                     + " ORDER BY FIRST_CHANGE#, DEST_ID";
 
     private static final String Q_CONTENTS_HEAD =

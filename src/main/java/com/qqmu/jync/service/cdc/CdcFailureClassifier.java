@@ -65,6 +65,11 @@ public final class CdcFailureClassifier {
             if (message.contains(CdcTargetTableMissingException.PREFIX.toLowerCase(Locale.ROOT))) {
                 return Kind.TARGET_TABLE_MISSING;
             }
+            if (message.contains("logminer cannot add archive file")) {
+                // Our ADD_LOGFILE wrapper names the exact path the source refused; no retry
+                // can make that file appear. Park with the source-archive verdict.
+                return Kind.PURGED;
+            }
             if (message.contains("could not find first log file name in binary log index file")
                     || message.contains("master has purged binary logs")
                     || message.contains("errno: 1236")

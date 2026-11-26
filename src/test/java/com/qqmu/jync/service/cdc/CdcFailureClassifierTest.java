@@ -396,4 +396,12 @@ class CdcFailureClassifierTest {
                 "ORA-28001: the password has expired")))
                 .isEqualTo(CdcFailureClassifier.Kind.AUTH_FAILURE);
     }
+
+    @Test
+    void ourMissingArchiveFileWrapperIsPurgedNotTransient() {
+        assertThat(CdcFailureClassifier.classify(new java.sql.SQLException(
+                "LogMiner cannot add archive file 'D:/APP/ADMIN/ARC_1_1042222.ARC'"
+                        + " (missing, deleted or not locally accessible on the source)")))
+                .isEqualTo(CdcFailureClassifier.Kind.PURGED);
+    }
 }

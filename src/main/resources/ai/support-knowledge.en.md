@@ -998,7 +998,7 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - Jync does not use native DM IDENTITY. It creates a `SEQ_<table>_<column>` sequence and a `TRG_<table>_<column>` BEFORE INSERT trigger that draws from the sequence only when the inserted value is NULL; explicit source IDs are written as-is. The target dictionary will not show an "auto-increment" flag; that is expected, not data loss.
 - After the first full load, Jync advances the sequence to `MAX(id)+1` only when the auto-increment column is a single-column primary key. Composite keys or non-key auto-increment columns are not advanced, so an ID-less target insert may start at 1 and collide.
 - If the SEQ/TRG objects are missing, check whether Sync structure is enabled, whether the target table was pre-created with structure sync off, whether the MySQL AUTO_INCREMENT flag was read from metadata, and whether this is an old baseline. Rebuild the baseline to reload. Do not recommend native DM IDENTITY: explicit ID inserts are rejected.
-- DM has no global identifier-case switch either: bare identifiers fold to upper case. Table names can be mapped per table; column names cannot be renamed globally. Do not suggest a "global lowercase" switch — it creates a different quoted object.
+- DM has no global identifier-case switch either: bare identifiers fold to upper case. Table names can be mapped per table, but the mapped target name is still upper-cased by the Oracle dialect, so mapping cannot preserve lower case; column names cannot be renamed globally. Do not suggest a "global lowercase" switch — it creates a different quoted object.
 
 ## LogMiner ORA-01291 keeps failing after rebuilds
 
@@ -1007,6 +1007,7 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - Check `V$ARCHIVED_LOG`: `DEST_ID`, `DELETED`, `STATUS`, sequence continuity and whether each `NEXT_CHANGE#` equals the next `FIRST_CHANGE#`; also require a row with `FIRST_CHANGE# <= resume AND NEXT_CHANGE# > resume`. If none exists, the anchor is not covered (archive gap or resetlogs/incarnation); rebuilding cannot recover it. Every RAC thread must be continuous.
 - The current implementation checks whether the anchor is covered by an archived log or CURRENT redo before marking the baseline done, so a source gap fails early with a clear message instead of a later ORA-01291.
 - Fix by restoring missing archives, or after confirming they are unnecessary run `CROSSCHECK` + `DELETE EXPIRED` to clear stale control-file rows, then rebuild. Logs that are truly gone cannot be recovered incrementally; re-run a full baseline and keep enough retention afterwards.
+- `LogMiner cannot add archive file '<path>' (missing, deleted or not locally accessible on the source)` names the exact file Jync tried to add. Check that path's `DEST_ID`/`STANDBY_DEST` (standby/remote copies are unreadable), `DELETED`/`STATUS` and local existence; a continuous SCN list in `V$ARCHIVED_LOG` is not sufficient if the selected destination is remote.
 
 ## Target identifier case and type precision
 

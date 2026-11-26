@@ -327,14 +327,15 @@ public class SupportAssistantService {
                     redo。最老 redo 早于 resume SCN 仍缺文件 = 归档空档（调大保留期无效）；
                     最老 redo 晚于 resume SCN = 保留期不足。两者都需要重建基线。
                     有些构建只固定看 `DEST_ID=1`，若本地归档在 DEST_ID 2 会误报缺文件；
-                    让用户检查 DEST_ID、anchor 覆盖行、NEXT_CHANGE#/thread/resetlogs。
+                    让用户检查 DEST_ID、STANDBY_DEST、anchor 覆盖行、NEXT_CHANGE#/thread/resetlogs；
+                    报 `LogMiner cannot add archive file '<path>'` 时直接按该路径查本地/备库/远端可读性。
                     保留期远大于基线耗时（如 3 天 vs 几十分钟）时，不要先建议调保留期。
                   - 「MySQL 自增到达梦后没有自增/丢失」：达梦目标用 `SEQ_*` 序列 + `TRG_*`
                     触发器模拟，不是原生 IDENTITY，列属性不显示自增属正常。检查结构同步、
                     SEQ/TRG 是否存在、自增列是否单列主键、序列是否已推进；不要建议改成原生
                     IDENTITY（显式 ID 插入会被拒绝）。
                   - 「表名/字段大小写可以全局配置吗」：没有全局开关；达梦把未加引号标识符折叠
-                    为大写，表名可逐表映射，字段名不支持批量改名。
+                    为大写，表名可逐表映射但映射值仍会转大写，字段名不支持批量改名。
                   - 源 `DATETIME` 目标 `DATETIME(6)`：MySQL→MySQL 同族精度问题；2.4.5 起新建
                     目标保留源精度，已有目标列不会自动改。
                   - `Error retrieving record` + `Can not read response from server`：Connector/J
