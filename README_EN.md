@@ -9,7 +9,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-brightgreen.svg)](https://spring.io/projects/spring-boot)
-[![Version](https://img.shields.io/badge/version-2.4.6-blue.svg)](https://github.com/vfaner/jync/releases/tag/v2.4.6)
+[![Version](https://img.shields.io/github/v/release/vfaner/jync?label=version)](https://github.com/vfaner/jync/releases)
 [![Docker Sponsored OSS](https://img.shields.io/badge/Docker-Sponsored%20OSS-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/vfaner/jync)
 [![GitHub star](https://img.shields.io/github/stars/vfaner/jync?label=GitHub%20star)](https://github.com/vfaner/jync)
 [![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
@@ -22,35 +22,27 @@ start one jar, open the browser, and build continuous **schema + data** synchron
 Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB, and MongoDB → KingbaseES.
 
 No Kafka, Flink or ZooKeeper, and no job code to write. Apache-2.0 licensed and fully
-self-hostable, including air-gapped networks. **v2.4.6** lets the AI operations assistant inspect
-per-table state and change task parameters through confirmation cards, and strengthens large-table
-full loads, row-count checks and CDC baseline resume.
+self-hostable, including air-gapped networks. It covers full loads, polling, log CDC, ETL, Redis
+cache projections and one-source-many-target fan-out, with an optional AI operations assistant.
 
 ## Highlights
 
-- **One JAR, zero dependencies**: Spring Boot monolith + Thymeleaf SSR + Quartz + embedded H2
-  metadata store. Offline-ready.
-- **Fast, safe full loads**: primary-key keyset chunks, per-table parallelism, streamed result
-  sets, per-chunk commits and checkpoints — about **40 seconds for a 10M-row table** in our
-  test (~250k rows/s; depends on row width, indexes, network and target write capacity).
-- **Light incremental sync**: polling reads only rows after the cursor with a read-only account;
-  six engines can switch to log CDC for second-level latency.
-- **Schema travels with data**: missing targets are created with tables, indexes, views and
-  routines; type mapping and function conversion are built in.
+- **One JAR**: Spring Boot monolith + Thymeleaf SSR + Quartz + embedded H2; no external services,
+  ready for air-gapped networks.
+- **Fast, safe full loads**: primary-key keyset chunks, per-table parallelism, streamed reads,
+  per-chunk commits and checkpoints — about 40 seconds for a 10M-row table in our test.
+- **Light incremental sync**: polling reads only rows after the cursor; six engines support log
+  CDC for second-level latency.
+- **One source, many targets**: fan out one source to several targets, each with its own position
+  and transport; baseline, DDL and gap replay advance per target.
+- **Schema travels with data**: missing tables, indexes, views and routines are created; type
+  mapping and function conversion are built in.
 - **Resumable by design**: stop, network loss or kill -9 all resume from checkpoints; writes are
   idempotent and changes made while down are replayed on restart.
-- **Three roles with ownership**: admin / operator / viewer. Operators see everything but only
-  write their own resources.
-- **Alerts that reach you**: sync failures, CDC stalls, drift and unhealthy connections can be
-  pushed to DingTalk, WeCom, Feishu or a custom webhook.
-- **Comments travel too**: SQL Server sources read `MS_Description`; Oracle, PostgreSQL, DB2,
-  HANA and SQL Server targets write table/column comments, MySQL-family targets keep inline `COMMENT`.
-- **One cursor policy for the schema**: project-level tags match candidate cursor columns per table,
-  case-insensitively and with fallback; per-table overrides still win.
-- **Performance you can see**: dashboard rings, per-task performance pages and Prometheus metrics
-  for throughput, lag, row counts, connections and database QPS.
-- **Optional AI agent**: ask about task state, per-table progress, performance and alerts in natural language,
-  self-check a stalled CDC stream, **paste an error log for analysis**, or draft a task from a description.
+- **Roles and alerts**: admin / operator / viewer with ownership isolation; failures, CDC stalls
+  and drift can be pushed to DingTalk, WeCom, Feishu or a custom webhook.
+- **Optional AI agent**: natural-language status, per-table progress and diagnostics, pasted-log
+  analysis, task drafts and confirmation-card tuning.
 
 ## Screenshots
 
@@ -148,9 +140,9 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
 Container deployment (official images built by GitHub Actions on tags, **linux/amd64 (x86_64) and linux/arm64 (aarch64)**; aarch64 is ARM64 and Docker selects it automatically):
 
 ```bash
-docker pull vfaner/jync:2.4.6
+docker pull vfaner/jync:latest
 docker compose -f docker-compose.release.yml up -d
-# Mirror: ghcr.io/vfaner/jync:2.4.6; in a container upgrade by pulling the new image
+# Mirror: ghcr.io/vfaner/jync:latest; pin a version tag in production; upgrade by pulling and recreating
 ```
 
 Open `http://<host>:8080` and sign in with `admin / 123456`, `ops / 123456` or `view / 123456`;

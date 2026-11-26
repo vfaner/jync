@@ -8,7 +8,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Java 17+](https://img.shields.io/badge/Java-17%2B-orange.svg)](https://openjdk.org/)
 [![Spring Boot 4.1](https://img.shields.io/badge/Spring%20Boot-4.1-brightgreen.svg)](https://spring.io/projects/spring-boot)
-[![Version](https://img.shields.io/badge/version-2.4.6-blue.svg)](https://github.com/vfaner/jync/releases/tag/v2.4.6)
+[![Version](https://img.shields.io/github/v/release/vfaner/jync?label=version)](https://github.com/vfaner/jync/releases)
 [![Docker Sponsored OSS](https://img.shields.io/badge/Docker-Sponsored%20OSS-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/r/vfaner/jync)
 [![GitHub star](https://img.shields.io/github/stars/vfaner/jync?label=GitHub%20star)](https://github.com/vfaner/jync)
 [![Gitee star](https://gitee.com/super_rgh/jync/badge/star.svg?theme=dark)](https://gitee.com/super_rgh/jync)
@@ -17,21 +17,18 @@
 
 Jync 是面向**信创迁移与异构数据集成**的开源同步工具：单个 jar 启动，浏览器完成建连接、选表、配调度与启动；在 **35 种数据库（另支持自定义 JDBC 类型）** 之间持续同步**结构与数据**，另有三条不走 JDBC 的专属迁移链路（Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES）。
 
-不需要 Kafka、Flink、ZooKeeper，也不需要编写作业代码；Apache-2.0 协议，可完全私有化部署、内网离线运行。当前 **v2.4.6** 让 AI 运维助手可查询逐表状态并通过确认卡调整任务参数，同时增强大表全量、行数核对与 CDC 基线续跑。
+不需要 Kafka、Flink、ZooKeeper，也不需要编写作业代码；Apache-2.0 协议，可完全私有化部署、内网离线运行。覆盖全量、轮询、日志 CDC、ETL、Redis 缓存投影与一源多目标分发，并提供可选 AI 运维助手。
 
 ## 核心亮点
 
 - **一个 JAR 就够**：Spring Boot 单体 + Thymeleaf 服务端渲染 + Quartz + H2 内嵌元数据库，零外部依赖，内网离线可用。
-- **全量快而稳**：主键 keyset 分块、单表内并行、结果集流式读取、逐块提交与检查点；实测 1000 万行表全量约 40 秒（约 **25 万行/秒**，视表宽、索引、网络与目标库而定）。
-- **增量很轻**：默认轮询只读游标之后的变化，一个只读账号即可；六类源库可切换日志 CDC，做到秒级延迟。
-- **结构与数据一起走**：目标库缺表时自动建表、建索引、建视图与存储过程，内置各方言类型映射与函数转换。
-- **断点续传**：停机、断网、进程被杀都能从检查点继续；写入幂等，停机期间源库的变更重启后自动补齐。
-- **三种角色与资源归属**：管理员 / 运维 / 访客；运维可看全部资源，写操作只作用于自己名下资源。
-- **有异常会通知**：同步失败、CDC 停摆、数据漂移、连接不健康等七类故障可推送钉钉、企业微信、飞书或自定义 Webhook。
-- **注释也同步**：SQL Server 源端读取 `MS_Description`；Oracle、PostgreSQL、DB2、HANA、SQL Server 目标写入表 / 字段注释，MySQL 系列保持内联 `COMMENT`。
-- **游标列可统一指定**：项目级标签按顺序逐表匹配候选游标列，忽略大小写、不存在自动回退；单表手工游标优先。
-- **性能看得见**：看板资源环、任务性能页与 Prometheus 指标覆盖吞吐、延迟、行数、连接数与数据库 QPS。
-- **可选 AI 智能体**：接入大模型后，在悬浮窗里用自然语言查任务状态、逐表进度、性能与告警，断流时逐项自检，**可直接粘贴报错日志分析**；按描述生成任务草稿，并可在停止状态下按确认卡调整批量大小、并行度、游标列、Cron 与连接驱动参数，管理员还可调整 10 项系统性能参数。
+- **全量快而稳**：主键 keyset 分块、单表内并行、流式读取、逐块提交与检查点；实测 1000 万行约 40 秒。
+- **增量很轻**：轮询只读游标之后的变化；六类源库可切换日志 CDC，做到秒级延迟。
+- **一源多目标**：一份源数据同时分发到多个目标，各自独立位点与中转，基线、DDL 与补数按目标推进。
+- **结构与数据一起走**：缺表自动建表、索引、视图与存储过程，内置各方言类型映射与函数转换。
+- **断点续传**：停机、断网、进程被杀都能从检查点继续；写入幂等，停机期间的变更自动补齐。
+- **角色与告警**：管理员 / 运维 / 访客按资源归属隔离；同步失败、CDC 停摆、数据漂移等可推送钉钉、企业微信、飞书或 Webhook。
+- **可选 AI 运维助手**：自然语言查状态、逐表进度与性能，断流自检、粘贴日志分析，生成任务草稿并按确认卡调参。
 
 ## 界面速览
 
@@ -105,9 +102,9 @@ java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
 容器部署（官方镜像由 tag 触发的 GitHub Actions 构建，**linux/amd64（x86_64）与 linux/arm64（aarch64）**；aarch64 即 ARM64，Docker 会自动选择架构）：
 
 ```bash
-docker pull vfaner/jync:2.4.6
+docker pull vfaner/jync:latest
 docker compose -f docker-compose.release.yml up -d
-# 备用镜像 ghcr.io/vfaner/jync:2.4.6；容器内升级请拉取新镜像并重建容器
+# 备用镜像 ghcr.io/vfaner/jync:latest；生产环境可固定到具体版本 tag，升级时拉取新镜像并重建容器
 ```
 
 首次访问 `http://<服务器>:8080`，使用内置账号 `admin / 123456`、`ops / 123456` 或 `view / 123456` 登录，**首次登录强制修改密码**。生产部署、外部元数据库、Docker / Kubernetes、HTTPS 与升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)与[部署说明](docs/deploy-container.md)。
