@@ -35,6 +35,7 @@ class ProjectDetailTemplateAssemblyTest {
                 .contains("project-detail/schedule :: card")
                 .contains("project-detail/performance :: card")
                 .contains("project-detail/cdc-status :: cdc-card")
+                .contains("project-detail/fanout-card :: card")
                 .contains("project-detail/cdc-idle-poll :: card")
                 .contains("project-detail/column-rules :: card")
                 .contains("project-detail/progress :: block")
@@ -87,6 +88,8 @@ class ProjectDetailTemplateAssemblyTest {
         assertFragment("schedule.html", "card");
         assertFragment("performance.html", "card");
         assertFragment("cdc-status.html", "cdc-card");
+        assertFragment("fanout-card.html", "card");
+        assertFragment("fanout-card.html", "rows");
         assertFragment("cdc-idle-poll.html", "card");
         assertFragment("column-rules.html", "card");
         assertFragment("redis-projection.html", "card");

@@ -90,8 +90,7 @@ class ProjectDetailFanoutStatusViewTest {
         consumed.setBinlogFile("mysql-bin.000007");
         consumed.setBinlogPos(1024L);
         consumed.setUpdatedAt(Instant.now().minusSeconds(30));
-        when(fanoutPositionStore.find(1L, 2L)).thenReturn(Optional.empty());
-        when(fanoutPositionStore.find(1L, 3L)).thenReturn(Optional.of(consumed));
+        when(fanoutPositionStore.list(1L)).thenReturn(List.of(consumed));
 
         String html = mvc.perform(get("/projects/1/fanout-status").with(asAdmin()))
                 .andExpect(status().isOk())
@@ -99,7 +98,7 @@ class ProjectDetailFanoutStatusViewTest {
 
         assertThat(html).contains("#2", "#3");
         assertThat(html).contains("mysql-bin.000007:1024");
-        assertThat(html).contains("fanout-status-list");
+        assertThat(html).contains("data-role=\"fanout-rows\"");
         // Size is rendered in human units and styled apart from the muted notes.
         assertThat(html).contains("fanout-spool-metric");
     }
@@ -108,8 +107,7 @@ class ProjectDetailFanoutStatusViewTest {
     void aRedisTransportProjectShowsTheQueueInsteadOfASpoolSize() throws Exception {
         SyncConfig config = projectWithFanout();
         config.setFanoutTransport("REDIS");
-        when(fanoutPositionStore.find(1L, 2L)).thenReturn(Optional.empty());
-        when(fanoutPositionStore.find(1L, 3L)).thenReturn(Optional.empty());
+        when(fanoutPositionStore.list(1L)).thenReturn(List.of());
 
         String html = mvc.perform(get("/projects/1/fanout-status").with(asAdmin()))
                 .andExpect(status().isOk())
@@ -122,8 +120,7 @@ class ProjectDetailFanoutStatusViewTest {
     @Test
     void liveWorkerStateIsShownNextToThePersistedPosition() throws Exception {
         projectWithFanout();
-        when(fanoutPositionStore.find(1L, 2L)).thenReturn(Optional.empty());
-        when(fanoutPositionStore.find(1L, 3L)).thenReturn(Optional.empty());
+        when(fanoutPositionStore.list(1L)).thenReturn(List.of());
         FanoutRuntime runtime = org.mockito.Mockito.mock(FanoutRuntime.class);
         when(fanoutRuntimes.get(1L)).thenReturn(runtime);
         when(runtime.workerStates()).thenReturn(List.of(
@@ -153,7 +150,7 @@ class ProjectDetailFanoutStatusViewTest {
                 .andReturn().getResponse().getContentAsString();
 
         // The fragment shell still renders (the page polls it), but it lists no target rows.
-        assertThat(html).contains("fanout-status-list");
-        assertThat(html).doesNotContain("<li");
+        assertThat(html).contains("data-role=\"fanout-rows\"");
+        assertThat(html).doesNotContain("data-search=");
     }
 }

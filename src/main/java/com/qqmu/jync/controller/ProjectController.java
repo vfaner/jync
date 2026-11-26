@@ -820,7 +820,7 @@ public class ProjectController {
         }
         SyncConfig config = projectService.loadConfig(project);
         model.addAttribute("fanoutStatuses", buildFanoutStatuses(id, project, config));
-        return "project-detail/fanout-status :: list";
+        return "project-detail/fanout-card :: rows";
     }
 
     private List<Map<String, Object>> buildFanoutStatuses(Long projectId, Project project,
@@ -839,17 +839,33 @@ public class ProjectController {
         if (transport == null || transport.isBlank()) {
             transport = properties.getFanout().getTransport().name();
         }
+        // One query for the connections and one for the positions, not two per target:
+        // the card polls every five seconds even with twenty targets.
+        java.util.Map<Long, DatabaseConfig> configs = databaseConfigService.findAll().stream()
+                .collect(java.util.stream.Collectors.toMap(DatabaseConfig::getId,
+                        java.util.function.Function.identity(), (a, b) -> a));
+        java.util.Map<Long, com.qqmu.jync.model.FanoutPosition> positions =
+                fanoutPositionStore.list(projectId).stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                com.qqmu.jync.model.FanoutPosition::getTargetDbId,
+                                java.util.function.Function.identity(), (a, b) -> a));
         List<Map<String, Object>> statuses = new ArrayList<>();
         for (Long targetId : ids) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("targetId", targetId);
             row.put("transport", transport);
-            row.put("name", databaseConfigService.findById(targetId)
-                    .map(DatabaseConfig::getName).orElse("#" + targetId));
+            DatabaseConfig target = configs.get(targetId);
+            row.put("name", target == null ? "#" + targetId : target.getName());
+            row.put("type", target == null || target.getType() == null
+                    ? null : target.getType().name());
+            row.put("endpoint", target == null ? null
+                    : target.getHost() + ":" + target.getPort());
+            row.put("primary", java.util.Objects.equals(targetId, project.getTargetDbId()));
             row.put("ageSeconds", null);
             row.put("lsn", null);
             row.put("scn", null);
-            fanoutPositionStore.find(projectId, targetId).ifPresentOrElse(position -> {
+            com.qqmu.jync.model.FanoutPosition position = positions.get(targetId);
+            if (position != null) {
                 row.put("file", position.getBinlogFile());
                 row.put("pos", position.getBinlogPos());
                 // Non-binlog engines resume by LSN/SCN; show the token they actually use
@@ -861,7 +877,9 @@ public class ProjectController {
                             java.time.Duration.between(position.getUpdatedAt(),
                                     java.time.Instant.now()).getSeconds()));
                 }
-            }, () -> row.put("file", null));
+            } else {
+                row.put("file", null);
+            }
             java.nio.file.Path spool = java.nio.file.Path.of("data", "fanout",
                     String.valueOf(projectId), targetId + ".log");
             try {

@@ -743,6 +743,8 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 /* 标签行里的「载入 .sql 文件」是个 label：.field label 的块级规则会压掉 .btn 的
    inline-flex，把按钮撑成整行。提高一级选择器把按钮交还给 .btn。 */
 .field .label-row label.btn { display: inline-flex; margin-bottom: 0; cursor: pointer; }
+/* 文本型悬停提示宿主：不换成图标，只给一点可悬停的提示。 */
+.tip-text { cursor: help; text-decoration: underline dotted var(--line); text-underline-offset: 3px; }
 .tip-icon { position: relative; display: inline-flex; align-items: center;
   margin-left: 5px; color: var(--ink-mute); cursor: help; outline: none;
   border-radius: 50%; }
@@ -1221,10 +1223,14 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .fanout-target-picker { margin-top: 0; }
 .fanout-target-picker .tag-input { min-height: 42px; cursor: default; }
-.fanout-transport-row {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
-}
-.fanout-transport-row .select { flex: 1 1 220px; min-width: 180px; }
+.fanout-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+.fanout-toolbar-field { display: flex; flex-direction: column; gap: 4px; flex: 0 1 260px; min-width: 200px; }
+.fanout-toolbar-field > label { font-size: 12px; font-weight: 600; color: var(--ink-soft); }
+.fanout-toolbar-search { flex: 1 1 220px; min-width: 180px; }
+.fanout-help { margin: 8px 2px 0; }
+.fanout-table-wrap { max-height: 320px; overflow: auto; margin-top: 8px; }
+.fanout-table thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); }
+.fanout-target-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .target-picker { position: relative; }
 /* 整块输入区即下拉：点框内任意处展开可选连接，选中后变成标签。 */
 .tag-editor .target-input[tabindex="0"] { cursor: pointer; }
@@ -1252,10 +1258,7 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 }
 .target-menu-type { color: var(--ink-mute); font-size: 11px; }
 .target-menu-empty { padding: 8px 9px; color: var(--ink-mute); font-size: 12.5px; }
-.fanout-status-list li { color: var(--ink-soft); }
-.fanout-status-list li > b { color: var(--ink); font-weight: 650; }
 .fanout-status-state { color: var(--warn); font-weight: 600; }
-.fanout-status-meta { color: var(--ink-mute); }
 .fanout-spool-metric { color: var(--brand); font-weight: 600; }
 .fanout-worker-error { color: var(--danger); font-weight: 600; }
 .fanout-transport-badge { color: var(--brand); }

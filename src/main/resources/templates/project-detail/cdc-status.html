@@ -21,7 +21,8 @@
               scn=${stats != null and stats.positionScn != null ? stats.positionScn : (cdcPosition != null ? cdcPosition.scn : null)},
               lsn=${stats != null and stats.positionLsn != null ? stats.positionLsn : (cdcPosition != null ? cdcPosition.lsn : null)},
               gtid=${stats != null and stats.gtidSet != null ? stats.gtidSet : (cdcPosition != null ? cdcPosition.gtidSet : null)},
-              gtidShort=${gtid != null and #strings.length(gtid) > 40 ? #strings.substring(gtid, 0, 40) + '…' : gtid},
+              gtidShort=${gtid != null and #strings.length(gtid) > 12
+                          ? #strings.substring(gtid, 0, 12) + '…' : gtid},
               lastError=${stats != null ? stats.lastError : null},
               lastErrorShort=${lastError != null and #strings.length(lastError) > 160 ? #strings.substring(lastError, 0, 160) + '…' : lastError}">
     <div class="card-head">
@@ -60,12 +61,16 @@
                     <span class="chip mono" th:if="${posFile == null and scn == null and lsn != null}"
                           th:text="${'LSN ' + lsn}">LSN 0/167D3F8</span>
                     <span th:if="${posFile == null and scn == null and lsn == null}">—</span>
-                    <div class="small muted mono" th:if="${gtidShort != null}"
+                    <!--/* GTID 串可能上百字符：只露 12 个字符，完整值放悬停提示。 */-->
+                    <div class="small muted mono tip-text" th:if="${gtid != null}"
+                         th:attr="data-tip=${gtid}"
                          th:text="'GTID ' + ${gtidShort}">gtid</div>
-                    <!--/* 位点年龄:持久化位点的落库时间,不持有消费者的节点也能看 */-->
-                    <div class="small muted" th:if="${cdcPosition != null and cdcPosition.updatedAt != null}"
+                    <!--/* 位点年龄：正文只留短格式，完整时间在悬停提示里。 */-->
+                    <div class="small muted tip-text"
+                         th:if="${cdcPosition != null and cdcPosition.updatedAt != null}"
+                         th:attr="data-tip=${#temporals.format(cdcPosition.updatedAt, 'yyyy-MM-dd HH:mm:ss')}"
                          th:text="#{cdc.status.position.updated} + ' '
-                                  + ${#temporals.format(cdcPosition.updatedAt, 'yyyy-MM-dd HH:mm:ss')}">updated</div>
+                                  + ${#temporals.format(cdcPosition.updatedAt, 'MM-dd HH:mm:ss')}">updated</div>
                 </dd>
             </div>
             <th:block th:if="${stats != null}">

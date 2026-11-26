@@ -1796,8 +1796,9 @@
   }
 
   function bindFanoutTransport(select) {
-    var form = select.closest('form');
-    var target = form ? form.querySelector('[data-role="fanout-redis-target"]') : null;
+    // The card sits outside the config form (its controls join it by form="config-form"),
+    // so the paired select is found document-wide, not under closest('form').
+    var target = document.querySelector('[data-role="fanout-redis-target"]');
     if (!target) return;
     function apply() {
       target.classList.toggle('is-hidden', select.value !== 'REDIS');
@@ -3923,8 +3924,30 @@
   }
 
   /** 一源多目标：每目标位点/积压每 5 秒刷新，页面隐藏时暂停。 */
+  /** 一源多目标表：按目标名/类型/地址的搜索，刷新后重新应用。 */
+  function bindFanoutTable(card) {
+    var search = card.querySelector('[data-role="fanout-search"]');
+    var rows = card.querySelector('[data-role="fanout-rows"]');
+    if (!search || !rows) return;
+    function apply() {
+      var q = search.value.trim().toLowerCase();
+      var visible = 0;
+      Array.prototype.slice.call(rows.querySelectorAll('tr[data-search]'))
+        .forEach(function (row) {
+          var hay = (row.getAttribute('data-search') || '').toLowerCase();
+          var show = !q || hay.indexOf(q) >= 0;
+          row.classList.toggle('is-hidden', !show);
+          if (show) { visible++; }
+        });
+      var none = rows.querySelector('[data-role="fanout-no-match"]');
+      if (none) { none.hidden = visible > 0; }
+    }
+    search.addEventListener('input', apply);
+    apply();
+  }
+
   function bindFanoutStatusRefresh() {
-    var box = document.getElementById('fanout-status');
+    var box = document.querySelector('.fanout-card');
     if (!box) return;
     var url = box.getAttribute('data-refresh-url');
     if (!url) return;
@@ -3940,8 +3963,13 @@
         })
         .then(function (html) {
           var fresh = new DOMParser().parseFromString(html, 'text/html');
-          var list = fresh.querySelector('.fanout-status-list');
-          if (list) box.innerHTML = list.outerHTML;
+          var rows = fresh.querySelector('[data-role="fanout-rows"]');
+          var current = box.querySelector('[data-role="fanout-rows"]');
+          if (rows && current) {
+            current.innerHTML = rows.innerHTML;
+            var search = box.querySelector('[data-role="fanout-search"]');
+            if (search) { search.dispatchEvent(new Event('input')); }
+          }
         })
         .catch(function () { /* keep the last numbers; retry next tick */ })
         .then(function () { inFlight = false; });
@@ -5699,6 +5727,7 @@
     document.querySelectorAll('[data-role="cursor-priority-open"]').forEach(bindCursorPriority);
     document.querySelectorAll('[data-role="target-picker"]').forEach(bindTargetPicker);
     document.querySelectorAll('[data-role="fanout-transport"]').forEach(bindFanoutTransport);
+    document.querySelectorAll('.fanout-card').forEach(bindFanoutTable);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
     document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);
