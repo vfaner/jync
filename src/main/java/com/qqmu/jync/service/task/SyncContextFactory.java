@@ -17,6 +17,7 @@ import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
 import com.qqmu.jync.service.connection.OracleVersionResolver;
 import com.qqmu.jync.service.connection.ServerVersionResolver;
+import com.qqmu.jync.service.converter.SqlDialect;
 import com.qqmu.jync.service.converter.SqlDialectFactory;
 import com.qqmu.jync.service.metadata.MetadataReader;
 import com.qqmu.jync.service.metadata.MetadataReaderFactory;
@@ -137,13 +138,10 @@ public class SyncContextFactory {
                 .targetReader(targetReader)
                 .sourceDialect(dialectFactory.forType(source.getType(), sourceMajorVersion,
                                 sourceFamily))
-                .targetDialect(dialectFactory.forType(target.getType(), targetMajorVersion,
-                                targetFamily)
-                        // sync.lob.oracle-empty-string-as-empty-clob reaches every bind path
-                        // through the dialect; only Oracle acts on it, everyone else returns
-                        // itself unchanged.
-                        .withEmptyStringAsLob(
-                                properties.getLob().isOracleEmptyStringAsEmptyClob()))
+                .targetDialect(applyTargetDialectOptions(
+                        dialectFactory.forType(target.getType(), targetMajorVersion,
+                                targetFamily),
+                        config))
                 .batchSize(batchSize)
                 .fullLoadBatchSize(fullLoadBatchSize)
                 .fullLoadFetchSize(fullLoadFetchSize)
@@ -280,6 +278,18 @@ public class SyncContextFactory {
                     sourceSeats, targetSeats);
         }
         return effective;
+    }
+
+    /**
+     * Project-level knobs that reshape the target dialect rather than the connection: both
+     * defaults are "off", and a dialect that has nothing to change returns itself.
+     */
+    SqlDialect applyTargetDialectOptions(SqlDialect dialect, SyncConfig config) {
+        return dialect
+                // sync.lob.oracle-empty-string-as-empty-clob reaches every bind path through
+                // the dialect; only Oracle acts on it.
+                .withEmptyStringAsLob(properties.getLob().isOracleEmptyStringAsEmptyClob())
+                .withPreserveIdentifierCase(config.isPreserveTargetIdentifierCase());
     }
 
     /** Uses the configured schema, or asks the database what the connection's default is. */

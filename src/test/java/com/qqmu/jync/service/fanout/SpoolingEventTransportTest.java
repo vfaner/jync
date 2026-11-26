@@ -152,7 +152,7 @@ class SpoolingEventTransportTest {
         transport.publish(row("tx-2", 2L));
 
         assertThatThrownBy(() -> slow.poll(Duration.ofSeconds(1)))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(FanoutFatalTargetException.class)
                 .hasMessageContaining("no longer writable");
         transport.close();
     }

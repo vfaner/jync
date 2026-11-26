@@ -239,7 +239,7 @@ public final class SpoolingEventTransport implements EventTransport {
                 return null;
             }
             if (failure != null) {
-                throw new IllegalStateException("fan-out spool for target '" + group
+                throw new FanoutFatalTargetException("fan-out spool for target '" + group
                         + "' is no longer writable", failure);
             }
             try {
@@ -270,9 +270,13 @@ public final class SpoolingEventTransport implements EventTransport {
             } catch (IOException e) {
                 // Name the cause in the message: the target panel shows this string, and
                 // "could not read the spool" alone hides a decode rejection (an unsupported
-                // value type) behind what looks like a disk problem.
-                throw new IllegalStateException("could not read the fan-out spool for '"
-                        + group + "': " + e, e);
+                // value type) behind what looks like a disk problem. The same bytes will
+                // fail on every rewind, so this is fatal for the run; mark it so the next
+                // start re-baselines instead of resuming from the corrupt tail.
+                IllegalStateException fatal = new IllegalStateException(
+                        "could not read the fan-out spool for '" + group + "': " + e, e);
+                markFailed(fatal);
+                throw new FanoutFatalTargetException(fatal.getMessage(), e);
             }
         }
 

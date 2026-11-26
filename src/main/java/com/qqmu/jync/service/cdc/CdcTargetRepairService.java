@@ -246,7 +246,7 @@ public class CdcTargetRepairService {
                 }
                 String targetTable = ctx.getConfig().targetTableName(sourceTable);
                 if (!TargetTableVerifier.tableExists(target, ctx.getTargetSchema(), targetTable,
-                        ctx.effectiveTargetType())) {
+                        ctx.effectiveTargetType(), ctx.targetPreservesIdentifierCase())) {
                     missing.add(sourceTable);
                 }
             }
@@ -267,7 +267,7 @@ public class CdcTargetRepairService {
             for (String sourceTable : sourceTables) {
                 String targetTable = ctx.getConfig().targetTableName(sourceTable);
                 if (!TargetTableVerifier.tableExists(target, ctx.getTargetSchema(), targetTable,
-                        ctx.effectiveTargetType())) {
+                        ctx.effectiveTargetType(), ctx.targetPreservesIdentifierCase())) {
                     stillMissing.add(targetTable);
                 }
             }

@@ -40,6 +40,7 @@ import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ConnectionRole;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.model.RedisTarget;
@@ -634,6 +635,11 @@ public class ProjectController {
         model.addAttribute("fullLoadPoolSize", Math.max(2, properties.getMaxPoolSize()));
         model.addAttribute("fullLoadParallelismCap",
                 FullLoadCapacity.effectiveCap(properties, source, target));
+        // Only Oracle-family dialects fold bare identifiers, and only they can honour the
+        // preserve-case option; on every other target it is a no-op, so the switch is not
+        // rendered there at all.
+        model.addAttribute("isOracleTarget", target != null
+                && target.resolvedFamily() == DatabaseType.DialectFamily.ORACLE);
 
         CaptureStrategy current = config.getCaptureStrategyOrDefault();
         CdcProbeResult cdcProbe = null;
@@ -1262,6 +1268,7 @@ public class ProjectController {
                 }
                 config.setAutoSyncNewTables(autoSync);
                 config.setCdcAutoAddColumns(form.isCdcAutoAddColumns());
+                config.setPreserveTargetIdentifierCase(form.isPreserveTargetIdentifierCase());
                 // A strategy switch away from binlog leaves no fan-out to run; stale extra
                 // targets would otherwise sit in the config and surprise a later switch back.
                 CaptureStrategy effectiveForFanout = strategyParam != null

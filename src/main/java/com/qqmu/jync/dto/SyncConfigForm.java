@@ -35,6 +35,7 @@ public class SyncConfigForm {
     private boolean truncateBeforeInitialLoad;
     private boolean autoSyncNewTables;
     private boolean cdcAutoAddColumns;
+    private boolean preserveTargetIdentifierCase;
 
     private Long pollIntervalMs;
     private String cronExpression;

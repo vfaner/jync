@@ -40,33 +40,72 @@ public class OracleDialect extends AbstractSqlDialect {
      */
     private final boolean oracleProduct;
 
+    /** Keep the source spelling (quoted) instead of Oracle's bare-identifier upper folding. */
+    private final boolean preserveIdentifierCase;
+
+    /**
+     * Whether this instance serves 达梦 DM. DM8 has its own {@code AUTO_INCREMENT} column
+     * attribute, which — unlike Oracle's {@code IDENTITY} — accepts explicitly supplied values
+     * without {@code SET IDENTITY_INSERT}, so a synced source id is written as-is. It is used
+     * instead of the sequence+trigger emulation where DM allows it (see
+     * {@link #dmNativeAutoIncrement}).
+     */
+    private final boolean dmProduct;
+
     public OracleDialect() {
         this(null);
     }
 
     public OracleDialect(Integer majorVersion) {
-        this(majorVersion, true, true);
+        this(majorVersion, true, true, false, false);
     }
 
-    private OracleDialect(Integer majorVersion, boolean emptyStringAsLob, boolean oracleProduct) {
+    private OracleDialect(Integer majorVersion, boolean emptyStringAsLob, boolean oracleProduct,
+                          boolean preserveIdentifierCase) {
+        this(majorVersion, emptyStringAsLob, oracleProduct, preserveIdentifierCase, false);
+    }
+
+    private OracleDialect(Integer majorVersion, boolean emptyStringAsLob, boolean oracleProduct,
+                          boolean preserveIdentifierCase, boolean dmProduct) {
         this.majorVersion = majorVersion;
         this.emptyStringAsLob = emptyStringAsLob;
         this.oracleProduct = oracleProduct;
+        this.preserveIdentifierCase = preserveIdentifierCase;
+        this.dmProduct = dmProduct;
     }
 
     @Override
     public SqlDialect withServerMajorVersion(Integer majorVersion) {
-        return new OracleDialect(majorVersion, emptyStringAsLob, oracleProduct);
+        return new OracleDialect(majorVersion, emptyStringAsLob, oracleProduct,
+                preserveIdentifierCase, dmProduct);
     }
 
     @Override
     public SqlDialect withEmptyStringAsLob(boolean enabled) {
-        return new OracleDialect(majorVersion, enabled, oracleProduct);
+        return new OracleDialect(majorVersion, enabled, oracleProduct,
+                preserveIdentifierCase, dmProduct);
+    }
+
+    @Override
+    public SqlDialect withPreserveIdentifierCase(boolean preserve) {
+        return new OracleDialect(majorVersion, emptyStringAsLob, oracleProduct, preserve,
+                dmProduct);
+    }
+
+    @Override
+    public boolean preservesIdentifierCase() {
+        return preserveIdentifierCase;
+    }
+
+    @Override
+    public boolean hasNativeAutoIncrement(ColumnMeta column) {
+        return dmNativeAutoIncrement(column);
     }
 
     @Override
     public SqlDialect forProduct(DatabaseType type) {
-        return new OracleDialect(majorVersion, emptyStringAsLob, type == DatabaseType.ORACLE);
+        return new OracleDialect(majorVersion, emptyStringAsLob, type == DatabaseType.ORACLE,
+                preserveIdentifierCase, type == DatabaseType.DM);
     }
 
     /**
@@ -120,7 +159,8 @@ public class OracleDialect extends AbstractSqlDialect {
         // A name genuinely containing a quote char is an explicitly quoted, possibly
         // mixed-case object — folding it would point the DDL at a different object, so such
         // names pass through with only the quote-doubling escape applied upstream.
-        return name.indexOf('"') >= 0 ? name : name.toUpperCase(Locale.ROOT);
+        return preserveIdentifierCase || name.indexOf('"') >= 0
+                ? name : name.toUpperCase(Locale.ROOT);
     }
 
     /**
@@ -130,6 +170,31 @@ public class OracleDialect extends AbstractSqlDialect {
      */
     private boolean supportsIdentity() {
         return majorVersion != null && majorVersion >= 12;
+    }
+
+    /**
+     * DM8's {@code AUTO_INCREMENT}, usable where DM accepts it: the column must be a numeric
+     * integer type and part of the primary key. (DM rejects the clause elsewhere with
+     * "AUTO_INCREMENT列必须为主键约束的一部分" / "无效的数据类型".) Unlike IDENTITY it accepts
+     * explicit values, and its counter follows the largest explicit value, so the sync can
+     * keep writing source ids and needs no reseed.
+     *
+     * <p>DM's integer spellings matter: Oracle's {@code NUMBER(n)} is rejected for this
+     * attribute, so the mapped type is replaced with INT / BIGINT here.
+     */
+    private boolean dmNativeAutoIncrement(ColumnMeta col) {
+        return dmProduct && col.isPrimaryKey() && dmAutoIncrementIntegerType(col) != null;
+    }
+
+    /** The integer type DM accepts for AUTO_INCREMENT, or null when the source is not one. */
+    private static String dmAutoIncrementIntegerType(ColumnMeta col) {
+        return switch (col.getJdbcType()) {
+            // A signed 32-bit INT holds TINYINT/SMALLINT/INT, and Connector/J reports
+            // MySQL's INT UNSIGNED as BIGINT, so nothing narrow is lost.
+            case java.sql.Types.TINYINT, java.sql.Types.SMALLINT, java.sql.Types.INTEGER -> "INT";
+            case java.sql.Types.BIGINT -> "BIGINT";
+            default -> null;
+        };
     }
 
     @Override
@@ -383,6 +448,9 @@ public class OracleDialect extends AbstractSqlDialect {
      */
     @Override
     protected String autoIncrementColumnType(ColumnMeta col, DatabaseType sourceType) {
+        if (dmNativeAutoIncrement(col)) {
+            return dmAutoIncrementIntegerType(col) + " AUTO_INCREMENT";
+        }
         String type = mapType(col, sourceType);
         return supportsIdentity()
                 ? type + " GENERATED BY DEFAULT ON NULL AS IDENTITY"
@@ -395,7 +463,9 @@ public class OracleDialect extends AbstractSqlDialect {
         List<String> stmts = new ArrayList<>();
         if (!supportsIdentity()) {
             for (ColumnMeta col : table.getColumns()) {
-                if (col.isAutoIncrement()) {
+                // A native DM AUTO_INCREMENT column already increments itself; a companion
+                // sequence+trigger would draw from a second, independent generator.
+                if (col.isAutoIncrement() && !dmNativeAutoIncrement(col)) {
                     stmts.addAll(legacyIdentityDdl(schema, tableName, col));
                 }
             }
@@ -529,9 +599,14 @@ public class OracleDialect extends AbstractSqlDialect {
     @Override
     public String getAddColumnSql(String schema, String table, ColumnMeta column,
                                   DatabaseType sourceType) {
-        // Oracle's ADD takes no COLUMN keyword.
-        return "ALTER TABLE " + qualify(schema, table) + " ADD ("
-                + columnDefinition(column, sourceType) + ")";
+        // Oracle's ADD takes no COLUMN keyword. On DM an added column cannot carry
+        // AUTO_INCREMENT: DM requires that attribute to be part of the table's existing
+        // primary key. Add the plain type and let getPostColumnChangeDdl install the
+        // sequence+trigger emulation instead.
+        String definition = dmProduct && column.isAutoIncrement()
+                ? columnDefinition(column, sourceType, mapType(column, sourceType), false)
+                : columnDefinition(column, sourceType);
+        return "ALTER TABLE " + qualify(schema, table) + " ADD (" + definition + ")";
     }
 
     @Override

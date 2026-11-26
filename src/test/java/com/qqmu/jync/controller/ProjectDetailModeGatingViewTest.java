@@ -25,6 +25,8 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.CaptureStrategy;
+import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncProgress;
@@ -350,6 +352,53 @@ class ProjectDetailModeGatingViewTest {
                 .contains("disabled")
                 .contains("only run with log-based change capture");
         assertThat(buttonTag(page, "/api/projects/1/sync-now")).contains("disabled");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void theExternalBaselineModalExplainsTheBinlogPosition() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.BINLOG_CDC, false);
+
+        String page = renderDetail();
+
+        assertThat(page).contains("id=\"external-baseline-modal\"");
+        assertThat(page).contains("SHOW MASTER STATUS");
+        assertThat(page).contains("digit");
+        assertThat(page).contains("@@GLOBAL.gtid_executed");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void theExternalBaselineModalExplainsThePostgresLsn() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.PG_LOGICAL_CDC, false);
+
+        assertThat(renderDetail()).contains("pg_current_wal_lsn");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void anOracleFamilyTargetOffersTheIdentifierCaseSwitch() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
+        stubTargetType(DatabaseType.DM);
+
+        assertThat(renderDetail()).contains("name=\"preserveTargetIdentifierCase\"");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void aNonOracleTargetDoesNotOfferTheIdentifierCaseSwitch() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
+        stubTargetType(DatabaseType.MYSQL);
+
+        assertThat(renderDetail()).doesNotContain("preserveTargetIdentifierCase");
+    }
+
+    private void stubTargetType(DatabaseType type) {
+        DatabaseConfig target = new DatabaseConfig();
+        target.setId(3L);
+        target.setName("target");
+        target.setType(type);
+        when(databaseConfigService.findById(3L)).thenReturn(Optional.of(target));
     }
 
     private static String buttonTag(String page, String action) {

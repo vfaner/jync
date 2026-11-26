@@ -220,7 +220,8 @@ public final class CdcEventApplier {
         if (targetNames == null) {
             try {
                 targetNames = TargetTableVerifier.columnNamesByUpperName(targetConn,
-                        ctx.getTargetSchema(), binding.getTargetTable(), ctx.getTargetType());
+                        ctx.getTargetSchema(), binding.getTargetTable(), ctx.getTargetType(),
+                        ctx.targetPreservesIdentifierCase());
             } catch (SQLException | RuntimeException e) {
                 // Metadata must never stop the stream: a target we cannot inspect writes
                 // exactly as before and lets the database decide.

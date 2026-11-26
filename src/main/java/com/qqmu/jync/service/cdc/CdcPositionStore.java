@@ -275,12 +275,22 @@ public class CdcPositionStore {
             }
             if (pending.file != null && pending.pos != null) {
                 int cmp = compareBinlog(pending.file, pending.pos, file, pos);
-                if (cmp < 0) {
+                if (cmp < 0 && gtidSet == null) {
                     log.warn("CDC position for project {} not advanced to {}:{}: behind the"
                             + " stored position {}:{} — refusing to rewind (replay bug or"
                             + " competing writer?)", projectId, file, pos,
                             pending.file, pending.pos);
                     return;
+                }
+                if (cmp < 0) {
+                    // GTID resume ignores file/pos, and a failover may put the project on a
+                    // primary whose binlog numbering restarts lower. Rejecting the advance
+                    // would freeze file, pos AND gtid, so the next restart resumes from a
+                    // stale GTID set and eventually PARKS as PURGED while the target is
+                    // current. The GTID set is the authority here; replay is idempotent.
+                    log.info("CDC position for project {} moves to {}:{} although the binlog"
+                            + " number is lower than the stored {}:{} — GTID resume is"
+                            + " authoritative", projectId, file, pos, pending.file, pending.pos);
                 }
                 if (cmp == 0) {
                     return; // same file, same pos — already there, nothing to record
@@ -478,13 +488,14 @@ public class CdcPositionStore {
             } else {
                 int cmp = compareBinlog(position.getBinlogFile(), position.getBinlogPos(),
                         pending.file, pending.pos);
-                if (cmp < 0) {
+                boolean gtidMode = pending.gtidSet != null || position.getGtidSet() != null;
+                if (cmp < 0 && !gtidMode) {
                     log.warn("CDC position for project {} not advanced to {}:{}: behind the"
                             + " stored position {}:{} — refusing to rewind (replay bug or"
                             + " competing writer?)", projectId, pending.file, pending.pos,
                             position.getBinlogFile(), position.getBinlogPos());
                     rewound = true;
-                } else if (cmp > 0) {
+                } else if (cmp != 0) {
                     position.setBinlogFile(pending.file);
                     position.setBinlogPos(pending.pos);
                     if (pending.gtidSet != null) {

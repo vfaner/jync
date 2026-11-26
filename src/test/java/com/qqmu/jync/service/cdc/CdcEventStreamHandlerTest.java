@@ -996,4 +996,46 @@ class CdcEventStreamHandlerTest {
 
         assertThat(advanced).isEmpty();            // prepared 分支的行还没提交:不许越过
     }
+
+    @Test
+    void aCompressedTransactionPayloadCommitsOnceAtThePayloadEnd() {
+        TableMapEventData map = new TableMapEventData();
+        map.setTableId(31L);
+        map.setDatabase("app");
+        map.setTable("orders");
+        WriteRowsEventData write = new WriteRowsEventData();
+        write.setTableId(31L);
+        write.setIncludedColumns(java.util.BitSet.valueOf(new long[]{0b11L}));
+        write.setRows(List.<Serializable[]>of(row(7L, "inside-payload")));
+        XidEventData xid = new XidEventData();
+        xid.setXid(1L);
+        List<Event> inner = List.of(
+                event(EventType.TABLE_MAP, map, 0L),
+                event(EventType.EXT_WRITE_ROWS, write, 0L),
+                event(EventType.XID, xid, 0L));
+
+        handler.dispatchTransactionPayloadEvents(inner, 900L);
+
+        assertThat(sink.changes).hasSize(1);
+        assertThat(sink.marks).hasSize(1);
+        assertThat(sink.marks.get(0).getPos()).isEqualTo(900L);
+    }
+
+    @Test
+    void aPartialRowImageParksInsteadOfSkippingEveryChange() {
+        tableMap(32L, "app", "orders");
+        WriteRowsEventData write = new WriteRowsEventData();
+        write.setTableId(32L);
+        // binlog_row_image=MINIMAL: only the changed column is in the image.
+        write.setIncludedColumns(java.util.BitSet.valueOf(new long[]{0b10L}));
+        write.setRows(List.<Serializable[]>of(new Serializable[] {
+                "only-name".getBytes(StandardCharsets.UTF_8)}));
+
+        assertThatThrownBy(() -> handler.onEvent(
+                event(EventType.EXT_WRITE_ROWS, write, 700L)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("CDC schema drift")
+                .hasMessageContaining("binlog_row_image must be FULL");
+        assertThat(sink.changes).isEmpty();
+    }
 }

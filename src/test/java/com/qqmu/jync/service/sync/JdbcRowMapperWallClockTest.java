@@ -345,13 +345,13 @@ class JdbcRowMapperWallClockTest {
     @Test
     void theSafetyLagSubtractsFromAWallClockWatermark() {
         assertThat(DataSyncService.subtractSafetyLag("1948-05-01 00:00:00", 1000))
-                .isEqualTo("1948-04-30 23:59:59");
+                .isEqualTo("1948-04-30 23:59:58");
     }
 
     @Test
     void theSafetyLagStillSubtractsFromAnInstantWatermark() {
         assertThat(DataSyncService.subtractSafetyLag("2026-11-05T10:00:00Z", 1000))
-                .isEqualTo("2026-11-05T09:59:59Z");
+                .isEqualTo("2026-11-05T09:59:58Z");
     }
 
     @Test

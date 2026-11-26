@@ -66,6 +66,15 @@
                 <span class="help" th:text="#{option.autoSyncNewTablesHelp}">help</span>
             </span>
         </label>
+        <label class="switch" th:if="${!isRedisTarget and isOracleTarget}">
+            <input type="checkbox" name="preserveTargetIdentifierCase" value="true"
+                   th:checked="${config.preserveTargetIdentifierCase}">
+            <span class="track"></span>
+            <span class="switch-text">
+                <strong><span th:text="#{option.preserveTargetIdentifierCase}">Preserve source identifier case</span></strong>
+                <span class="help" th:text="#{option.preserveTargetIdentifierCaseHelp}">help</span>
+            </span>
+        </label>
         <label class="switch" th:if="${cdcActive}">
             <input type="checkbox" name="cdcAutoAddColumns" value="true"
                    th:checked="${config.cdcAutoAddColumns}">

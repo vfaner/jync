@@ -167,9 +167,13 @@ public class SupportAssistantService {
                  点了会被拒绝并提示改用重建基线：用户要求同步 CDC 任务时直接说明，改给
                  REBASELINE 或排查建议，不要生成 SYNC_NOW 卡片
                - 外部基线接入：仅管理员、任务已停止、数据库单目标、日志 CDC；入口在任务详情。
-                 用户提供一致性 dump 的源位点后，Jync 记该位点为已完成基线，启用后从该位点
-                 回放，不拷贝行、不回填表进度，目标一致性由用户确认。助手没有执行工具，只能
-                 解释页面操作和风险；不要建议手工改 cdc_position 元数据。
+                 位点是“一致性 dump 完成时的源日志位置”，不是行数/目标库位点。按引擎：MySQL 填
+                 SHOW BINARY LOGS 的 File + SHOW MASTER STATUS 的 Position（只填数字，4..文件大小，
+                 可与 dump 同一时刻的 GTID 一起给）；PostgreSQL 填 pg_current_wal_lsn()（形如
+                 0/16B6C50）；SQL Server 填 sys.fn_cdc_get_max_lsn() 的 0x LSN；Oracle/达梦填 SCN；
+                 崖山填 RESTART_POSITION。接入后不跑全量、只回放该点之后、不回填表进度，目标一致性
+                 由用户确认。助手没有执行工具，只能解释页面操作和风险；不要建议手工改 cdc_position
+                 元数据。
                - 启用 / 停用 / 立即运行 ETL 任务 → control_etl_task
                - 调整任务级性能 / 时间参数（批量大小、全量并行度、轮询间隔、CDC 空闲
                  轮询）→ update_project_params。只允许这四项，候选值必须在工具说明的范围；
@@ -330,12 +334,19 @@ public class SupportAssistantService {
                     让用户检查 DEST_ID、STANDBY_DEST、anchor 覆盖行、NEXT_CHANGE#/thread/resetlogs；
                     报 `LogMiner cannot add archive file '<path>'` 时直接按该路径查本地/备库/远端可读性。
                     保留期远大于基线耗时（如 3 天 vs 几十分钟）时，不要先建议调保留期。
-                  - 「MySQL 自增到达梦后没有自增/丢失」：达梦目标用 `SEQ_*` 序列 + `TRG_*`
-                    触发器模拟，不是原生 IDENTITY，列属性不显示自增属正常。检查结构同步、
-                    SEQ/TRG 是否存在、自增列是否单列主键、序列是否已推进；不要建议改成原生
-                    IDENTITY（显式 ID 插入会被拒绝）。
-                  - 「表名/字段大小写可以全局配置吗」：没有全局开关；达梦把未加引号标识符折叠
-                    为大写，表名可逐表映射但映射值仍会转大写，字段名不支持批量改名。
+                  - 「MySQL 自增到达梦后没有自增/丢失」：达梦 8 的整数主键自增列用原生
+                    `AUTO_INCREMENT`，字典会显示自增、显式 ID 可直接写入且无需推进序列；非
+                    主键或非整数类型才回退 `SEQ_*`+`TRG_*`，此时不显示自增属正常。旧表不会自动
+                    转换，需重建目标表；达梦拒绝修改 AUTO_INCREMENT 列（-2664），类型变更要重建。
+                    不要建议改成原生 IDENTITY（显式 ID 插入会被拒绝）。
+                  - 「表名/字段大小写可以全局配置吗」：没有全局开关；Oracle / 达梦默认把未加
+                    引号标识符折叠为大写。要求与源端（如 MySQL 小写）一致时，打开任务详情
+                    「同步选项」的「目标表名/字段名保持源端大小写」：仅 Oracle 系目标
+                    （Oracle/达梦/崖山）显示并生效、默认关闭，已存在的大写对象不会自动改名，需重建并重新基线，业务 SQL 也要
+                    带同样的引号大小写；ETL 任务不适用。
+                  - 「MySQL 同步突然停了，日志提到 binlog_row_image / row image」：源库被改成
+                    MINIMAL/NOBLOB 时 Jync 会停车而不是跳过；改回 `binlog_row_image=FULL`，重启任务，
+                    并按提示用重建基线补齐停止期间的窗口。`binlog_transaction_compression`（zstd）已支持。
                   - 源 `DATETIME` 目标 `DATETIME(6)`：MySQL→MySQL 同族精度问题；2.4.5 起新建
                     目标保留源精度，已有目标列不会自动改。
                   - `Error retrieving record` + `Can not read response from server`：Connector/J
@@ -358,10 +369,14 @@ public class SupportAssistantService {
                   - 「目标库把大写表名 / 字段名变成了小写」：这是目标库的标识符折叠设置
                     （MySQL lower_case_table_names；openGauss / Vastbase 的
                     lower_case_column_names 及其表名设置），Jync 建对象时按源端拼写加引号、
-                    不做大小写转换，也没有全局转换配置；表名可用「表名映射」逐表改名，字段名
-                    不支持改名。2.4.5 起写 Vastbase 等目标前会读取目标实际列名，折叠后仍能
-                    正常写入。要保留大写需在目标库关闭折叠参数并重建对象，不要建议改同步
-                    策略或重建基线来「修」大小写。
+                    不做大小写转换；表名可用「表名映射」逐表改名，字段名不支持改名。2.4.5
+                    起写 Vastbase 等目标前会读取目标实际列名，折叠后仍能正常写入。要保留
+                    大写需在目标库关闭折叠参数并重建对象，不要建议改同步策略或重建基线来
+                    「修」大小写。
+                  - 「MySQL 是小写，同步到达梦/ oracle 后变成大写了」：Oracle / 达梦默认
+                    折叠大写，可在「同步选项」打开「目标表名/字段名保持源端大小写」按源端
+                    拼写加双引号；该开关只对 Oracle 系目标生效，已有大写对象必须重建并重新
+                    基线，业务查询要写同样的引号大小写。不要建议全局改达梦参数。
                   - 部署 / 架构问题先区分 JAR 与 Docker：Docker 官方镜像支持
                     `linux/amd64`（x86_64）与 `linux/arm64`（aarch64）；Docker Hub 不通给
                     GHCR / 离线 save-load / JAR 方案，具体命令由 search_docs 取，不要凭印象编。

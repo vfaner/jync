@@ -137,6 +137,10 @@ class OracleDialectIdentityTest {
                 List.of(new OracleDialect(), new GenericSqlDialect()),
                 new GenericSqlDialect());
         TableMeta table = cjkTableWithIdentity();
+        // A non-key auto-increment column: DM's native AUTO_INCREMENT only accepts a
+        // primary-key integer column, so this path still generates the legacy pair.
+        table.getColumns().get(0).setPrimaryKey(false);
+        table.setPrimaryKeys(List.of());
 
         List<String> extra = factory.forType(DatabaseType.DM, 11)
                 .getPostCreateTableDdl(table, null, "客户订单明细", DatabaseType.MYSQL);

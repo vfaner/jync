@@ -124,12 +124,8 @@ public class BinlogClientFactory {
     private static EventDeserializer deserializer() {
         // Ruling R5 completion: CdcEventDeserializers replaces the stock TIME2 wire
         // decoding, which drops the sign of negative durations (-10:30:00 arrives as
-        // +1013:34:00). Every other event type keeps the library default.
-        EventDeserializer deserializer = CdcEventDeserializers.newDeserializer();
-        deserializer.setCompatibilityMode(
-                EventDeserializer.CompatibilityMode.DATE_AND_TIME_AS_LONG_MICRO,
-                EventDeserializer.CompatibilityMode.INVALID_DATE_AND_TIME_AS_MIN_VALUE,
-                EventDeserializer.CompatibilityMode.CHAR_AND_BINARY_AS_BYTE_ARRAY);
-        return deserializer;
+        // +1013:34:00). The same deserializer decodes compressed payloads so a transaction
+        // split across a TRANSACTION_PAYLOAD does not silently regress to the stock decoder.
+        return CdcEventDeserializers.newClientDeserializer();
     }
 }

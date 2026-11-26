@@ -375,9 +375,19 @@ public class SyncEngine {
 
     DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx)
             throws SQLException {
+        return readSourceMetadata(sourceConn, ctx, true);
+    }
+
+    /**
+     * @param reconcileAutoSync false for a read-only rehearsal (precheck): discovering a new
+     *     table must not mutate the saved selection or write a change-log row there
+     */
+    DatabaseMeta readSourceMetadata(Connection sourceConn, SyncContext ctx,
+                                    boolean reconcileAutoSync)
+            throws SQLException {
         // Auto-sync is a polling-path feature in this version. Log-CDC projects reconcile
         // through their consumer's per-table baseline, not through a polling metadata read.
-        if (autoSync != null && ctx.getConfig().isAutoSyncNewTables()
+        if (reconcileAutoSync && autoSync != null && ctx.getConfig().isAutoSyncNewTables()
                 && ctx.getRepairTables() == null
                 && !ctx.getConfig().getCaptureStrategyOrDefault().isLogCdc()) {
             autoSync.reconcile(ctx.getProject(), ctx.getConfig(),
@@ -820,7 +830,7 @@ public class SyncEngine {
         String reason;
         try {
             reason = TargetTableVerifier.verify(targetConn, schema, targetTable, table,
-                    ctx.effectiveTargetType());
+                    ctx.effectiveTargetType(), ctx.targetPreservesIdentifierCase());
         } catch (SQLException e) {
             log.debug("Could not verify target table {} columns: {}", targetTable, e.getMessage());
             return true;
@@ -853,7 +863,8 @@ public class SyncEngine {
                                               TableMeta table, String targetTable, String schema) {
         try {
             List<String> extras = TargetTableVerifier.extraNotNullColumnsWithoutDefault(
-                    targetConn, schema, targetTable, table, ctx.effectiveTargetType());
+                    targetConn, schema, targetTable, table, ctx.effectiveTargetType(),
+                    ctx.targetPreservesIdentifierCase());
             if (!extras.isEmpty()) {
                 log.warn("Project '{}': target table {} has column(s) {} declared NOT NULL with"
                         + " no default that the source does not provide; inserts that omit them"
@@ -911,7 +922,7 @@ public class SyncEngine {
                                         String targetTable, SyncContext ctx) {
         try {
             return TargetTableVerifier.verify(targetConn, schema, targetTable, table,
-                    ctx.effectiveTargetType());
+                    ctx.effectiveTargetType(), ctx.targetPreservesIdentifierCase());
         } catch (SQLException e) {
             // 复核不了就以「可用」论处：这是安全网，驱动答不上来不该拦住同步。
             log.debug("Could not re-verify target table {} columns: {}", targetTable,

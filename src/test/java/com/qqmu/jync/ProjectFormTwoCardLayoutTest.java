@@ -29,6 +29,21 @@ class ProjectFormTwoCardLayoutTest {
     }
 
     @Test
+    void theTargetPickerMenuIsStyledAsADropdown() throws Exception {
+        String css = Files.readString(CSS, StandardCharsets.UTF_8);
+
+        // The picker is a script-filled div, not a native <select>; without these rules the
+        // candidates render in normal flow as a row of unstyled buttons.
+        assertThat(css).contains(".target-picker { position: relative; }");
+        assertThat(css).contains(".target-menu {");
+        // The menu is positioned from the input's viewport rect by app.js; absolute
+        // positioning would be clipped by the card and land at the wrong offset.
+        assertThat(css).contains("position: fixed");
+        assertThat(css).contains(".target-menu-item {");
+        assertThat(css).contains(".target-menu-type {");
+    }
+
+    @Test
     void theFanoutSearchStaysCompactInTheCardHead() throws Exception {
         String css = Files.readString(CSS, StandardCharsets.UTF_8);
 

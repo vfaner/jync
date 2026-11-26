@@ -38,15 +38,13 @@ import com.qqmu.jync.service.task.SyncLockService;
 import com.qqmu.jync.service.task.SyncTaskStore;
 
 /**
- * 捕获实例的变更表缺列时必须整实例跳过,绝不能用 NULL 覆盖目标端。
+ * 捕获实例的变更表缺列时必须停车,绝不能用 NULL 覆盖目标端,也不能跳过并推进水位。
  *
  * <p>SQL Server 的 {@code sp_cdc_enable_table @captured_column_list} 可以只捕获部分列,
- * 表在实例创建之后新增的列也不在变更表里。旧实现把缺列的列从行 map 里略去,而应用端
- * (applyNativeUpserts)仍按 binding.columnNames() 绑定全部列——map 里没有的键被
- * JdbcRowMapper 显式绑定成 NULL:UPDATE 静默把目标端该列的值抹成 NULL(列可空时无任何
- * 报错),INSERT 则可能撞 NOT NULL 直到 strike-out。注释写的「applier skips them」并不
- * 成立。受影响的就是变更表本身缺失的列,与之无关的行同样无法安全应用,因此整个捕获
- * 实例跳过并计数告警。
+ * 表在实例创建之后新增的列也不在变更表里。应用端按 binding.columnNames() 绑定全部列,
+ * map 里没有的键会被 JdbcRowMapper 显式绑定成 NULL:UPDATE 静默抹掉目标值,INSERT 可能
+ * 撞 NOT NULL。跳过整个窗口并把水位推进会把这张表永久变成“看不见”,因此现在抛
+ * SCHEMA_DRIFT 停车,要求重建捕获实例。
  */
 class SqlServerCdcConsumerMissingColumnsTest {
 
@@ -167,15 +165,16 @@ class SqlServerCdcConsumerMissingColumnsTest {
     }
 
     @Test
-    void captureInstanceMissingABindingColumnIsSkippedInsteadOfNullingTheTarget() throws Exception {
-        consumer.drain(sourceConn, FROM_LSN);
+    void captureInstanceMissingABindingColumnParksInsteadOfSkippingTheWindow() throws Exception {
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                        () -> consumer.drain(sourceConn, FROM_LSN))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("CDC schema drift")
+                .hasMessageContaining("does not capture column(s) amount");
 
         // 不应用任何行:绑定 amount 只会把目标端该列覆盖成 NULL。
         verify(targetConn, never()).prepareStatement(anyString());
         verify(targetConn, never()).commit();
-        // 但事件不能无声消失:计数 + 状态面板点名该表。
-        assertThat(stats.snapshot().get("skippedUnsupported")).isEqualTo(1L);
-        assertThat(stats.unsupportedTables()).contains("dbo.t1");
     }
 
     @Test

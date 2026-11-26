@@ -96,12 +96,17 @@ sync.delete-compare-max-rows 可分页比较（默认 0 关闭，代价是每轮
   lower_case_table_names（初始化时固定，1 / 2 会把表名存成小写）；openGauss / Vastbase
   一类产品的 lower_case_column_names（开启时连引号里的列名也会变小写）及表名相关设置。
   这是数据库自己的行为，Jync 无法按会话覆盖。
-- Jync 没有「统一转小写 / 保留大写」的配置项。表名可以用任务详情的「表名映射」逐表
-  改名；字段名不支持改名，列清洗规则只改值、不改列名。
+- Oracle 系目标（Oracle / 达梦 / 崖山）默认把裸标识符折叠成大写。若业务 SQL 依赖与
+  源端（例如 MySQL 的小写 user_info）一致的大小写，可在任务详情「同步选项」打开「目标
+  表名/字段名保持源端大小写」：之后按源端拼写加双引号（`"user_info"`），表名映射里的名字也保留写入时的
+  拼写。该开关只影响 Oracle 系目标，默认关闭；非 Oracle 系目标不显示该开关；已存在的大写目标对象不会自动改名，需重建
+  目标表并重新基线；业务 SQL 查询时也必须带同样的引号大小写。ETL 任务不在此开关范围内。
+- 不开该开关时，表名仍可用「表名映射」逐表改名（映射后按目标方言折叠）；字段名不支持
+  逐列改名，列清洗规则只改值、不改列名。
 - 2.4.5 起写 Vastbase 等目标前会读取目标目录里的实际列名并按其拼写生成 SQL，所以目标
   折叠成小写后同步仍能正常写入，只是对象名不是大写。
-- 要保留大写：先在目标库关闭对应的折叠参数（通常是初始化或重启级设置），再重建这些
-  表并重新同步；已经建好的小写对象不会自动改名。
+- 要保留大写（非 Oracle / 达梦目标）：先在目标库关闭对应的折叠参数（通常是初始化或
+  重启级设置），再重建这些表并重新同步；已经建好的小写对象不会自动改名。
 
 ## 全量到底做了什么
 
@@ -290,7 +295,7 @@ Cron：同步任务用 Quartz 语法，6 段或 7 段（含年份）；ETL 与�
 
 ## MySQL CDC 前提
 
-- MySQL 5.7+；log_bin=ON、binlog_format=ROW、binlog_row_image=FULL。
+- MySQL 5.7+；log_bin=ON、binlog_format=ROW、binlog_row_image=FULL。若运行中改成 MINIMAL/NOBLOB，Jync 会在行事件处停车并提示改回 FULL，而不是跳过；MySQL 8.0.20+ 的 binlog_transaction_compression（zstd）已支持。
 - 账号需 REPLICATION SLAVE 与 REPLICATION CLIENT（MariaDB 10.5 起该权限名为 BINLOG MONITOR）。
 - 任何 MySQL 线协议内核（MariaDB、TiDB、OceanBase、GBase，或声明为 MySQL 的自定义连接）都能
   通过 MySQL 系列校验，但连接测试必须真的解出一条 binlog 事件才算通过。
@@ -355,9 +360,15 @@ Cron：同步任务用 Quartz 语法，6 段或 7 段（含年份）；ETL 与�
 ## 外部基线接入（跳过首次全量）
 
 - 入口在任务详情，仅管理员可见；任务必须已停止、数据库单目标、日志 CDC。Redis 缓存目标与一源多目标不支持。助手只能解释，不能执行。
-- 适用：目标已由**一致性 dump** 灌好，并且知道 dump 对应的源位点。Jync 把该位点记为已完成基线，启用后从该位点回放，不拷贝任何行，也不回填表进度；目标数据是否完整由操作者确认。
-- 位点按引擎：MySQL 填 `SHOW BINARY LOGS` 的 File 名称 + 位点（4 到文件大小之间，可选 GTID；GTID 会与源库 `gtid_executed` 校验为子集）；PostgreSQL 填 `pg_lsn`，slot 必须存在且 `restart_lsn` / `confirmed_flush_lsn` 不得晚于填写值；SQL Server 填 `0x` LSN，选中表必须已有 CDC 捕获实例且不得晚于 `fn_cdc_get_max_lsn()`；Oracle/达梦填 SCN，必须介于最老可挖 redo 与当前 SCN 之间；崖山填 `RESTART_POSITION`，必须与现有唯一 YStream 服务的重启位点一致。
-- 接入会清空旧位点、旧全量 checkpoint 和错误帽；校验或清理失败不会把基线标成完成。外部基线后 `project_table_status` 可能显示 `NOT_STARTED`，这是正常现象，不代表没有同步。之后要重灌请用「重建基线」。
+- **位点是什么**：源端日志流里的一个位置（MySQL 是“binlog 文件名 + 字节偏移”），表示“这份目标数据已经包含到这一刻为止的变更”。Jync 不跑全量，启用后只回放该位置之后的变更；位置之前的行必须已经由你的 dump/备份工具写进目标。它不是行数、不是目标库位点，表进度也不会回填。
+- **前提**：先做一致性 dump，并在同一时刻记录源位点。常见做法：`mysqldump --single-transaction --source-data=2`（旧版本 `--master-data=2`）把 `CHANGE REPLICATION SOURCE`/`CHANGE MASTER` 的 FILE/POS/GTID 写进 dump 文件头；Percona XtraBackup 看 `xtrabackup_binlog_info`；或用 `FLUSH TABLES WITH READ LOCK` → `SHOW MASTER STATUS` → dump → `UNLOCK TABLES`。目标和位点必须来自同一份 dump。
+- **MySQL 示例**：文件名 `mysql-bin.000123`（只填 `SHOW BINARY LOGS` 的 File 名，不填路径）；位点 `7`（只填数字，范围 4 到该文件大小；位点=文件大小表示已到文件末尾，后续事件在下一个文件，Jync 会接着读）；GTID 可选，如 `3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100`，Jync 会核对它是源库 `@@GLOBAL.gtid_executed` 的子集，即使填了 GTID，文件与位点仍会校验。
+- **MySQL 常见错误**：用 dump 之后的 `SHOW MASTER STATUS`（会漏掉 dump 期间的变更）；把位点填成行数、文件大小或 event 序号；文件和位点不是同一次查询的结果；binlog 已被 `PURGE`（报文件不存在）；GTID 与位点不是同一时刻。
+- PostgreSQL：填 `SELECT pg_current_wal_lsn();`（形如 `0/16B6C50`）或 slot 的 `confirmed_flush_lsn`；项目 slot 必须在 dump 前创建，填写值不能早于 `restart_lsn` / `confirmed_flush_lsn`，否则 dump 与 slot 之间有空档，会被拒绝。
+- SQL Server：填 `SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)`（`0x` 开头、共 22 字符）；选中表必须已有 CDC 捕获实例，位点不能晚于源库当前最大 CDC LSN。
+- Oracle / 达梦：填 SCN 数字（Oracle `SELECT CURRENT_SCN FROM V$DATABASE`；达梦查询当前 SCN），不能早于源库仍可挖掘的最老 redo，也不能晚于当前 SCN。
+- 崖山：填现有唯一 YStream 服务的 `RESTART_POSITION`，必须完全一致。
+- 接入会清空旧位点、旧全量 checkpoint 和错误帽；校验或清理失败不会把基线标成完成。外部基线后 `project_table_status` 可能显示 `NOT_STARTED`，这是正常现象，不代表没有同步。之后要重灌请用「重建基线」；接入前请确认目标数据与位点一致，Jync 不做全量校验。
 
 ## 数据没有继续同步怎么查
 
@@ -408,7 +419,7 @@ ETL 任务用客户自己的取数 SQL 复制结果行，支持覆盖、追加�
 - 运行中不能编辑；同一任务由执行租约防重入，同源同目标可组成批次共享连接与调度。
 - preSql 在目标表创建后、写入方式的 DELETE 与取数之前执行，并立即提交；从检查点续跑时不会重放。APPEND 成功后保留检查点，所以 preSql 通常只在第一次运行执行；OVERWRITE 每次运行都会清检查点，preSql 每次都会执行。postSql 在写入完成后执行；两者共用变量替换与脚本校验。
 - 源连接与目标连接不能指向同一个物理库：同类型、同 host/端口/库/schema 的两条连接记录也会被拒绝（同服务器不同 schema 允许）。
-- 目标 schema/表名按目标方言加引号：MySQL 反引号、PostgreSQL/Oracle/DM 双引号、SQL Server 方括号；Oracle 系按大写折叠，PostgreSQL 保留配置大小写。
+- 目标 schema/表名按目标方言加引号：MySQL 反引号、PostgreSQL/Oracle/DM 双引号、SQL Server 方括号；Oracle 系按大写折叠，PostgreSQL 保留配置大小写。ETL 任务不读取实时同步里的「保持源端大小写」开关，Oracle / 达梦目标仍按大写建表写入。
 - MongoDB 原生源按采样文档推断目标列；运行中遇到采样未覆盖的字段会中止并报错，不会静默丢字段。Oracle 预检中的 ORA-00942 只给警告：既可能是表不存在，也可能是账号看不到。
 
 ## 结构同步
@@ -786,10 +797,11 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 
 ## MySQL 自增同步到达梦
 
-- 达梦目标不使用原生 IDENTITY。Jync 为目标表创建 `SEQ_<表>_<列>` 序列和 `TRG_<表>_<列>` BEFORE INSERT 触发器，只在插入值为 NULL 时取序列；源端的显式 ID 会原样写入。目标字典不会显示“自增”，这是正常现象，不代表自增丢失。
-- 首次全量完成后，若自增列是单列主键，Jync 会把序列推进到 `MAX(id)+1`；复合主键或非主键自增列不会自动推进，目标端无 ID 插入可能从 1 开始撞主键。
-- 目标没有对应 SEQ/TRG 时检查：任务是否开启「同步结构」；目标表是否手工预建且结构同步关闭；源端 MySQL 的 AUTO_INCREMENT 是否被元数据读到；是否是旧版本/旧基线。需要重灌时用「重建基线」。不要建议改成达梦原生 IDENTITY——显式 ID 插入会被拒绝。
-- 达梦目标也没有全局大小写开关：未加引号的标识符会折叠为大写；表名可逐表映射，但映射后的目标名仍会按 Oracle 方言转成大写，不能靠表名映射保留小写；字段名不支持批量改名。不要建议用“全局转小写”解决，容易生成另一个带引号的小写对象。
+- 达梦 8 目标：**整数类型且属于主键**的自增列使用原生 `AUTO_INCREMENT`（实测 8.1.2.128）。目标字典会显示自增；源端显式 ID 可以直接写入，无需 `SET IDENTITY_INSERT`；计数器自动跟随最大显式值（包括批量 INSERT 和 MERGE），全量后不需要推进序列。显式 0 会被当作“生成值”，与 MySQL 默认行为一致。
+- 非主键自增列、或类型不是整数（例如 Oracle 系来源的 NUMBER 自增）仍使用 `SEQ_<表>_<列>` + `TRG_<表>_<列>` 触发器模拟，目标字典不显示“自增”属正常。旧版/既有表不会被自动转换，需要原生属性时重建目标表并重新基线。
+- 达梦不允许修改 `AUTO_INCREMENT` 列（`试图修改自增列`，错误 -2664），因此这类列的类型变更会失败并留在变更日志；需要先重建目标表（或改由人工用目标端允许的方式调整），不要反复重试 MODIFY。不要建议改成达梦原生 IDENTITY——显式 ID 插入会被拒绝。
+- 目标没有对应 SEQ/TRG 时检查：任务是否开启「同步结构」；目标表是否手工预建且结构同步关闭；源端 MySQL 的 AUTO_INCREMENT 是否被元数据读到；是否是旧版本/旧基线。需要重灌时用「重建基线」。
+- 达梦目标默认把未加引号的标识符折叠为大写。若要求与源端（如 MySQL 小写）一致，打开任务详情「同步选项」里的「目标表名/字段名保持源端大小写」：之后按源端/映射里的拼写加双引号建对象并写列，业务 SQL 也要带同样的引号大小写。该开关只对 Oracle 系目标显示并生效、默认关闭，已存在的大写对象不会自动改名，需重建目标表并重新基线；不要建议改达梦全局参数来转小写，容易生成另一个带引号的小写对象。
 
 ## LogMiner ORA-01291 反复重建仍失败
 

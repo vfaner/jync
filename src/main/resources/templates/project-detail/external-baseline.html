@@ -35,12 +35,16 @@
                             <span th:text="#{cdc.external.position}">Position</span><span class="req">*</span>
                         </label>
                         <input type="number" class="input mono" id="external-binlog-pos"
-                               name="binlogPos" required min="4">
+                               name="binlogPos" required min="4" placeholder="7">
+                        <div class="help" th:text="#{cdc.external.positionHint}">Byte offset
+                            from SHOW MASTER STATUS, digits only.</div>
                     </div>
                     <div class="field">
                         <label for="external-gtid" th:text="#{cdc.external.gtid}">GTID set</label>
                         <textarea class="textarea mono" id="external-gtid" name="gtidSet"
                                   rows="2" placeholder="3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100"></textarea>
+                        <div class="help" th:text="#{cdc.external.gtidHint}">GTID from the same
+                            instant as the dump.</div>
                     </div>
                 </th:block>
                 <div class="field" th:if="${externalBaselineMode == 'PG_LOGICAL_CDC'
@@ -56,6 +60,10 @@
                            th:placeholder="${externalBaselineMode == 'PG_LOGICAL_CDC'}
                                            ? '0/16B6C50' : (${externalBaselineMode == 'SQLSERVER_CDC'}
                                                ? '0x0000002a43d7e1a50030' : 'SCN-INST-LSN-OFFSET-BATCH')">
+                    <div class="help" th:if="${externalBaselineMode == 'PG_LOGICAL_CDC'}"
+                         th:text="#{cdc.external.pgLsnHint}">PostgreSQL LSN hint</div>
+                    <div class="help" th:if="${externalBaselineMode == 'SQLSERVER_CDC'}"
+                         th:text="#{cdc.external.sqlserverLsnHint}">SQL Server LSN hint</div>
                     <div class="help" th:if="${externalBaselineMode == 'YSTREAM_CDC'}"
                          th:text="#{cdc.external.ystreamHint}">YStream hint</div>
                 </div>
@@ -64,7 +72,9 @@
                         <span th:text="#{cdc.external.scn}">SCN</span><span class="req">*</span>
                     </label>
                     <input type="number" class="input mono" id="external-scn" name="scn"
-                           required min="1">
+                           required min="1" placeholder="1234567890">
+                    <div class="help" th:text="#{cdc.external.scnHint}">Source SCN when the dump
+                        finished.</div>
                 </div>
                 <label class="check-inline is-wrap">
                     <input type="checkbox" name="confirmed" required>

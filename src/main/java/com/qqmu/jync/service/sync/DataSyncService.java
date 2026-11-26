@@ -831,14 +831,20 @@ public class DataSyncService {
      * reinterpret it in the default zone and shift a pre-1949 gap time.
      */
     static String subtractSafetyLag(String watermark, long lagMs) {
+        // The next window uses a STRICT lower bound (col > cursor). Rewinding by exactly
+        // lagMs therefore excluded a row whose cursor value equals watermark - lagMs — the
+        // left edge of the very margin meant to re-read late commits. One extra second
+        // makes that edge strict-safe for every temporal precision (a second-precision
+        // DATETIME is the case where the excluded edge is a whole second wide).
+        long rewindMs = lagMs + 1_000L;
         try {
             Instant instant = Instant.parse(watermark);
-            return instant.minusMillis(lagMs).toString();
+            return instant.minusMillis(rewindMs).toString();
         } catch (Exception e) {
             String text = watermark.trim();
             try {
                 LocalDateTime wall = LocalDateTime.parse(text.replace(' ', 'T'));
-                return JdbcRowMapper.wallClockToString(wall.minusNanos(lagMs * 1_000_000L));
+                return JdbcRowMapper.wallClockToString(wall.minusNanos(rewindMs * 1_000_000L));
             } catch (Exception notDateTime) {
                 // A DATE/TIME cursor was stored as "yyyy-MM-dd"/"HH:mm:ss". Neither form
                 // parsed above, so the safety margin silently disappeared and rows stamped
@@ -853,7 +859,7 @@ public class DataSyncService {
                     try {
                         java.time.LocalTime original = java.time.LocalTime.parse(text);
                         java.time.LocalTime rewound = original.minusSeconds(
-                                Math.max(1L, lagMs / 1_000L));
+                                Math.max(1L, lagMs / 1_000L) + 1L);
                         // Midnight wrap (00:00:05 - 60s) would jump to 23:59:05 and then
                         // advance past rows in the last minute of the day. Do not rewind.
                         return rewound.compareTo(original) > 0 ? watermark : rewound.toString();
@@ -1366,6 +1372,13 @@ public class DataSyncService {
         for (Object value : key) {
             if (value == null) {
                 sb.append("\u0000null");
+            } else if (value instanceof Double d && !Double.isFinite(d)) {
+                // NaN/Infinity are legal float/double values (and can be keys); BigDecimal
+                // would throw NumberFormatException and turn a targeted repair into a
+                // full-table reload every cycle.
+                sb.append(d);
+            } else if (value instanceof Float f && !Float.isFinite(f)) {
+                sb.append(f);
             } else if (value instanceof Number) {
                 sb.append(new BigDecimal(value.toString()).stripTrailingZeros().toPlainString());
             } else if (value instanceof Timestamp) {
@@ -2307,7 +2320,8 @@ public class DataSyncService {
         }
         try {
             Map<String, String> actual = TargetTableVerifier.actualColumnNames(targetConn,
-                    ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType());
+                    ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType(),
+                    ctx.targetPreservesIdentifierCase());
             targetColumnSpellings.put(key, actual);
             return actual;
         } catch (SQLException | RuntimeException e) {
@@ -2345,7 +2359,8 @@ public class DataSyncService {
         }
         try {
             List<String> uncomparable = TargetTableVerifier.uncomparableColumns(targetConn,
-                    ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType(), nonKey);
+                    ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType(), nonKey,
+                    ctx.targetPreservesIdentifierCase());
             if (!uncomparable.isEmpty()) {
                 log.debug("Target table {} column(s) {} cannot be compared, so Jync rewrites a"
                         + " replayed row even when nothing changed", targetTable, uncomparable);
@@ -4774,6 +4789,27 @@ public class DataSyncService {
         // loaded, the new generator already starts at 1.
         if (maxId < 0) {
             return;
+        }
+
+        if (dialect.hasNativeAutoIncrement(identityColumn)) {
+            try {
+                if (TargetTableVerifier.isAutoIncrementColumn(targetConn, ctx.getTargetSchema(),
+                        targetTable, identityColumn.getName(), ctx.effectiveTargetType(),
+                        ctx.targetPreservesIdentifierCase())) {
+                    // DM8 native AUTO_INCREMENT follows the largest explicit id by itself
+                    // (including MERGE and multi-row INSERT), and DM rejects a MODIFY of such
+                    // a column — reseeding it would only fail.
+                    log.debug("Target {}.{} already uses native auto-increment; no reseed needed",
+                            targetTable, identityColumn.getName());
+                    return;
+                }
+            } catch (SQLException | RuntimeException e) {
+                // Fall through to the legacy reseed: creating an unused sequence/trigger on a
+                // native table is harmless, while skipping the reseed on an older table whose
+                // generator sits at 1 would collide on the first target-side insert.
+                log.debug("Could not read the auto-increment flag of {}.{}: {}", targetTable,
+                        identityColumn.getName(), e.getMessage());
+            }
         }
 
         List<String> statements = dialect.getIdentityReseedDdl(

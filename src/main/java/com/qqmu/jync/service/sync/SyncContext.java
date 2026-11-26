@@ -157,6 +157,14 @@ public class SyncContext {
     }
 
     /**
+     * Whether target object names keep the source spelling (Oracle/DM option). Catalog
+     * lookups that otherwise fold to upper case must use the name verbatim when this is on.
+     */
+    public boolean targetPreservesIdentifierCase() {
+        return targetDialect != null && targetDialect.preservesIdentifierCase();
+    }
+
+    /**
      * Whether this run's target upserts report insert-vs-update counts. Answered from the
      * target's own URL for a custom connection: standing in a representative preset would
      * claim the preset's {@code useAffectedRows} flag that the user's URL may not carry.

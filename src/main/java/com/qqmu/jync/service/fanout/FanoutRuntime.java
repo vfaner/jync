@@ -147,6 +147,16 @@ public final class FanoutRuntime implements AutoCloseable {
             if (next != null && now < next) {
                 continue;
             }
+            Throwable lastError = worker.getLastError();
+            if (lastError instanceof FanoutFatalTargetException) {
+                // Rewinding would re-read the same corrupt record / over-cap spool forever.
+                // Keep the target visible with its error; a restart or a re-baseline fixes it.
+                // The MAX entry also keeps this branch from logging on every supervisor tick.
+                log.error("Fan-out target {} stopped on a non-retryable error; not"
+                        + " restarting this run: {}", target.targetDbId(), lastError.toString());
+                nextRestartAt.put(target.targetDbId(), Long.MAX_VALUE);
+                continue;
+            }
             int attempts = restartAttempts.merge(target.targetDbId(), 1, Integer::sum);
             long delay = Math.min(MAX_RESTART_DELAY_MS,
                     5_000L << Math.min(attempts - 1, 6));

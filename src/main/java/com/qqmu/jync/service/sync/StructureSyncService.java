@@ -208,6 +208,7 @@ public class StructureSyncService {
     public void evictProject(long projectId) {
         String prefix = projectId + "|";
         pendingIndexes.keySet().removeIf(key -> key.startsWith(prefix));
+        commentsInitialized.removeIf(key -> key.startsWith(prefix));
     }
 
     private static String pendingKey(long projectId, String sourceTable) {
@@ -430,7 +431,8 @@ public class StructureSyncService {
             throws SQLException {
         SqlDialect dialect = ctx.getTargetDialect();
         List<ColumnMeta> missing = TargetTableVerifier.missingColumns(targetConn,
-                ctx.getTargetSchema(), targetTable, table, ctx.effectiveTargetType());
+                ctx.getTargetSchema(), targetTable, table, ctx.effectiveTargetType(),
+                ctx.targetPreservesIdentifierCase());
         if (missing.isEmpty()) {
             return List.of();
         }

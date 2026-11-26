@@ -231,7 +231,7 @@ public final class RedisStreamEventTransport implements EventTransport {
                 // Foreign entry (another producer on this key); drop it rather than stall.
                 log.warn("Fan-out Redis stream {} has an entry without an 'e' field;"
                         + " acknowledging and skipping {}", streamKey, message.getId());
-                ackIds(List.of(message.getId()));
+                ackForeign(message.getId());
                 return null;
             }
             try {
@@ -242,8 +242,9 @@ public final class RedisStreamEventTransport implements EventTransport {
                 // Never ack an entry this process cannot read: skipping it would apply a
                 // partial transaction (the COMMIT still arrives) and lose rows silently.
                 // The worker stops with its pending list intact, so nothing is lost.
-                throw new IllegalStateException("fan-out Redis stream entry "
-                        + message.getId() + " cannot be decoded", e);
+                throw new FanoutFatalTargetException("fan-out Redis stream entry "
+                        + message.getId() + " cannot be decoded; the same entry would be"
+                        + " re-read on every rewind — trim or rebuild the fan-out stream", e);
             }
         }
 
@@ -283,22 +284,44 @@ public final class RedisStreamEventTransport implements EventTransport {
             }
             try {
                 connection.sync().xack(streamKey, group, ids.toArray(new String[0]));
-                for (String id : ids) {
-                    if (lastAckedId == null || compareIds(id, lastAckedId) > 0) {
-                        lastAckedId = id;
-                    }
-                }
             } catch (RuntimeException e) {
-                // The entries stay pending; a restart replays them (idempotent) — never a loss.
-                log.debug("Fan-out Redis XACK {} failed: {}", ids, e.toString());
+                // Do NOT swallow this. The entries stay pending, and the worker must stop
+                // and rewind from the PEL: continuing would let a later successful XACK
+                // move lastAckedId past them, and a trim could then delete entries this
+                // target never applied.
+                log.warn("Fan-out Redis XACK {} failed; restarting the target from its"
+                        + " pending list: {}", ids, e.toString());
+                throw e;
+            }
+            for (String id : ids) {
+                if (lastAckedId == null || compareIds(id, lastAckedId) > 0) {
+                    lastAckedId = id;
+                }
+            }
+        }
+
+        /**
+         * A foreign entry (another producer on the same stream key) is acknowledged so it
+         * does not sit in the PEL, but it must not advance the applied watermark: doing so
+         * would let trimming pass Jync events with lower ids that this target has not
+         * applied yet. A failed ack only leaves a harmless foreign entry pending.
+         */
+        private void ackForeign(String id) {
+            try {
+                connection.sync().xack(streamKey, group, id);
+            } catch (RuntimeException e) {
+                log.debug("Fan-out Redis XACK of foreign entry {} failed: {}", id, e.toString());
             }
         }
 
         @Override
         public void ack(ChangeEvent event) {
             List<String> ids = new java.util.ArrayList<>(deliveredIds);
-            deliveredIds.clear();
+            // Clear only after XACK succeeded: a failure throws, the worker stops, and
+            // rewindToAck() replays the PEL (idempotent). Clearing first would lose the
+            // in-memory knowledge of what is still pending.
             ackIds(ids);
+            deliveredIds.clear();
         }
 
         @Override

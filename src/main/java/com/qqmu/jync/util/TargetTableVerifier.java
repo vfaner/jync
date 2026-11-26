@@ -50,9 +50,19 @@ public final class TargetTableVerifier {
      */
     public static String verify(Connection conn, String schema, String tableName,
                                 TableMeta sourceTable, DatabaseType targetType) throws SQLException {
+        return verify(conn, schema, tableName, sourceTable, targetType, false);
+    }
+
+    /**
+     * @param preserveCase the project's "keep source identifier case" option: the target
+     *     object was created with the source spelling, so the catalog lookup must not fold it
+     */
+    public static String verify(Connection conn, String schema, String tableName,
+                                TableMeta sourceTable, DatabaseType targetType,
+                                boolean preserveCase) throws SQLException {
         boolean oracleFamily = isOracleFamily(targetType);
-        String lookupSchema = foldIfOracle(oracleFamily, normalizeSchema(schema));
-        String lookupTable = foldIfOracle(oracleFamily, tableName);
+        String lookupSchema = lookupName(oracleFamily, false, normalizeSchema(schema));
+        String lookupTable = lookupName(oracleFamily, preserveCase, tableName);
         Map<String, TargetColumn> targetTypes = readTargetColumns(conn, lookupSchema, lookupTable,
                 targetType);
 
@@ -96,6 +106,13 @@ public final class TargetTableVerifier {
      */
     public static boolean tableExists(Connection conn, String schema, String tableName,
                                       DatabaseType targetType) throws SQLException {
+        return tableExists(conn, schema, tableName, targetType, false);
+    }
+
+    /** {@code preserveCase}: look the name up exactly as written instead of folding it. */
+    public static boolean tableExists(Connection conn, String schema, String tableName,
+                                      DatabaseType targetType, boolean preserveCase)
+            throws SQLException {
         if (tableName == null || tableName.isBlank()) {
             return false;
         }
@@ -105,7 +122,7 @@ public final class TargetTableVerifier {
                 && targetType.getFamily() == DatabaseType.DialectFamily.MYSQL;
         String catalog = mysqlFamily ? lookupSchema : null;
         String schemaPattern = mysqlFamily ? null : lookupSchema;
-        String lookupTable = foldIfOracle(oracleFamily, tableName);
+        String lookupTable = lookupName(oracleFamily, preserveCase, tableName);
         try (ResultSet rs = conn.getMetaData().getTables(catalog, schemaPattern, lookupTable,
                 new String[] {"TABLE"})) {
             while (rs.next()) {
@@ -127,10 +144,19 @@ public final class TargetTableVerifier {
                                                              String tableName,
                                                              DatabaseType targetType)
             throws SQLException {
+        return columnNamesByUpperName(conn, schema, tableName, targetType, false);
+    }
+
+    /** {@code preserveCase}: look the name up exactly as written instead of folding it. */
+    public static Map<String, String> columnNamesByUpperName(Connection conn, String schema,
+                                                             String tableName,
+                                                             DatabaseType targetType,
+                                                             boolean preserveCase)
+            throws SQLException {
         boolean oracleFamily = isOracleFamily(targetType);
         Map<String, TargetColumn> columns = readTargetColumns(conn,
-                foldIfOracle(oracleFamily, normalizeSchema(schema)),
-                foldIfOracle(oracleFamily, tableName), targetType);
+                lookupName(oracleFamily, false, normalizeSchema(schema)),
+                lookupName(oracleFamily, preserveCase, tableName), targetType);
         Map<String, String> names = new LinkedHashMap<>();
         for (Map.Entry<String, TargetColumn> e : columns.entrySet()) {
             names.put(e.getKey(), e.getValue().name());
@@ -155,10 +181,17 @@ public final class TargetTableVerifier {
     public static List<ColumnMeta> missingColumns(Connection conn, String schema, String tableName,
                                                   TableMeta sourceTable, DatabaseType targetType)
             throws SQLException {
+        return missingColumns(conn, schema, tableName, sourceTable, targetType, false);
+    }
+
+    /** {@code preserveCase}: look the name up exactly as written instead of folding it. */
+    public static List<ColumnMeta> missingColumns(Connection conn, String schema, String tableName,
+                                                  TableMeta sourceTable, DatabaseType targetType,
+                                                  boolean preserveCase) throws SQLException {
         boolean oracleFamily = isOracleFamily(targetType);
         Map<String, TargetColumn> targetTypes = readTargetColumns(conn,
-                foldIfOracle(oracleFamily, normalizeSchema(schema)),
-                foldIfOracle(oracleFamily, tableName), targetType);
+                lookupName(oracleFamily, false, normalizeSchema(schema)),
+                lookupName(oracleFamily, preserveCase, tableName), targetType);
         List<ColumnMeta> missing = new ArrayList<>();
         for (ColumnMeta sourceColumn : sourceTable.getColumns()) {
             if (!targetTypes.containsKey(sourceColumn.getName().toUpperCase(Locale.ROOT))) {
@@ -189,13 +222,20 @@ public final class TargetTableVerifier {
     public static List<String> uncomparableColumns(Connection conn, String schema, String tableName,
                                                    DatabaseType targetType, List<String> columns)
             throws SQLException {
+        return uncomparableColumns(conn, schema, tableName, targetType, columns, false);
+    }
+
+    /** {@code preserveCase}: look the name up exactly as written instead of folding it. */
+    public static List<String> uncomparableColumns(Connection conn, String schema, String tableName,
+                                                   DatabaseType targetType, List<String> columns,
+                                                   boolean preserveCase) throws SQLException {
         if (columns == null || columns.isEmpty()) {
             return List.of();
         }
         boolean oracleFamily = isOracleFamily(targetType);
         Map<String, TargetColumn> targetTypes = readTargetColumns(conn,
-                foldIfOracle(oracleFamily, normalizeSchema(schema)),
-                foldIfOracle(oracleFamily, tableName), targetType);
+                lookupName(oracleFamily, false, normalizeSchema(schema)),
+                lookupName(oracleFamily, preserveCase, tableName), targetType);
         List<String> uncomparable = new ArrayList<>();
         for (String column : columns) {
             TargetColumn found = column == null ? null
@@ -257,9 +297,14 @@ public final class TargetTableVerifier {
         return schema == null || schema.isBlank() ? null : schema;
     }
 
-    /** Oracle stores unquoted identifiers upper-cased, so a raw lower-case pattern finds nothing. */
-    private static String foldIfOracle(boolean oracleFamily, String name) {
-        return oracleFamily && name != null ? name.toUpperCase(Locale.ROOT) : name;
+    /**
+     * Oracle stores unquoted identifiers upper-cased, so a raw lower-case pattern finds
+     * nothing. With the preserve-case option the object was created quoted as written, so
+     * the lookup must use the spelling verbatim.
+     */
+    private static String lookupName(boolean oracleFamily, boolean preserveCase, String name) {
+        return oracleFamily && !preserveCase && name != null
+                ? name.toUpperCase(Locale.ROOT) : name;
     }
 
     /**
@@ -275,15 +320,38 @@ public final class TargetTableVerifier {
                                                         String tableName,
                                                         DatabaseType targetType)
             throws SQLException {
+        return actualColumnNames(conn, schema, tableName, targetType, false);
+    }
+
+    /** {@code preserveCase}: look the name up exactly as written instead of folding it. */
+    public static Map<String, String> actualColumnNames(Connection conn, String schema,
+                                                        String tableName,
+                                                        DatabaseType targetType,
+                                                        boolean preserveCase)
+            throws SQLException {
+        // Same rule as columnNamesByUpperName; one implementation so the two writers cannot
+        // drift in how they map a source column to the target's spelling.
+        return columnNamesByUpperName(conn, schema, tableName, targetType, preserveCase);
+    }
+
+    /**
+     * Whether the target dictionary reports the column as auto-increment / identity. The
+     * distinction matters for DM: a table created by a current build carries native
+     * AUTO_INCREMENT (whose counter follows explicit ids by itself), while an older table has
+     * the sequence+trigger emulation and still needs the post-load reseed.
+     */
+    public static boolean isAutoIncrementColumn(Connection conn, String schema, String tableName,
+                                                String columnName, DatabaseType targetType,
+                                                boolean preserveCase) throws SQLException {
+        if (columnName == null) {
+            return false;
+        }
         boolean oracleFamily = isOracleFamily(targetType);
         Map<String, TargetColumn> columns = readTargetColumns(conn,
-                foldIfOracle(oracleFamily, normalizeSchema(schema)),
-                foldIfOracle(oracleFamily, tableName), targetType);
-        Map<String, String> actual = new LinkedHashMap<>();
-        for (TargetColumn column : columns.values()) {
-            actual.put(column.name().toUpperCase(Locale.ROOT), column.name());
-        }
-        return actual;
+                lookupName(oracleFamily, false, normalizeSchema(schema)),
+                lookupName(oracleFamily, preserveCase, tableName), targetType);
+        TargetColumn found = columns.get(columnName.toUpperCase(Locale.ROOT));
+        return found != null && "YES".equalsIgnoreCase(found.autoIncrement());
     }
 
     /** Column name (upper-cased) to JDBC type of the target table. Empty when it is absent. */
@@ -369,9 +437,20 @@ public final class TargetTableVerifier {
                                                                  TableMeta sourceTable,
                                                                  DatabaseType targetType)
             throws SQLException {
+        return extraNotNullColumnsWithoutDefault(conn, schema, tableName, sourceTable,
+                targetType, false);
+    }
+
+    /** {@code preserveCase}: look the name up exactly as written instead of folding it. */
+    public static List<String> extraNotNullColumnsWithoutDefault(Connection conn, String schema,
+                                                                 String tableName,
+                                                                 TableMeta sourceTable,
+                                                                 DatabaseType targetType,
+                                                                 boolean preserveCase)
+            throws SQLException {
         boolean oracleFamily = isOracleFamily(targetType);
-        String lookupSchema = foldIfOracle(oracleFamily, normalizeSchema(schema));
-        String lookupTable = foldIfOracle(oracleFamily, tableName);
+        String lookupSchema = lookupName(oracleFamily, false, normalizeSchema(schema));
+        String lookupTable = lookupName(oracleFamily, preserveCase, tableName);
         Map<String, TargetColumn> targetColumns = readTargetColumns(conn, lookupSchema, lookupTable,
                 targetType);
 

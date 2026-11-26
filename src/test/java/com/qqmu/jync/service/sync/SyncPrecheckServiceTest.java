@@ -211,7 +211,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
 
         PrecheckReport report = service().precheck(PROJECT_ID);
@@ -230,7 +230,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("SUMMARY", Types.CLOB, "CLOB"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
 
         PrecheckReport report = service().precheck(PROJECT_ID);
@@ -267,7 +267,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
 
         PrecheckReport report = service().precheck(PROJECT_ID);
@@ -285,7 +285,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("NAME", Types.VARCHAR, "VARCHAR"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
 
         PrecheckReport report = service().precheck(PROJECT_ID);
@@ -305,7 +305,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
 
         PrecheckReport report = service().precheck(PROJECT_ID);
@@ -323,7 +323,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         ChangeEvent create = ChangeEvent.of(ObjectType.TABLE, ChangeType.CREATE, "ORDERS",
                 "New table", table);
         ChangeEvent alter = ChangeEvent.of(ObjectType.COLUMN, ChangeType.ALTER, "ORDERS",
@@ -351,7 +351,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
 
         PrecheckReport report = service().precheck(PROJECT_ID);
@@ -392,7 +392,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
 
         service(realDetector).precheck(PROJECT_ID);
 
@@ -411,7 +411,7 @@ class SyncPrecheckServiceTest {
         TableMeta table = orders(column("ID", Types.INTEGER, "INTEGER"),
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"));
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
 
         PrecheckReport passed = service().precheck(PROJECT_ID);
@@ -424,7 +424,7 @@ class SyncPrecheckServiceTest {
                 column("UPDATED_AT", Types.TIMESTAMP, "TIMESTAMP"),
                 column("EXTRA", Types.VARCHAR, "VARCHAR"));
         DatabaseMeta failingMeta = sourceWith(withExtraColumn);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(failingMeta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(failingMeta);
         stubNoStructureEvents(failingMeta, failing);
 
         PrecheckReport failed = service().precheck(PROJECT_ID);
@@ -487,7 +487,7 @@ class SyncPrecheckServiceTest {
                                       CdcProbeResult probe) throws Exception {
         context(config);
         DatabaseMeta meta = sourceWith(table);
-        when(syncEngine.readSourceMetadata(sourceConn, ctx)).thenReturn(meta);
+        when(syncEngine.readSourceMetadata(sourceConn, ctx, false)).thenReturn(meta);
         stubNoStructureEvents(meta, config);
         when(cdcOperations.probeProject(PROJECT_ID)).thenReturn(probe);
         return service().precheck(PROJECT_ID);

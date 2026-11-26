@@ -605,11 +605,22 @@ public abstract class AbstractSqlDialect implements SqlDialect {
      */
     protected String columnDefinition(ColumnMeta col, DatabaseType sourceType,
                                       String typeOverride) {
+        return columnDefinition(col, sourceType, typeOverride, true);
+    }
+
+    /**
+     * @param allowAutoIncrement false for an ALTER ADD whose dialect cannot put the
+     *     auto-increment attribute on a column at this point (DM requires it to be part of
+     *     the primary key, which an added column is not); the plain mapped type is used
+     */
+    protected String columnDefinition(ColumnMeta col, DatabaseType sourceType,
+                                      String typeOverride, boolean allowAutoIncrement) {
         StringBuilder sb = new StringBuilder();
         sb.append(quoteIdentifier(col.getName())).append(' ');
 
         String type;
-        if (col.isAutoIncrement() && autoIncrementColumnType(col, sourceType) != null) {
+        if (allowAutoIncrement && col.isAutoIncrement()
+                && autoIncrementColumnType(col, sourceType) != null) {
             type = autoIncrementColumnType(col, sourceType);
         } else if (typeOverride != null) {
             type = typeOverride;
@@ -621,7 +632,7 @@ public abstract class AbstractSqlDialect implements SqlDialect {
         // The auto-increment clause must follow the type IMMEDIATELY. T-SQL rejected the
         // old "type NOT NULL IDENTITY(1,1)" order — IDENTITY has to precede NOT NULL;
         // MySQL accepts AUTO_INCREMENT in this position too.
-        if (col.isAutoIncrement()) {
+        if (allowAutoIncrement && col.isAutoIncrement()) {
             String clause = autoIncrementClause();
             if (clause != null && !clause.isEmpty()) {
                 sb.append(' ').append(clause);

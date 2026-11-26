@@ -120,6 +120,13 @@ public class SyncConfig {
      * change-log task. Fan-out projects keep manual execution in this version.
      */
     private boolean cdcAutoAddColumns;
+
+    /**
+     * Oracle/Dameng target: quote the source's exact identifier spelling instead of folding
+     * bare names to upper case. Off by default so existing uppercase targets keep working.
+     * Turning it on for an existing project requires recreating the target objects.
+     */
+    private boolean preserveTargetIdentifierCase;
     /** Source tables known when auto-sync was enabled, plus every table it auto-added. */
     private List<String> autoSyncKnownTables;
     /** Tables the operator removed from auto-sync; they are never added again. */

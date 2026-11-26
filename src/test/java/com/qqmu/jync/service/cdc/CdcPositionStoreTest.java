@@ -139,6 +139,23 @@ class CdcPositionStoreTest {
     // —— advance(binlog):同文件比 pos,跨文件比文件名数值段 ——
 
     @Test
+    void aGtidResumeAcceptsALowerBinlogNumberAfterFailover() {
+        // GTID resume ignores file/pos. A failover to a primary whose files start lower
+        // must still advance, or file, pos AND gtid freeze and the next restart resumes
+        // from a stale GTID set (eventually PURGED) while the target is current.
+        position.setBinlogFile("mysql-bin.000042");
+        position.setBinlogPos(100L);
+        position.setGtidSet("uuid:1-10");
+
+        store.advance(1L, "mysql-bin.000001", 500L, "uuid:1-11");
+
+        verify(repository).save(position);
+        assertThat(position.getBinlogFile()).isEqualTo("mysql-bin.000001");
+        assertThat(position.getBinlogPos()).isEqualTo(500L);
+        assertThat(position.getGtidSet()).isEqualTo("uuid:1-11");
+    }
+
+    @Test
     void binlogRewindWithinSameFileIsRejected() {
         position.setBinlogFile("mysql-bin.000007");
         position.setBinlogPos(4711L);

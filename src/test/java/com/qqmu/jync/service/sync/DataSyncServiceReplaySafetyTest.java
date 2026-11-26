@@ -368,7 +368,7 @@ class DataSyncServiceReplaySafetyTest {
                 .as("TIME cursor seed failed: %s", seed.getError()).isTrue();
         // The stored watermark is rewound by the safety margin so a same-second commit
         // committed out of order is re-read next cycle (upsert-safe, keyed table).
-        assertThat(seed.getNewCursorValue()).isEqualTo("07:59:59");
+        assertThat(seed.getNewCursorValue()).isEqualTo("07:59:58");
 
         progress.setInitialLoadDone(true);
         progress.setLastSyncValue(seed.getNewCursorValue());
@@ -431,7 +431,7 @@ class DataSyncServiceReplaySafetyTest {
                 service.syncTable(source, target, table, timestamp, new SyncProgress(), ctx);
         assertThat(seed.isSuccess()).isTrue();
         // 默认 lag 1000ms：墙钟水位线回退一秒后仍以墙钟文本存储。
-        String expected = "2025-12-31 23:59:59";
+        String expected = "2025-12-31 23:59:58";
         assertThat(seed.getNewCursorValue()).isEqualTo(expected);
     }
 

@@ -110,14 +110,20 @@ above that it is skipped.
   lower_case_table_names (fixed at initialisation; 1 / 2 stores table names lower-case), and
   openGauss / Vastbase-style lower_case_column_names (which lower-cases even quoted column
   names) plus their table-name setting. Jync cannot override this per session.
-- There is no Jync switch to force lower or preserve upper case. Table names can be renamed
-  one by one with the task's table-name mapping; column names cannot be renamed — column rules
-  transform values, not identifiers.
+- Oracle-family targets (Oracle / Dameng / YashanDB) fold bare identifiers to upper case by default. When the source
+  spelling (for example a lower-case MySQL `user_info`) must be kept, enable "Preserve source
+  identifier case" in the project's sync options: Jync then creates columns and tables with
+  double-quoted source spelling (`"user_info"`), and a mapped table name keeps the spelling it
+  was given. The switch is shown for Oracle-family targets only and is off by default; existing upper-case target objects
+  are not renamed, so recreate them and re-baseline, and application SQL must quote the same
+  case. ETL tasks do not follow this switch.
+- With the switch off, table names can still be renamed one by one with the task's table-name
+  mapping; column names cannot be renamed — column rules transform values, not identifiers.
 - Since 2.4.5 Jync reads the target catalog's actual column spellings for Vastbase-family
   targets, so syncing still works after folding; only the object names differ.
-- To keep upper case, turn the folding parameter off in the target first (usually an
-  initialisation or restart-time setting), then recreate the tables and resync. Objects
-  already created in lower case are not renamed automatically.
+- To keep upper case on other targets, turn the folding parameter off in the target first
+  (usually an initialisation or restart-time setting), then recreate the tables and resync.
+  Objects already created in lower case are not renamed automatically.
 
 ## What a full load actually does
 
@@ -344,7 +350,7 @@ executes once when a worker becomes free.
 
 ## MySQL CDC prerequisites
 
-- MySQL 5.7+; log_bin=ON, binlog_format=ROW, binlog_row_image=FULL.
+- MySQL 5.7+; log_bin=ON, binlog_format=ROW, binlog_row_image=FULL. If the source is switched to MINIMAL/NOBLOB while running, Jync parks at the row event and asks for FULL instead of skipping; zstd binlog_transaction_compression (MySQL 8.0.20+) is supported.
 - The account needs REPLICATION SLAVE and REPLICATION CLIENT (named BINLOG MONITOR from MariaDB
   10.5 on).
 - Any MySQL-wire kernel (MariaDB, TiDB, OceanBase, GBase, or a CUSTOM connection declared as MySQL)
@@ -440,9 +446,15 @@ executes once when a worker becomes free.
 ## External baseline adoption (skip the first full load)
 
 - The entry lives on the project detail page and is admin-only. The task must be stopped, a single database target, and log CDC. Redis cache targets and one-source-many-target projects are not supported. The assistant can explain it but cannot execute it.
-- Use it when the target was populated by a **consistent dump** and the dump's source position is known. Jync records that position as a completed baseline, streams from it after start, copies no rows and does not backfill table progress; the operator confirms target consistency.
-- Position by engine: MySQL uses the File name from `SHOW BINARY LOGS` plus position (4..file size, optional GTID; a supplied GTID is checked as a subset of source gtid_executed); PostgreSQL uses `pg_lsn` and requires an existing slot whose `restart_lsn` / `confirmed_flush_lsn` is not ahead; SQL Server uses a canonical `0x` LSN and requires capture instances for the selected tables, not later than `fn_cdc_get_max_lsn()`; Oracle/Dameng uses a SCN between the oldest mineable redo and the current SCN; Yashan uses the existing unique YStream service's `RESTART_POSITION`.
-- Adoption clears the old position, old full-load checkpoints and the ERROR hat; a validation or cleanup failure never marks the baseline done. After adoption `project_table_status` may legitimately show `NOT_STARTED`; do not treat it as "never synced". Use Rebuild baseline to reload.
+- **What the position is**: a point in the source's change stream (for MySQL, a binlog file name plus a byte offset) meaning "the target already contains every change up to here". Jync copies no rows and, after the task starts, replays only changes after that point; rows before it must already be in the target from your own dump/backup tool. It is not a row count, not a target-side position, and table progress is not backfilled.
+- **Prerequisite**: take a consistent dump and record the source position at the same instant. Typical ways: `mysqldump --single-transaction --source-data=2` (older versions `--master-data=2`) writes the `CHANGE REPLICATION SOURCE` / `CHANGE MASTER` FILE/POS/GTID into the dump header; Percona XtraBackup records them in `xtrabackup_binlog_info`; or `FLUSH TABLES WITH READ LOCK` → `SHOW MASTER STATUS` → dump → `UNLOCK TABLES`. The target and the position must come from the same dump.
+- **MySQL example**: file `mysql-bin.000123` (the File name from `SHOW BINARY LOGS`, not a path); position `7` (digits only, 4..the file's byte size; a position equal to the file size means the end of that file, so later events are in the next file and Jync continues there); GTID is optional, e.g. `3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100`. Jync checks the GTID is a subset of the source's `@@GLOBAL.gtid_executed`; the file and position are still validated when GTID is supplied.
+- **Common MySQL mistakes**: using `SHOW MASTER STATUS` after the dump (misses changes made during the dump); entering a row count, file size, or event number as the position; mixing a file and a position from different queries; using a binlog file that the source already purged (reported as file missing); using a GTID from a different instant than the file/position.
+- PostgreSQL: use `SELECT pg_current_wal_lsn();` (for example `0/16B6C50`) or the slot's `confirmed_flush_lsn`. The project slot must exist before the dump, and the value cannot be earlier than `restart_lsn` / `confirmed_flush_lsn`; otherwise the dump and slot leave a gap and adoption is rejected.
+- SQL Server: use `SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)` (0x prefix, 22 characters). The selected tables must already have CDC capture instances, and the LSN cannot be later than the source's current maximum CDC LSN.
+- Oracle / Dameng: use an SCN (Oracle `SELECT CURRENT_SCN FROM V$DATABASE`; Dameng queries its current SCN). It cannot be earlier than the oldest redo still mineable, nor later than the current SCN.
+- Yashan: use the existing unique YStream service's `RESTART_POSITION`; it must match exactly.
+- Adoption clears the old position, old full-load checkpoints and the ERROR hat; a validation or cleanup failure never marks the baseline done. After adoption `project_table_status` may legitimately show `NOT_STARTED`; do not treat it as "never synced". Use Rebuild baseline to reload. Confirm the target matches the position first: Jync performs no full-load verification.
 
 ## When data stops arriving
 
@@ -995,10 +1007,11 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 
 ## MySQL auto-increment synced to Dameng
 
-- Jync does not use native DM IDENTITY. It creates a `SEQ_<table>_<column>` sequence and a `TRG_<table>_<column>` BEFORE INSERT trigger that draws from the sequence only when the inserted value is NULL; explicit source IDs are written as-is. The target dictionary will not show an "auto-increment" flag; that is expected, not data loss.
-- After the first full load, Jync advances the sequence to `MAX(id)+1` only when the auto-increment column is a single-column primary key. Composite keys or non-key auto-increment columns are not advanced, so an ID-less target insert may start at 1 and collide.
-- If the SEQ/TRG objects are missing, check whether Sync structure is enabled, whether the target table was pre-created with structure sync off, whether the MySQL AUTO_INCREMENT flag was read from metadata, and whether this is an old baseline. Rebuild the baseline to reload. Do not recommend native DM IDENTITY: explicit ID inserts are rejected.
-- DM has no global identifier-case switch either: bare identifiers fold to upper case. Table names can be mapped per table, but the mapped target name is still upper-cased by the Oracle dialect, so mapping cannot preserve lower case; column names cannot be renamed globally. Do not suggest a "global lowercase" switch — it creates a different quoted object.
+- On DM8, an **integer auto-increment column that is part of the primary key** uses native `AUTO_INCREMENT` (verified on 8.1.2.128). The target dictionary shows auto-increment; explicit source IDs are written as-is without `SET IDENTITY_INSERT`; the counter follows the largest explicit value (including multi-row INSERT and MERGE), so no post-load reseed is needed. An explicit 0 is treated as "generate a value", matching MySQL's default.
+- Non-key auto-increment columns, or non-integer types (for example NUMBER identity from an Oracle-family source), keep the `SEQ_<table>_<column>` + `TRG_<table>_<column>` trigger emulation; not showing "auto-increment" in the dictionary is then expected. Existing tables are not converted automatically; recreate them and re-baseline to get the native attribute.
+- DM rejects modifying an `AUTO_INCREMENT` column (`attempt to modify auto-increment column`, error -2664), so a type change on such a column fails and stays in the change log; recreate the target table (or change it by a target-side method DM allows) instead of retrying MODIFY. Do not recommend native DM IDENTITY: explicit ID inserts are rejected.
+- If the SEQ/TRG objects are missing, check whether Sync structure is enabled, whether the target table was pre-created with structure sync off, whether the MySQL AUTO_INCREMENT flag was read from metadata, and whether this is an old baseline. Rebuild the baseline to reload.
+- DM folds bare identifiers to upper case by default. If the source (e.g. MySQL lower-case) and application SQL rely on the same spelling, enable "Preserve source identifier case" under the project's sync options: Jync then creates and writes objects with the source/mapped spelling in double quotes, and application queries must quote the same case. The switch is shown for Oracle-family targets only and is off by default, and does not rename existing upper-case objects — recreate the target tables and re-baseline. Do not suggest changing a global DM parameter to lowercase.
 
 ## LogMiner ORA-01291 keeps failing after rebuilds
 

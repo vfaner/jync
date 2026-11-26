@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import com.github.luben.zstd.ZstdInputStream;
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
 import com.github.shyiko.mysql.binlog.event.DeleteRowsEventData;
 import com.github.shyiko.mysql.binlog.event.Event;
@@ -20,8 +21,11 @@ import com.github.shyiko.mysql.binlog.event.QueryEventData;
 import com.github.shyiko.mysql.binlog.event.RotateEventData;
 import com.github.shyiko.mysql.binlog.event.TableMapEventData;
 import com.github.shyiko.mysql.binlog.event.TableMapEventMetadata;
+import com.github.shyiko.mysql.binlog.event.TransactionPayloadEventData;
 import com.github.shyiko.mysql.binlog.event.UpdateRowsEventData;
 import com.github.shyiko.mysql.binlog.event.WriteRowsEventData;
+import com.github.shyiko.mysql.binlog.event.deserialization.EventDeserializer;
+import com.github.shyiko.mysql.binlog.io.ByteArrayInputStream;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.service.lob.LobSpillStore;
 import com.qqmu.jync.service.sync.ColumnCleanser;
@@ -397,9 +401,96 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             case XID:
                 onXid(header);
                 break;
+            case TRANSACTION_PAYLOAD:
+                onTransactionPayload(header, event.getData());
+                break;
             default:
                 break; // GTID/HEARTBEAT/…: touchEvent above is all they need; no buffer semantics
         }
+    }
+
+    /**
+     * MySQL 8.0.20+ {@code binlog_transaction_compression}: the outer event is the only one
+     * the connector's listener sees; the row/XID events live inside the zstd payload and are
+     * never re-dispatched. Ignoring it silently dropped whole transactions and then advanced
+     * the position past them on the next uncompressed commit.
+     *
+     * <p>The library already parses the inner events, but with its stock TIME2 decoder (the
+     * sign of a negative TIME is lost). This unpacks the payload with the same signed
+     * deserializer as the live stream. Inner events carry no useful end position of their
+     * own, so every inner header is pointed at the outer payload's next position: the whole
+     * compressed transaction is one commit boundary.
+     */
+    private void onTransactionPayload(EventHeaderV4 outer, TransactionPayloadEventData data) {
+        long end = outer.getNextPosition() > 0 ? outer.getNextPosition() : lastNextPosition;
+        if (end <= 0) {
+            throw new IllegalStateException("compressed binlog transaction has no end"
+                    + " position; refusing to apply it without a resumable position");
+        }
+        // 0 is ZSTD, the only compression MySQL writes today. Do not guess a decoder for
+        // an unknown type: skipping it would lose the transaction, applying raw bytes would
+        // corrupt it.
+        if (data.getCompressionType() != 0) {
+            throw new IllegalStateException("unsupported binlog transaction compression type "
+                    + data.getCompressionType() + "; disable binlog_transaction_compression"
+                    + " or upgrade Jync before streaming this source");
+        }
+        byte[] payload = data.getPayload();
+        if (payload == null || payload.length == 0) {
+            throw new IllegalStateException("compressed binlog transaction payload is empty;"
+                    + " cannot safely replay it");
+        }
+        EventDeserializer deserializer = CdcEventDeserializers.newClientDeserializer();
+        List<Event> inner = new ArrayList<>();
+        try (ZstdInputStream zstd = new ZstdInputStream(new java.io.ByteArrayInputStream(payload));
+             ByteArrayInputStream in = new ByteArrayInputStream(zstd)) {
+            Event event;
+            while ((event = deserializer.nextEvent(in)) != null) {
+                inner.add(event);
+            }
+        } catch (IOException e) {
+            throw new IllegalStateException("compressed binlog transaction payload could not"
+                    + " be decoded; the stream cannot skip it without losing rows", e);
+        }
+        dispatchTransactionPayloadEvents(inner, end);
+    }
+
+    /** Package-private seam: the payload decoder has already produced these events. */
+    void dispatchTransactionPayloadEvents(List<Event> inner, long endPosition) {
+        for (Event event : inner) {
+            EventHeaderV4 header = event.getHeader();
+            if (header == null) {
+                continue;
+            }
+            if (header.getEventType() == com.github.shyiko.mysql.binlog.event.EventType.TRANSACTION_PAYLOAD) {
+                throw new IllegalStateException("nested compressed binlog transaction payload;"
+                        + " this shape is not supported and cannot be applied safely");
+            }
+            // The payload is one transaction: COMMIT/DDL inside it end at the outer event.
+            header.setNextPosition(endPosition);
+            handleEvent(event);
+        }
+    }
+
+    /**
+     * Jync applies complete images and relies on {@code binlog_row_image=FULL}. A partial
+     * image arrives compacted to the included columns; without this check the length
+     * mismatch is caught per row as "unmappable" and the transaction still commits,
+     * silently dropping every UPDATE/DELETE on a MINIMAL/NOBLOB source.
+     */
+    private void requireFullRowImage(CdcTableBinding binding, java.util.BitSet included,
+                                     String operation) {
+        if (included == null) {
+            return;   // older connector/test shapes carry no bitmap; keep the previous path
+        }
+        int columns = binding.columnPlans().size();
+        if (included.cardinality() == columns) {
+            return;
+        }
+        throw CdcSchemaDrift.failure(binding.getDatabase(), binding.getTable(),
+                "received a " + operation + " row image with " + included.cardinality()
+                        + " of " + columns + " columns; binlog_row_image must be FULL"
+                        + " (MINIMAL/NOBLOB cannot be applied without losing changes)");
     }
 
     /** Contract 1: record the map, then filter — schema, selection, applicability (B4). */
@@ -477,6 +568,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             logIgnoredRows(data.getTableId(), data.getRows().size());
             return;
         }
+        requireFullRowImage(binding, data.getIncludedColumns(), "INSERT");
         TableChange change = changeFor(binding);
         for (Serializable[] row : data.getRows()) {
             try {
@@ -495,6 +587,9 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             logIgnoredRows(data.getTableId(), data.getRows().size());
             return;
         }
+        requireFullRowImage(binding, data.getIncludedColumnsBeforeUpdate(),
+                "UPDATE before-image");
+        requireFullRowImage(binding, data.getIncludedColumns(), "UPDATE after-image");
         TableChange change = changeFor(binding);
         for (Map.Entry<Serializable[], Serializable[]> entry : data.getRows()) {
             try {
@@ -523,6 +618,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             logIgnoredRows(data.getTableId(), data.getRows().size());
             return;
         }
+        requireFullRowImage(binding, data.getIncludedColumns(), "DELETE");
         TableChange change = changeFor(binding);
         for (Serializable[] row : data.getRows()) {
             try {
@@ -965,9 +1061,25 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         budget.add(row);
     }
 
+    /** One log line per table/operation/column per five minutes; the counter carries volume. */
+    private static final long UNMAPPABLE_LOG_INTERVAL_MS = 300_000L;
+    private final Map<String, Long> unmappableLoggedAt = new java.util.concurrent.ConcurrentHashMap<>();
+
     private void countAndLogUnmappable(CdcTableBinding binding, String operation,
                                        CdcUnmappableValueException e) {
         stats.addUnmappable(1);
+        String key = binding.getDatabase() + '\u0000' + binding.getTable() + '\u0000'
+                + operation + '\u0000' + e.getColumn();
+        long now = System.currentTimeMillis();
+        Long last = unmappableLoggedAt.get(key);
+        if (last != null && now - last < UNMAPPABLE_LOG_INTERVAL_MS) {
+            // A consistently unmappable column would otherwise write one ERROR+stacktrace
+            // per row at stream rate and bury the rest of the cycle's output.
+            log.debug("Skipping another {} row on {}.{}: unmappable column '{}'",
+                    operation, binding.getDatabase(), binding.getTable(), e.getColumn());
+            return;
+        }
+        unmappableLoggedAt.put(key, now);
         log.error("Skipping {} row on {}.{}: unmappable column '{}' (type {})",
                 operation, binding.getDatabase(), binding.getTable(), e.getColumn(), e.getTypeName(), e);
     }

@@ -142,7 +142,7 @@ public class SyncPrecheckService {
 
             DatabaseMeta sourceMeta;
             try {
-                sourceMeta = syncEngine.readSourceMetadata(sourceConn, ctx);
+                sourceMeta = syncEngine.readSourceMetadata(sourceConn, ctx, false);
             } catch (SQLException | RuntimeException e) {
                 checks.add(error("source.metadata", CONNECTION,
                         ctx.getSourceConfig().getName(), "precheck.source.metadataFailed",
@@ -243,7 +243,7 @@ public class SyncPrecheckService {
             String targetTable = config.targetTableName(table.getName());
             try {
                 if (!TargetTableVerifier.tableExists(targetConn, ctx.getTargetSchema(),
-                        targetTable, targetType)) {
+                        targetTable, targetType, ctx.targetPreservesIdentifierCase())) {
                     checks.add(new PrecheckReport.Check("target.table.missing",
                             config.isSyncStructure()
                                     ? PrecheckReport.Severity.WARN
@@ -259,7 +259,8 @@ public class SyncPrecheckService {
                         "precheck.target.tableExists", targetTable));
 
                 List<ColumnMeta> missing = TargetTableVerifier.missingColumns(targetConn,
-                        ctx.getTargetSchema(), targetTable, table, targetType);
+                        ctx.getTargetSchema(), targetTable, table, targetType,
+                        ctx.targetPreservesIdentifierCase());
                 if (!missing.isEmpty()) {
                     checks.add(new PrecheckReport.Check("target.table.columns",
                             config.isSyncStructure()
@@ -274,7 +275,8 @@ public class SyncPrecheckService {
                 }
 
                 String incompatible = TargetTableVerifier.verify(targetConn,
-                        ctx.getTargetSchema(), targetTable, table, targetType);
+                        ctx.getTargetSchema(), targetTable, table, targetType,
+                        ctx.targetPreservesIdentifierCase());
                 if (incompatible != null) {
                     checks.add(error("target.table.incompatible", "TABLE", table.getName(),
                             "precheck.target.incompatible", incompatible));
@@ -286,7 +288,8 @@ public class SyncPrecheckService {
                         .filter(name -> !isPrimaryKey(table, name))
                         .toList();
                 List<String> uncomparable = TargetTableVerifier.uncomparableColumns(targetConn,
-                        ctx.getTargetSchema(), targetTable, targetType, comparable);
+                        ctx.getTargetSchema(), targetTable, targetType, comparable,
+                        ctx.targetPreservesIdentifierCase());
                 if (!uncomparable.isEmpty()) {
                     checks.add(new PrecheckReport.Check("target.columns.uncomparable",
                             PrecheckReport.Severity.INFO, "TABLE", table.getName(),

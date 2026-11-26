@@ -63,13 +63,27 @@ import com.github.shyiko.mysql.binlog.io.ByteArrayInputStream;
  * {@code registerDefaultEventDataDeserializers}; {@code CdcEventDeserializersTest}
  * fails loudly if it ever drifts from the library's own defaults.
  *
- * <p>Known limitation: compressed transactions ({@code binlog_transaction_compression},
- * OFF by default) are unpacked by the library's own {@code TransactionPayloadEventDataDeserializer},
- * which keeps the stock TIME2 decoding inside the payload.
+ * <p>Compressed transactions ({@code binlog_transaction_compression}) are unpacked by
+ * `CdcEventStreamHandler` with {@link #newClientDeserializer()},
+ * so the payload does not fall back to the stock, sign-dropping TIME2 decoder.
  */
 final class CdcEventDeserializers {
 
     private CdcEventDeserializers() {
+    }
+
+    /**
+     * The deserializer used for the live client and for the events inside a compressed
+     * transaction payload (which the library would otherwise parse with the stock,
+     * sign-dropping TIME2 decoder).
+     */
+    static EventDeserializer newClientDeserializer() {
+        EventDeserializer deserializer = newDeserializer();
+        deserializer.setCompatibilityMode(
+                EventDeserializer.CompatibilityMode.DATE_AND_TIME_AS_LONG_MICRO,
+                EventDeserializer.CompatibilityMode.INVALID_DATE_AND_TIME_AS_MIN_VALUE,
+                EventDeserializer.CompatibilityMode.CHAR_AND_BINARY_AS_BYTE_ARRAY);
+        return deserializer;
     }
 
     /** Event deserializer with signed TIME2 decoding; compatibility modes set by the caller. */

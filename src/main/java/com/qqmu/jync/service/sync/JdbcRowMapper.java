@@ -475,9 +475,28 @@ public final class JdbcRowMapper {
                             com.qqmu.jync.service.converter.SqlDialect targetDialect,
                             com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker)
             throws SQLException {
+        Map<String, Object> folded = null;
         for (int i = 0; i < bindOrder.size(); i++) {
             String column = bindOrder.get(i);
-            Object value = valueFor(row, column);
+            Object value = row.get(column);
+            if (value == null && !row.containsKey(column)) {
+                // The target may spell a column differently from the source result set
+                // (Vastbase lower-cased a quoted name, DM reports upper case). Build the
+                // folded view once per row: scanning the row for every missed bind was
+                // O(columns^2) on exactly the tables where every binding misses.
+                if (folded == null) {
+                    folded = new java.util.HashMap<>(Math.max(16, row.size() * 2));
+                    for (Map.Entry<String, Object> entry : row.entrySet()) {
+                        if (entry.getKey() != null) {
+                            folded.putIfAbsent(
+                                    entry.getKey().toUpperCase(java.util.Locale.ROOT),
+                                    entry.getValue());
+                        }
+                    }
+                }
+                value = folded.get(column == null ? null
+                        : column.toUpperCase(java.util.Locale.ROOT));
+            }
             int idx = i + 1;
             if (value == null) {
                 // Some drivers (Oracle in particular) reject setObject(idx, null) without a type.
@@ -491,23 +510,6 @@ public final class JdbcRowMapper {
         }
     }
 
-    /**
-     * The row value for a bind name, falling back to a case-insensitive match. The target
-     * may spell a column differently from the source result set (Vastbase lower-cased a
-     * quoted name, DM reports upper case); the bind order carries the target spelling while
-     * the row map is keyed by the source's.
-     */
-    private static Object valueFor(Map<String, Object> row, String column) {
-        Object value = row.get(column);
-        if (value == null && !row.containsKey(column)) {
-            for (Map.Entry<String, Object> entry : row.entrySet()) {
-                if (entry.getKey().equalsIgnoreCase(column)) {
-                    return entry.getValue();
-                }
-            }
-        }
-        return value;
-    }
 
     private static void bindValue(PreparedStatement ps, int idx, Object value,
                                   Integer targetType, boolean typedTemporal,

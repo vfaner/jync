@@ -722,19 +722,36 @@ public class CdcDdlTaskService {
             new DdlExecutor(connection).executeIdempotentCreate(statement);
             entry.setTargetDdlSql(statement);
             entry.setDdlExecuted(true);
-            entry.setReplayDone(true);
-            entry.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
             entry.setHandledBy("auto");
             entry.setHandledAt(Instant.now());
             entry.setErrorDetail(null);
+            // Same rule as the manual path: an ADD COLUMN leaves the values written while
+            // the target lacked that column unreplicated. Marking the task processed here
+            // would close that gap without replaying it, leaving NULLs in the target that
+            // nothing ever repairs. Keep the task PENDING for the replay.
+            boolean gap = hasColumnGap(statement, backslash);
+            if (gap) {
+                entry.setReplayDone(false);
+                entry.setResolutionStatus(ChangeLog.RESOLUTION_PENDING);
+                recordGapBounds(entry);
+                if (parseAffectedTables(entry.getAffectedTables()).isEmpty()) {
+                    entry.setReplayDone(true);
+                    entry.setAffectedTables(null);
+                    entry.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
+                }
+            } else {
+                entry.setReplayDone(true);
+                entry.setAffectedTables(null);
+                entry.setResolutionStatus(ChangeLog.RESOLUTION_PROCESSED);
+            }
             repository.save(entry);
             CdcRuntimeStats live = statsFor(entry.getProjectId());
             if (live != null) {
                 live.invalidateTargetColumns();
             }
             invalidateFanoutBindings(entry.getProjectId());
-            log.info("Auto-applied CDC DDL for project {}: {}", entry.getProjectId(),
-                    statement);
+            log.info("Auto-applied CDC DDL for project {}{}: {}", entry.getProjectId(),
+                    entry.getReplayDone() ? "" : " (row replay still pending)", statement);
         } catch (SQLException | RuntimeException e) {
             log.warn("Auto-apply of CDC DDL for project {} failed; leaving the task"
                     + " pending: {}", entry.getProjectId(), e.toString());
@@ -1079,7 +1096,8 @@ public class CdcDdlTaskService {
             for (TableMeta sourceTable : meta.getTables()) {
                 String targetTable = ctx.getConfig().targetTableName(sourceTable.getName());
                 Map<String, String> targetColumns = TargetTableVerifier.columnNamesByUpperName(
-                        targetConn, ctx.getTargetSchema(), targetTable, ctx.getTargetType());
+                        targetConn, ctx.getTargetSchema(), targetTable, ctx.getTargetType(),
+                        ctx.targetPreservesIdentifierCase());
                 if (targetColumns.isEmpty()) {
                     continue;
                 }
@@ -1152,6 +1170,13 @@ public class CdcDdlTaskService {
         }
         Project project = projectRepository.findById(entry.getProjectId())
                 .orElseThrow(() -> new IllegalStateException("error.ddl.noTarget"));
+        // The replay re-reads the source and upserts over the target on its own connection.
+        // Running it next to the live consumer lets the replay's older row snapshot land
+        // after a newer streamed row, silently reverting that row with no later repair.
+        if (Boolean.TRUE.equals(project.getEnabled())
+                || cdcConsumerManager.statsFor(project.getId()) != null) {
+            throw new IllegalStateException("error.ddl.stopBeforeReplay");
+        }
         SyncContext ctx = contextFactory.build(project, "ddl-replay", () -> true, () -> false);
         try {
             replayTablesIntoTarget(ctx, tables);

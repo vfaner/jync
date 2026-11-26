@@ -44,17 +44,27 @@ class SqlDialectVersionTest {
     }
 
     @Test
-    void damengAndYashanGetThePortableFallbackRegardlessOfVersion() {
-        for (DatabaseType type : List.of(DatabaseType.DM, DatabaseType.YASHANDB)) {
-            SqlDialect dialect = factory.forType(type, null);
-            String ddl = dialect.getCreateTableSql(identityTable(), null, "orders",
-                    DatabaseType.MYSQL);
-            assertThat(ddl).as("%s: no Oracle identity grammar", type)
-                    .doesNotContain("AS IDENTITY");
-            assertThat(((OracleDialect) dialect).getPostCreateTableDdl(
-                    identityTable(), null, "orders", DatabaseType.MYSQL))
-                    .as("%s: sequence+trigger emulation", type).hasSize(2);
-        }
+    void damengUsesItsNativeAutoIncrementRegardlessOfVersion() {
+        SqlDialect dialect = factory.forType(DatabaseType.DM, null);
+        String ddl = dialect.getCreateTableSql(identityTable(), null, "orders",
+                DatabaseType.MYSQL);
+        assertThat(ddl).contains("AUTO_INCREMENT").doesNotContain("AS IDENTITY");
+        assertThat(((OracleDialect) dialect).getPostCreateTableDdl(
+                identityTable(), null, "orders", DatabaseType.MYSQL))
+                .as("native AUTO_INCREMENT needs no companion sequence/trigger").isEmpty();
+    }
+
+    @Test
+    void yashanKeepsThePortableFallbackRegardlessOfVersion() {
+        // YashanDB rejects AUTO_INCREMENT ("unexpected word"); its IDENTITY form accepts
+        // explicit values, but no separate dialect selects it yet, so the emulation stays.
+        SqlDialect dialect = factory.forType(DatabaseType.YASHANDB, null);
+        String ddl = dialect.getCreateTableSql(identityTable(), null, "orders",
+                DatabaseType.MYSQL);
+        assertThat(ddl).doesNotContain("AS IDENTITY").doesNotContain("AUTO_INCREMENT");
+        assertThat(((OracleDialect) dialect).getPostCreateTableDdl(
+                identityTable(), null, "orders", DatabaseType.MYSQL))
+                .hasSize(2);
     }
 
     // --- MySQL 5.7 vs 8.0 ----------------------------------------------------------------

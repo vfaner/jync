@@ -5,8 +5,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import org.junit.jupiter.api.Test;
 
 import com.qqmu.jync.config.SyncProperties;
+import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
+import com.qqmu.jync.service.converter.MySqlDialect;
+import com.qqmu.jync.service.converter.OracleDialect;
 
 /**
  * Oracle-family dictionaries key unquoted identifiers upper case, so a lower-case configured
@@ -66,5 +69,26 @@ class SyncContextFactorySchemaFoldingTest {
                 .isEqualTo("mySchema");
         assertThat(factory.normalizeConfiguredSchema(db(DatabaseType.MYSQL, null), "mySchema"))
                 .isEqualTo("mySchema");
+    }
+
+    @Test
+    void theTargetDialectPreservesIdentifierCaseOnlyWhenTheProjectAsksForIt() {
+        SyncConfig config = new SyncConfig();
+        assertThat(factory.applyTargetDialectOptions(new OracleDialect(), config)
+                .quoteIdentifier("user_info"))
+                .isEqualTo("\"USER_INFO\"");
+
+        config.setPreserveTargetIdentifierCase(true);
+        assertThat(factory.applyTargetDialectOptions(new OracleDialect(), config)
+                .quoteIdentifier("user_info"))
+                .isEqualTo("\"user_info\"");
+    }
+
+    @Test
+    void theIdentifierCaseOptionLeavesDialectsWithoutFoldingAlone() {
+        SyncConfig config = new SyncConfig();
+        config.setPreserveTargetIdentifierCase(true);
+        MySqlDialect mysql = new MySqlDialect();
+        assertThat(factory.applyTargetDialectOptions(mysql, config)).isSameAs(mysql);
     }
 }

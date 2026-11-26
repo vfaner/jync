@@ -844,6 +844,13 @@ public final class CdcConsumer implements ManagedCdcConsumer {
         /** "db.table" (any case) -> binding; a case-insensitive TreeMap unifies spellings. */
         private final Map<String, CdcTableBinding> cache = Collections
                 .synchronizedMap(new TreeMap<>(String.CASE_INSENSITIVE_ORDER));
+        /**
+         * Tables the catalog could not resolve on this connection. Without this, each
+         * TABLE_MAP for a dropped/unselected table opened a source connection and ran the
+         * full metadata read again, once per transaction. A DDL or reconnect clears it.
+         */
+        private final java.util.Set<String> missing = Collections.synchronizedSet(
+                new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER));
 
         /**
          * Layouts recorded with the resume position; empty until {@link #beginStream} runs.
@@ -868,6 +875,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             persistedLayouts = Collections.unmodifiableMap(decoded);
             ddlSeen = false;
             cache.clear();                       // 连接从位点重放:必须按当前 catalog 重读
+            missing.clear();
         }
 
         @Override
@@ -877,14 +885,19 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             if (cached != null) {
                 return cached;
             }
+            if (missing.contains(key)) {
+                return null;
+            }
             try (Connection conn = dataSourceManager.getConnection(ctx.getSourceConfig())) {
                 String actual = resolveActualTableName(conn, database, table);
                 if (actual == null) {
                     // The ONLY legitimate null: the table is genuinely absent (dropped
                     // mid-stream or never existed) — the handler marks it unsupported and
                     // the stream moves on.
-                    log.warn("CDC cannot find source table {}.{}; skipping its row events",
-                            database, table);
+                    if (missing.add(key)) {
+                        log.warn("CDC cannot find source table {}.{}; skipping its row events"
+                                + " until the next DDL or reconnect", database, table);
+                    }
                     return null;
                 }
                 MetadataReader reader = ctx.getSourceReader();
@@ -957,8 +970,10 @@ public final class CdcConsumer implements ManagedCdcConsumer {
             if (database == null) {
                 ddlSeen = true;                                  // 之后的 catalog 已新于旧镜像
                 cache.clear();                                   // DDL:全清(Review Focus #1)
+                missing.clear();
             } else {
                 cache.remove(database + "." + table);
+                missing.remove(database + "." + table);
             }
         }
 

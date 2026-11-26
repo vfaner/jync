@@ -126,7 +126,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
      * WARN would repeat on every poll, and without the per-CI key two unhealthy instances
      * would flap each other's single-throttle slot.
      */
-    private final Map<String, String> missingColumnWarnings = new java.util.concurrent.ConcurrentHashMap<>();
     /** #4: throttle for the "CDC disabled at DB level" warning (see drain()). */
     private long lastCdcOffWarnMs;
     /** Throttle for the "no capture instance for any selected table" warning. */
@@ -849,7 +848,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         // A budget cut returns from here; the lag sample still runs for the transaction
         // actually folded, so the helper is called after the result set is closed.
         String resumeAt = null;
-        boolean skippedInstance = false;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, fromBind);
             ps.setString(2, toLsn);
@@ -878,22 +876,20 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                             // applier binds EVERY binding column and JdbcRowMapper turns a
                             // missing map key into an explicit NULL, so folding these rows
                             // would overwrite the target's values — silently when the
-                            // column is nullable. Nothing in such a window can be applied
-                            // losslessly, so skip the whole instance, count the dropped
-                            // events, and tell the DBA which columns to re-capture. The
-                            // watermark still advances at the end of the drain (the same
-                            // deliberate-skip semantics as unsupported rows).
-                            long skipped = 1L; // current row
-                            while (running && !Thread.currentThread().isInterrupted()
-                                    && rs.next()) {
-                                skipped++;
-                            }
-                            stats.addSkippedUnsupported(skipped);
-                            warnMissingCapturedColumns(ci, missingCols);
-                            skippedInstance = true;
-                            break;   // the whole instance was consumed (as skips)
+                            // column is nullable. Skipping the window and advancing the
+                            // watermark turned that into permanent blindness for the table:
+                            // every later change was discarded with a green-looking stream.
+                            // The source's capture instance must be rebuilt; park instead.
+                            throw new IllegalStateException(CdcSchemaDrift.MARKER
+                                    + ": SQL Server capture instance " + ci.captureInstance
+                                    + " of " + ci.schema + "." + ci.table
+                                    + " does not capture column(s) "
+                                    + String.join(", ", missingCols)
+                                    + "; disable and re-enable CDC for the table with a"
+                                    + " capture instance that includes every column (for"
+                                    + " example @captured_column_list='*'), then restart the"
+                                    + " project and rebuild the baseline to refill the gap");
                         }
-                        missingColumnWarnings.remove(ci.captureInstance);
                         reader = RowReader.of(rs, binding, availableCols);
                         // Reads only the primary key. Used for the delete and update-before
                         // images, whose payload never reaches the target. An absent binding
@@ -946,9 +942,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         if (currentTx != null && (lastScannedTxLsn == null
                 || currentTx.compareToIgnoreCase(lastScannedTxLsn) > 0)) {
             lastScannedTxLsn = currentTx;
-        }
-        if (skippedInstance) {
-            return null;
         }
         if (resumeAt != null) {
             return resumeAt;
@@ -1359,26 +1352,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
         return missing;
     }
 
-    /**
-     * One WARN per (capture instance, missing-column set). The status panel's
-     * {@code unsupportedTables} set is the persistent signal; this line is the actionable
-     * one and must name the remediation, since nothing else tells the DBA why a tracked
-     * table stopped syncing.
-     */
-    private void warnMissingCapturedColumns(CaptureInstance ci, List<String> missingCols) {
-        String description = String.join(", ", missingCols);
-        if (description.equals(missingColumnWarnings.put(ci.captureInstance, description))) {
-            return;
-        }
-        stats.addUnsupportedTable(ci.schema + "." + ci.table);
-        log.warn("SQLServer CDC: capture instance {} of {}.{} does not capture column(s)"
-                        + " [{}] — every change in this table is being SKIPPED (applying the"
-                        + " rows would overwrite the target's values with NULL). Recreate the"
-                        + " instance capturing all columns (sys.sp_cdc_disable_table, then"
-                        + " sys.sp_cdc_enable_table with @captured_column_list = NULL or the"
-                        + " full list), then re-baseline this table",
-                ci.captureInstance, ci.schema, ci.table, description);
-    }
 
     /**
      * The per-window column plan of one capture instance's change-table ResultSet: the

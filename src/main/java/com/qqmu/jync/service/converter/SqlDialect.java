@@ -189,6 +189,33 @@ public interface SqlDialect {
     }
 
     /**
+     * Oracle-family only: preserve the source spelling (and quote it) instead of folding
+     * bare identifiers to upper case. Other dialects ignore it.
+     */
+    default SqlDialect withPreserveIdentifierCase(boolean preserve) {
+        return this;
+    }
+
+    /**
+     * Whether this dialect quotes identifiers exactly as the source spells them. Catalog
+     * lookups must use the same rule: folding a preserved lower-case name to upper case
+     * finds no object and makes an existing table look missing.
+     */
+    default boolean preservesIdentifierCase() {
+        return false;
+    }
+
+    /**
+     * Whether this dialect writes the column with the target's own auto-increment attribute
+     * (DM8's {@code AUTO_INCREMENT}) rather than the sequence+trigger emulation. Callers use
+     * it to decide that no post-load reseed is needed — after checking the target dictionary,
+     * because tables created by an older build still carry the emulation.
+     */
+    default boolean hasNativeAutoIncrement(ColumnMeta column) {
+        return false;
+    }
+
+    /**
      * Whether the connected server accepts window functions ({@code NTILE}, {@code ROW_NUMBER}),
      * which is how a full load splits a table into key ranges. MySQL 5.7 rejects the statement
      * with a syntax error, so every table of such a source would pay a failing query and fall
