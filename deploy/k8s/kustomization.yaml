@@ -14,4 +14,4 @@ resources:
 images:
   - name: vfaner/jync
     newName: vfaner/jync
-    newTag: "2.4.6"
+    newTag: "2.4.7"

@@ -35,7 +35,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    image: jync:2.4.6
+    image: jync:2.4.7
     container_name: jync-postgres
     restart: unless-stopped
     depends_on:

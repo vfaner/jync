@@ -10,7 +10,7 @@
 - **运行阶段**：`eclipse-temurin:17-jre-jammy`，只带 JRE；`curl` 仅用于 HEALTHCHECK；以非 root 用户 `jync`（uid 10001）运行。
 
 ```bash
-docker build -t jync:2.4.6 .
+docker build -t jync:2.4.7 .
 ```
 
 构建时跳过测试（`-DskipTests`），测试请在 CI 或本地 `mvn clean test` 跑。
@@ -31,10 +31,10 @@ docker build -t jync:2.4.6 .
 发布 tag 时由 `.github/workflows/docker-release.yml` 构建双架构镜像（linux/amd64 + linux/arm64）。Docker Hub 推送需要仓库 Secrets `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`；未配置时仍会推 GHCR，也可在 Actions 页面手动运行该工作流。
 
 ```bash
-docker pull vfaner/jync:2.4.6
+docker pull vfaner/jync:2.4.7
 docker run -d --name jync -p 8080:8080 \
   -v "$PWD/data:/app/data" -v "$PWD/logs:/app/logs" \
-  -e TZ=Asia/Shanghai --restart unless-stopped vfaner/jync:2.4.6
+  -e TZ=Asia/Shanghai --restart unless-stopped vfaner/jync:2.4.7
 ```
 
 也可以直接用根目录的 `docker-compose.release.yml`（官方镜像、不本地构建）：
@@ -43,7 +43,7 @@ docker run -d --name jync -p 8080:8080 \
 docker compose -f docker-compose.release.yml up -d
 ```
 
-备用镜像：`ghcr.io/vfaner/jync:2.4.6`。国内访问 Docker Hub 不稳定时配置 registry mirror，或使用 GHCR / 私有镜像仓库。
+备用镜像：`ghcr.io/vfaner/jync:2.4.7`。国内访问 Docker Hub 不稳定时配置 registry mirror，或使用 GHCR / 私有镜像仓库。
 
 > **容器内不要使用应用内的「一键升级」替换 jar**：jar 在镜像层，容器内也没有 Docker socket。v2.4.4 起页面在容器中会把升级按钮改为展示 `docker pull` / `docker compose up -d` 命令；自动更新可选 Watchtower（compose 文件内有示例注释）。
 
@@ -57,7 +57,7 @@ docker run -d --name jync \
   -v jync-logs:/app/logs \
   -e TZ=Asia/Shanghai \
   --restart unless-stopped \
-  jync:2.4.6
+  jync:2.4.7
 ```
 
 `-p 8443:8443` 只有用「应用内 TLS」（在「系统配置」上传证书或手填证书路径）时才需要；端口可在页面上改，改完同步改这里的映射。上传的密钥库落在数据卷 `/app/data/tls`，重启容器后生效。
@@ -71,7 +71,7 @@ docker run ... \
   -v /etc/jync/tls:/etc/jync/tls:ro \
   -e JYN_TLS_PEM_CERT_PATH=/etc/jync/tls/fullchain.pem \
   -e JYN_TLS_PEM_KEY_PATH=/etc/jync/tls/privkey.pem \
-  jync:2.4.6
+  jync:2.4.7
 ```
 
 密钥库同理（`JYN_TLS_KEYSTORE_PATH` + `JYN_TLS_KEYSTORE_PASSWORD`）。一旦配置，系统配置页的 TLS 卡片变为只读，改证书只需替换宿主机文件并重启容器。详见[配置文档](configuration.md)「应用内 TLS」。
@@ -112,7 +112,7 @@ docker compose -f deploy/docker-compose.mysql.yml up -d --build
 
 ## 5. Kubernetes 部署
 
-清单在 `deploy/k8s/`，用 Kustomize 组织。默认直接引用官方多架构镜像 `vfaner/jync:2.4.6`（amd64 / arm64 节点均可调度），不需要自己构建：
+清单在 `deploy/k8s/`，用 Kustomize 组织。默认直接引用官方多架构镜像 `vfaner/jync:2.4.7`（amd64 / arm64 节点均可调度），不需要自己构建：
 
 ```bash
 kubectl apply -k deploy/k8s/
@@ -122,8 +122,8 @@ kubectl -n jync rollout status deploy/jync
 需要换私有仓库或 GHCR 镜像时，只改 `deploy/k8s/kustomization.yaml` 的 `images` 变换；要从源码构建，再用下面的命令替换 `newName`：
 
 ```bash
-docker build -t registry.example.com/qqmu/jync:2.4.6 .
-docker push registry.example.com/qqmu/jync:2.4.6
+docker build -t registry.example.com/qqmu/jync:2.4.7 .
+docker push registry.example.com/qqmu/jync:2.4.7
 ```
 
 要点：
@@ -186,7 +186,7 @@ Jync 的同步正确性不依赖单实例，依赖的是**共享元数据库**�
 
 ```bash
 # Docker（官方镜像）：换标签重建容器，数据卷不动
-docker pull vfaner/jync:2.4.6
+docker pull vfaner/jync:2.4.7
 docker compose -f docker-compose.release.yml up -d
 
 # Docker（本地构建）：重新 build 后重建
