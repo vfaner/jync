@@ -612,8 +612,16 @@
   function initConfigDirtyTracking() {
     configForm = document.getElementById('config-form');
     if (!configForm) { return; }
-    configForm.addEventListener('input', markConfigDirty);
-    configForm.addEventListener('change', markConfigDirty);
+    // Filtering the object list is not a configuration edit; otherwise typing a filter
+    // forces the "unsaved configuration" dialog on Start/Sync now.
+    function markUnlessFilter(event) {
+      if (event.target && event.target.closest && event.target.closest('[data-filter]')) {
+        return;
+      }
+      markConfigDirty();
+    }
+    configForm.addEventListener('input', markUnlessFilter);
+    configForm.addEventListener('change', markUnlessFilter);
     // 首屏的推荐勾选不是用户改的，但它确实还没保存：data-original-strategy 是已保存
     // 策略，两者不一致就按「配置未保存」处理。否则点「开启自动同步」会不经确认按
     // 已保存的轮询策略启动，界面却还勾着日志 CDC，随后推荐条件失效、轮询按钮浮出来。
@@ -661,10 +669,6 @@
 
   /** 配置表单以 AJAX 方式提交，解析服务端 JSON；会话/非 JSON 响应直接整页重载。 */
   function postConfigForm() {
-    var transportProblem = fanoutTransportProblem();
-    if (transportProblem) {
-      return Promise.reject(new Error(transportProblem));
-    }
     var headers = {
       'Content-Type': 'application/x-www-form-urlencoded',
       'Accept': 'application/json',
@@ -1362,8 +1366,12 @@
     }
 
     function apply() {
-      getJson(select.dataset.action + '?type=' + encodeURIComponent(select.value))
+      var requestedType = select.value;
+      getJson(select.dataset.action + '?type=' + encodeURIComponent(requestedType))
         .then(function (p) {
+          // The user switched again while this response was in flight: applying it would
+          // put type A's default port/URL under type B's label.
+          if (select.value !== requestedType) return;
           // getJson 的兜底载荷（success:false）不含任何预填字段：直接返回，
           // 和旧版「静默失败」一致，不能拿 undefined 去改端口和卡片显隐
           if (p.success === false) return;
@@ -1583,6 +1591,8 @@
 
       getJson(btn.dataset.action + '?table=' + encodeURIComponent(table))
         .then(function (data) {
+          // The modal was reopened on another table while this request was in flight.
+          if (modal.dataset.table !== table) { return; }
           options.innerHTML = '';
           var columns = data && data.success && Array.isArray(data.columns)
             ? data.columns : [];
@@ -1604,6 +1614,7 @@
           save.disabled = false;
         })
         .catch(function () {
+          if (modal.dataset.table !== table) { return; }
           options.innerHTML = '';
           addOption('', t('cursor.picker.auto'), !current);
           if (current) {
@@ -1781,37 +1792,6 @@
   // 可选的 TARGET 连接，选中即变成标签；不再单独放「+ 添加目标」下拉控件。
   // 事件中转：选 Redis Stream 时才露出「Redis 目标」下拉。目标就是缓存投影用的那套
   // 连接配置（含加密口令），jar 直接运行也不再需要额外的服务端 URI 配置。
-  /**
-   * The one client-side check the server would otherwise reject after a round-trip:
-   * "Redis Stream" without a target. Returning the reason here lets the save paths show
-   * it directly instead of a generic failure toast.
-   */
-  function fanoutTransportProblem() {
-    var transport = document.querySelector('[data-role="fanout-transport"]');
-    if (!transport || transport.value !== 'REDIS') { return null; }
-    var target = document.querySelector('[data-role="fanout-redis-target"]');
-    if (!target || target.value) { return null; }
-    return target.getAttribute('data-required-message')
-      || t('option.fanoutTransport.required');
-  }
-
-  function bindFanoutTransport(select) {
-    // The card sits outside the config form (its controls join it by form="config-form"),
-    // so the paired select is found document-wide, not under closest('form').
-    var target = document.querySelector('[data-role="fanout-redis-target"]');
-    if (!target) return;
-    function apply() {
-      target.classList.toggle('is-hidden', select.value !== 'REDIS');
-    }
-    select.addEventListener('change', function () {
-      apply();
-      // Preview the table for the new transport (the value is not saved yet).
-      var card = select.closest('.fanout-card');
-      if (card && card._fanoutRefresh) { card._fanoutRefresh(select.value); }
-    });
-    apply();
-  }
-
   function bindTargetPicker(picker) {
     var chips = picker.querySelector('[data-role="target-chips"]');
     var menu = picker.querySelector('[data-role="target-menu"]');
@@ -1845,6 +1825,10 @@
         input.value = chip.getAttribute('data-id');
         extras.appendChild(input);
       });
+      // The project form reveals the event-transport block once a second target exists.
+      chips.dispatchEvent(new CustomEvent('jync:targets-changed', {
+        bubbles: true, detail: { count: nodes.length }
+      }));
     }
     function addChip(id, name, type) {
       if (!id || chipNodes().some(function (c) { return c.getAttribute('data-id') === id; })) return;
@@ -3170,12 +3154,17 @@
       if (readyBadge) readyBadge.hidden = phase !== 'READY';
     }
 
+    var pollInFlight = false;
     function pollOnce() {
+      if (pollInFlight) { return; }
+      pollInFlight = true;
       getJson(statusUrl).then(function (s) {
         if (!s || s.success === false) { stopPolling(); return; } // 会话过期等兜底载荷
         render(s);
         if (s.phase !== 'DOWNLOADING') stopPolling();
-      });
+      }).catch(function () {
+        // A transient status failure must not leave the guard stuck forever.
+      }).then(function () { pollInFlight = false; });
     }
 
     function startPolling() {
@@ -3958,23 +3947,10 @@
     if (!url) return;
     var timer = null;
     var inFlight = false;
-    function headerApply(transport) {
-      var select = box.querySelector('[data-role="fanout-transport"]');
-      var header = box.querySelector('[data-role="fanout-backlog-header"]');
-      if (!select || !header) return;
-      header.textContent = transport === 'REDIS'
-        ? select.getAttribute('data-label-backlog-redis')
-        : select.getAttribute('data-label-backlog-spool');
-    }
-    function refresh(transport) {
+    function refresh() {
       if (inFlight) return;
-      var select = box.querySelector('[data-role="fanout-transport"]');
-      var chosen = transport || (select ? select.value : '');
-      var requestUrl = chosen
-        ? url + (url.indexOf('?') >= 0 ? '&' : '?') + 'transport=' + encodeURIComponent(chosen)
-        : url;
       inFlight = true;
-      fetch(requestUrl, { cache: 'no-store' })
+      fetch(url, { cache: 'no-store' })
         .then(function (response) {
           if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.text();
@@ -3983,9 +3959,15 @@
           var fresh = new DOMParser().parseFromString(html, 'text/html');
           var rows = fresh.querySelector('[data-role="fanout-rows"]');
           var current = box.querySelector('[data-role="fanout-rows"]');
+          if (!rows) {
+            // Login redirect or deleted project: polling a fragment that no longer exists
+            // would show stale positions forever.
+            if (timer) { clearInterval(timer); timer = null; }
+            window.location.reload();
+            return;
+          }
           if (rows && current) {
             current.innerHTML = rows.innerHTML;
-            headerApply(chosen);
             var search = box.querySelector('[data-role="fanout-search"]');
             if (search) { search.dispatchEvent(new Event('input')); }
           }
@@ -3997,9 +3979,6 @@
       if (timer) { clearInterval(timer); timer = null; }
       if (!document.hidden) timer = setInterval(refresh, 5000);
     }
-    box._fanoutRefresh = refresh;
-    headerApply(box.querySelector('[data-role="fanout-transport"]')
-      ? box.querySelector('[data-role="fanout-transport"]').value : 'SPOOL');
     document.addEventListener('visibilitychange', apply);
     apply();
   }
@@ -5340,7 +5319,14 @@
     var panel = root.querySelector('[data-role="target-table-panel"]');
     var status = root.querySelector('[data-role="target-table-status"]');
     var select = document.getElementById('targetDbId');
-    if (!input || !panel || !status || !select) { return; }
+    // A batch member renders the target as a nameless hidden input (the connection is
+    // locked), so resolve the id from the form when there is no editable select.
+    var form = root.closest ? root.closest('form') : null;
+    var fixedTarget = form ? form.querySelector('input[type="hidden"][name="targetDbId"]') : null;
+    if (!input || !panel || !status || (!select && !fixedTarget)) { return; }
+    function currentTargetId() {
+      return select ? select.value : (fixedTarget ? fixedTarget.value : '');
+    }
 
     var url = (root.getAttribute('data-tables-url') || '').replace(/\/$/, '');
     var text = {
@@ -5442,14 +5428,14 @@
       say(text.loading);
       getJson(url + '/' + encodeURIComponent(id) + '/tables').then(function (payload) {
         // 连接在请求返回前又换了：这份清单已经和下拉框对不上，丢弃。
-        if (select.value !== id) { return; }
+        if (currentTargetId() !== id) { return; }
         if (!payload || !payload.success) { say(text.failed); return; }
         tables = payload.tables || [];
         cache[id] = tables;
         say(tables.length ? loadedLabel(tables.length) : text.empty);
       }).catch(function () {
         // 网络或服务端异常也要落到状态行，否则一直停在“加载中”。
-        if (select.value === id) { say(text.failed); }
+        if (currentTargetId() === id) { say(text.failed); }
       });
     }
 
@@ -5485,10 +5471,12 @@
         hidePanel();
       }
     });
-    select.addEventListener('change', function () { load(select.value); });
+    if (select) {
+      select.addEventListener('change', function () { load(select.value); });
+    }
 
     // 编辑页会带上已保存的目标连接：进页面就读一次，省掉一次手动重选。
-    if (select.value) { load(select.value); }
+    if (currentTargetId()) { load(currentTargetId()); }
   }
 
   /* ETL 表单只显示当前源类型用得上的字段：原生 MongoDB 源用集合 + 过滤条件，
@@ -5748,7 +5736,6 @@
     document.querySelectorAll('[data-role="column-rule-table"]').forEach(bindColumnRuleFilter);
     document.querySelectorAll('[data-role="cursor-priority-open"]').forEach(bindCursorPriority);
     document.querySelectorAll('[data-role="target-picker"]').forEach(bindTargetPicker);
-    document.querySelectorAll('[data-role="fanout-transport"]').forEach(bindFanoutTransport);
     document.querySelectorAll('.fanout-card').forEach(bindFanoutTable);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
     document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);

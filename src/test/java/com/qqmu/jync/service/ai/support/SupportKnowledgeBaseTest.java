@@ -70,6 +70,28 @@ class SupportKnowledgeBaseTest {
     }
 
     @Test
+    void aChineseQuestionAboutLongTextDriftFindsTheLobSection() {
+        var hits = kb.search("zh", "LONGTEXT LONGBLOB 不参与漂移比对 是不是不支持同步", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("大字段与漂移比对（LONGTEXT / LONGBLOB）");
+            assertThat(hit.body())
+                    .contains("不是不支持同步")
+                    .contains("内容级漂移比对")
+                    .contains("updated_at");
+        });
+    }
+
+    @Test
+    void anEnglishQuestionAboutLongTextDriftFindsTheLobSection() {
+        var hits = kb.search("en", "LONGTEXT LONGBLOB excluded from drift comparison supported",
+                3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit ->
+                assertThat(hit.title()).isEqualTo("Large columns and drift comparison (LONGTEXT / LONGBLOB)"));
+    }
+
+    @Test
     void aChineseQuestionAboutTdengineFindsTheTimeSeriesSection() {
         var hits = kb.search("zh", "TDengine 时序数据库怎么同步", 3);
         assertThat(hits).isNotEmpty();

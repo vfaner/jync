@@ -138,6 +138,25 @@ public class DataSyncService {
     private final Map<String, Map<String, String>> targetColumnSpellings =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * Drops everything cached for one project. Called from the engine's
+     * evictProjectCaches on reset/delete; without it these maps lived for the whole process
+     * and a schema/endpoint switch could reuse a spelling or size computed elsewhere.
+     */
+    public void evictProject(Long projectId) {
+        if (projectId == null) {
+            return;
+        }
+        String prefix = projectId + ":";
+        guardedScanNotices.removeIf(key -> key.startsWith(prefix));
+        cursorIndexChecked.removeIf(key -> key.startsWith(prefix));
+        nullCursorChecked.removeIf(key -> key.startsWith(prefix));
+        windowFunctionNotices.remove(projectId);
+        String pipePrefix = projectId + "|";
+        targetColumnSpellings.keySet().removeIf(key -> key.startsWith(pipePrefix));
+        tableStats.keySet().removeIf(key -> key.startsWith(pipePrefix));
+    }
+
     /** Cached schema-wide table sizes, used only to size a full-load chunk. */
     private final Map<String, CachedTableStats> tableStats =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -268,6 +287,11 @@ public class DataSyncService {
             boolean loaded = progress.getInitialLoadDone() != null && progress.getInitialLoadDone();
             if (loaded) {
                 result.skipped = true;
+                // Deletes are matched by primary key, not by the cursor column, so a table
+                // that cannot be incrementally read must still propagate them when the
+                // switch is on. Previously the flag stayed false and the setting silently
+                // did nothing for every NONE-cursor table.
+                result.deletionSyncStillValid = table.hasPrimaryKey();
                 result.skipReason = strategy.getRationale();
                 return result;
             }
@@ -811,12 +835,26 @@ public class DataSyncService {
             Instant instant = Instant.parse(watermark);
             return instant.minusMillis(lagMs).toString();
         } catch (Exception e) {
+            String text = watermark.trim();
             try {
-                LocalDateTime wall = LocalDateTime.parse(watermark.trim().replace(' ', 'T'));
+                LocalDateTime wall = LocalDateTime.parse(text.replace(' ', 'T'));
                 return JdbcRowMapper.wallClockToString(wall.minusNanos(lagMs * 1_000_000L));
-            } catch (Exception ignored) {
-                // Not a timestamp at all; leave it alone rather than corrupt the cursor.
-                return watermark;
+            } catch (Exception notDateTime) {
+                // A DATE/TIME cursor was stored as "yyyy-MM-dd"/"HH:mm:ss". Neither form
+                // parsed above, so the safety margin silently disappeared and rows stamped
+                // with the same day/time-of-day were never picked up again.
+                try {
+                    return java.time.LocalDate.parse(text)
+                            .minusDays(Math.max(1L, lagMs / 86_400_000L)).toString();
+                } catch (Exception notDate) {
+                    try {
+                        return java.time.LocalTime.parse(text)
+                                .minusSeconds(Math.max(1L, lagMs / 1_000L)).toString();
+                    } catch (Exception notTime) {
+                        // Not a temporal value at all; leave it alone rather than corrupt it.
+                        return watermark;
+                    }
+                }
             }
         }
     }
@@ -904,7 +942,8 @@ public class DataSyncService {
         }
         // Report once per table/column per process: the COUNT(*) is a full scan on a keyless
         // table and a clean/dirty verdict does not change cycle to cycle.
-        if (!nullCursorChecked.add(table.getName() + ':' + strategy.getColumn())) {
+        if (!nullCursorChecked.add(projectScope(ctx) + ':' + table.getName() + ':'
+                + strategy.getColumn())) {
             return;
         }
         if (bookkeepingCountWouldScan(sourceConn, table, strategy, ctx, "NULL-cursor probe")) {
@@ -1530,6 +1569,11 @@ public class DataSyncService {
      * what "large" means; 0 turns the advice off with the guard). Indexes created later are
      * not re-checked — the advice has already been given.
      */
+    /** Unit-test contexts carry no project; the table alone scopes the warning caches. */
+    private static String projectScope(SyncContext ctx) {
+        return ctx.getProject() == null ? "-" : String.valueOf(ctx.projectId());
+    }
+
     private void adviseCursorIndexOnce(Connection conn, TableMeta table,
                                        CursorStrategy strategy, SyncContext ctx) {
         String column = strategy.getColumn();
@@ -1585,7 +1629,7 @@ public class DataSyncService {
         if (!Boolean.FALSE.equals(cursorColumnIsIndexed(conn, table, strategy.getColumn(), ctx))) {
             return false;
         }
-        String key = what + ':' + table.getName();
+        String key = projectScope(ctx) + ':' + what + ':' + table.getName();
         if (guardedScanNotices.add(key)) {
             log.info("Skipping the {} for {}: cursor column {} has no leading index and the table"
                             + " holds about {} row(s), above sync.max-unindexed-scan-rows ({})."
@@ -2069,11 +2113,12 @@ public class DataSyncService {
                 String upsertSql = targetDialect.getUpsertSql(ctx.getTargetSchema(), targetTable,
                         sqlColumns, statementKeys, typeByColumn, canGuard, declarationByColumn);
                 List<String> bindOrder = targetDialect.upsertBindOrder(sqlColumns, statementKeys);
-                // Keyless incremental windows have no key to absorb a partial replay. Commit
-                // only at the end of the pass so a mid-window failure rolls the whole window
-                // back; per-batch commits would leave rows that the unadvanced cursor sends
-                // again as plain INSERT duplicates. Keyed tables keep the batch cadence.
-                boolean commitEachBatch = !pkColumns.isEmpty() || !guardReplayedRows;
+                // A keyless table has no key to absorb a partial replay. Commit only at the
+                // end of the pass so a retried chunk rolls the whole thing back; per-batch
+                // commits left the first batches in the target and the retry re-inserted
+                // them as plain INSERT duplicates (full load included). Keyed tables keep
+                // the batch cadence because an upsert can be replayed safely.
+                boolean commitEachBatch = !pkColumns.isEmpty();
 
                 if (pkColumns.isEmpty()) {
                     // Without a key there is no way to identify an existing row, so repeated

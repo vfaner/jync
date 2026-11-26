@@ -131,6 +131,18 @@ public final class SpoolingEventTransport implements EventTransport {
             long ack = readOffset();
             this.ackPosition = Math.min(ack, spool.length());
             this.readPosition = ackPosition;
+            // A .failed marker means this target missed events and the consumer is about to
+            // re-baseline. The file is often already at its cap, so keeping it would make
+            // every baseline publish fail at the same cap and the barrier never complete.
+            // Reset it now; the marker stays until clearRebaselineMarks() after the load.
+            if (Files.exists(directory.resolve(group + ".failed"))) {
+                log.warn("Fan-out spool for target '{}' failed earlier; resetting its"
+                        + " {} byte(s) for the pending re-baseline", group, spool.length());
+                spool.setLength(0);
+                this.ackPosition = 0L;
+                this.readPosition = 0L;
+                Files.writeString(offsetPath, "0");
+            }
             truncateIncompleteTail();
         }
 

@@ -58,18 +58,18 @@ class SyncJobOrphanTest {
 
         verify(scheduler).deleteJob(jobKey);
         verify(runner).forget(1L);
-        verify(runner, never()).runOnce(1L);
+        verify(runner, never()).runOnce(1L, false);
     }
 
     @Test
     void anExistingProjectRunsTheCycleAsUsual() {
         when(runner.findProject(1L)).thenReturn(Optional.of(project(true)));
-        when(runner.runOnce(1L)).thenReturn(
+        when(runner.runOnce(1L, false)).thenReturn(
                 SyncTaskRunner.Outcome.executed(new SyncResult()));
 
         assertThatCode(() -> job.execute(context)).doesNotThrowAnyException();
 
-        verify(runner).runOnce(1L);
+        verify(runner).runOnce(1L, false);
     }
 
     /**
@@ -84,7 +84,7 @@ class SyncJobOrphanTest {
         assertThatCode(() -> job.execute(context)).doesNotThrowAnyException();
 
         verify(scheduler).deleteJob(jobKey);
-        verify(runner, never()).runOnce(1L);
+        verify(runner, never()).runOnce(1L, false);
     }
 
     private static Project project(boolean enabled) {

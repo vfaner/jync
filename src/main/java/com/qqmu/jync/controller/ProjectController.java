@@ -27,6 +27,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import com.qqmu.jync.service.ai.support.SupportDraftStore;
 import com.qqmu.jync.service.auth.AccessGuard;
+import com.qqmu.jync.service.auth.Ownership;
 import com.qqmu.jync.config.I18nConfig;
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.ColumnRule;
@@ -179,6 +180,9 @@ public class ProjectController {
             model.addAttribute("copyFrom", source.getId());
         }
         model.addAttribute("project", project);
+        // Nothing to lock on a project that does not exist yet; the edit form sets this from
+        // the running state and the template evaluates it as a boolean.
+        model.addAttribute("topologyLocked", false);
         model.addAttribute("fanoutMaxTargets", properties.getFanout().getMaxTargets());
         // A clone starts from the source's extra targets (the primary is chosen fresh), so
         // saving without touching the picker does not silently turn a fan-out source into
@@ -196,6 +200,11 @@ public class ProjectController {
             project.setTargetDbId(source.getTargetDbId());
         }
         model.addAttribute("fanoutSelected", clonedExtras);
+        model.addAttribute("fanoutTransport", normalizedTransport(sourceConfig));
+        model.addAttribute("fanoutRedisTargetId", sourceConfig == null
+                ? null : sourceConfig.getFanoutRedisTargetId());
+        model.addAttribute("fanoutRedisTargets", fanoutRedisCandidates(project,
+                sourceConfig == null ? null : sourceConfig.getFanoutRedisTargetId()));
         addDatabaseOptions(model, project);
         addRedisOptions(model, project);
         return "project-form";
@@ -234,6 +243,78 @@ public class ProjectController {
                         .noneMatch(CaptureStrategy::isLogCdc)) {
             throw new IllegalArgumentException("error.project.fanout.requires.binlog");
         }
+    }
+
+    /** Read-only label on the detail card: the transport was fixed when the project was saved. */
+    private String fanoutTransportLabel(SyncConfig config) {
+        java.util.Locale locale = LocaleContextHolder.getLocale();
+        if (!"REDIS".equals(normalizedTransport(config))) {
+            return messages.get("option.fanoutTransport.spool", locale);
+        }
+        String label = messages.get("option.fanoutTransport.redis", locale);
+        RedisTarget target = config.getFanoutRedisTargetId() == null || redisTargetService == null
+                ? null
+                : redisTargetService.find(config.getFanoutRedisTargetId()).orElse(null);
+        return target == null ? label : label + " · " + target.getName();
+    }
+
+    private static String normalizedTransport(SyncConfig config) {
+        return config == null || config.getFanoutTransport() == null
+                || config.getFanoutTransport().isBlank()
+                        ? "SPOOL" : config.getFanoutTransport();
+    }
+
+    /**
+     * Fail before the save when the form picked Redis Stream without a usable relay, so a
+     * rejected create does not leave a rolled-back transaction and a consumed id behind.
+     */
+    private void validateFanoutTransport(Project project, List<Long> extraTargets,
+                                         String transport, Long redisTargetId) {
+        if (extraTargets == null || extraTargets.isEmpty()
+                || transport == null || transport.isBlank()
+                || !"REDIS".equalsIgnoreCase(transport.trim())) {
+            return;
+        }
+        RedisTarget target = redisTargetId == null || redisTargetService == null
+                ? null : redisTargetService.find(redisTargetId).orElse(null);
+        if (target == null) {
+            throw new IllegalArgumentException("error.project.fanout.redisTarget.invalid");
+        }
+        if (target.isClusterMode()) {
+            throw new IllegalArgumentException("error.project.fanout.redisTarget.cluster");
+        }
+        // Same rule as the cache target: a relay carries an encrypted password, so a new
+        // reference must be editable by the actor. An unchanged stored relay stays valid
+        // even when its owner differs, so renaming the project cannot brick the form.
+        SyncConfig stored = project.getId() == null ? null : projectService.loadConfig(project);
+        boolean unchanged = stored != null
+                && redisTargetId.equals(stored.getFanoutRedisTargetId());
+        if (!unchanged) {
+            Ownership.requireReferenceable(target.getOwnerUsername(), target.getName(),
+                    AccessGuard.current());
+        }
+    }
+
+    /**
+     * Single-node Redis endpoints a fan-out can use as its event relay. Cluster targets are
+     * excluded: the stream transport's XREADGROUP/XAUTOCLAIM path is single-node only.
+     */
+    private List<RedisTarget> fanoutRedisCandidates(Project project, Long selectedId) {
+        if (redisTargetService == null) {
+            return List.of();
+        }
+        String scope = optionScope(project.getOwnerUsername(), AccessGuard.current());
+        List<RedisTarget> options = new ArrayList<>(scoped(redisTargetService.findAll(), scope,
+                RedisTarget::getOwnerUsername).stream()
+                .filter(target -> !target.isClusterMode())
+                .toList());
+        // Keep the stored relay selectable even if it is no longer offered (foreign owner),
+        // so editing an unrelated field does not silently swap it for the local spool.
+        if (selectedId != null
+                && options.stream().noneMatch(target -> selectedId.equals(target.getId()))) {
+            redisTargetService.find(selectedId).ifPresent(options::add);
+        }
+        return options;
     }
 
     /**
@@ -285,6 +366,11 @@ public class ProjectController {
                     editConfig == null || editConfig.getFanoutTargetDbIds() == null
                             ? java.util.List.of()
                             : editConfig.getFanoutTargetDbIds());
+            model.addAttribute("fanoutTransport", normalizedTransport(editConfig));
+            model.addAttribute("fanoutRedisTargetId",
+                    editConfig == null ? null : editConfig.getFanoutRedisTargetId());
+            model.addAttribute("fanoutRedisTargets", fanoutRedisCandidates(project,
+                    editConfig == null ? null : editConfig.getFanoutRedisTargetId()));
             addDatabaseOptions(model, project);
             addRedisOptions(model, project);
             return "project-form";
@@ -360,16 +446,22 @@ public class ProjectController {
                        @RequestParam(name = "copyFrom", required = false) Long copyFrom,
                        @RequestParam(name = "fanoutTargetIds", required = false)
                        List<Long> fanoutTargetIds,
+                       @RequestParam(name = "fanoutTransport", required = false)
+                       String fanoutTransport,
+                       @RequestParam(name = "fanoutRedisTargetId", required = false)
+                       Long fanoutRedisTargetId,
                        RedirectAttributes flash) {
         try {
             validateFanoutTargets(project, fanoutTargetIds);
+            validateFanoutTransport(project, fanoutTargetIds, fanoutTransport,
+                    fanoutRedisTargetId);
             // The clone is created and its settings copied in one transaction; a failure
             // leaves neither an empty project nor a half-initialized one behind.
             Project saved = copyFrom != null
                     ? projectService.saveCloneWithFanout(project, copyFrom, fanoutTargetIds,
-                            AccessGuard.current())
+                            fanoutTransport, fanoutRedisTargetId, AccessGuard.current())
                     : projectService.saveWithFanout(project, fanoutTargetIds,
-                            AccessGuard.current());
+                            fanoutTransport, fanoutRedisTargetId, AccessGuard.current());
             flash.addFlashAttribute("message", "msg.project.saved");
             return "redirect:/projects/" + saved.getId();
         } catch (IllegalArgumentException | IllegalStateException e) {
@@ -458,15 +550,7 @@ public class ProjectController {
         List<Map<String, Object>> fanoutStatuses = buildFanoutStatuses(id, project, config);
         if (!fanoutStatuses.isEmpty()) {
             model.addAttribute("fanoutStatuses", fanoutStatuses);
-            // Candidate Redis endpoints for the fan-out event transport: the same targets
-            // the cache projection uses. Cluster targets are excluded — the stream
-            // transport is single-node (XAUTOCLAIM/XREADGROUP on a cluster would need a
-            // different client and key routing).
-            model.addAttribute("fanoutRedisTargets", redisTargetService == null
-                    ? java.util.List.of()
-                    : redisTargetService.findAll().stream()
-                            .filter(target -> !target.isClusterMode())
-                            .toList());
+            model.addAttribute("fanoutTransportLabel", fanoutTransportLabel(config));
         }
         // In-flight chunked full loads (checkpoints exist only while a load is unfinished):
         // lets the page show chunk progress and the resume promise per table.
@@ -813,31 +897,18 @@ public class ProjectController {
 
     /** Polled by the detail page so per-target positions and spool backlog stay live. */
     @GetMapping("/{id}/fanout-status")
-    public String fanoutStatusFragment(@PathVariable Long id,
-            @RequestParam(name = "transport", required = false) String transport,
-            Model model) {
+    public String fanoutStatusFragment(@PathVariable Long id, Model model) {
         Project project = projectService.findById(id).orElse(null);
         if (project == null) {
             return "project-detail/fanout-card :: rows";
         }
         SyncConfig config = projectService.loadConfig(project);
-        model.addAttribute("fanoutStatuses", buildFanoutStatuses(id, project, config,
-                transport));
+        model.addAttribute("fanoutStatuses", buildFanoutStatuses(id, project, config));
         return "project-detail/fanout-card :: rows";
     }
 
     private List<Map<String, Object>> buildFanoutStatuses(Long projectId, Project project,
                                                           SyncConfig config) {
-        return buildFanoutStatuses(projectId, project, config, null);
-    }
-
-    /**
-     * @param transportOverride display-only transport (the page previews a selection before
-     *     it is saved); null means the saved/server default
-     */
-    private List<Map<String, Object>> buildFanoutStatuses(Long projectId, Project project,
-                                                          SyncConfig config,
-                                                          String transportOverride) {
         if (fanoutPositionStore == null || config == null
                 || config.getFanoutTargetDbIds() == null
                 || config.getFanoutTargetDbIds().isEmpty()) {
@@ -851,11 +922,6 @@ public class ProjectController {
         String transport = config.getFanoutTransport();
         if (transport == null || transport.isBlank()) {
             transport = properties.getFanout().getTransport().name();
-        }
-        if ("REDIS".equalsIgnoreCase(transportOverride)) {
-            transport = "REDIS";
-        } else if ("SPOOL".equalsIgnoreCase(transportOverride)) {
-            transport = "SPOOL";
         }
         // One query for the connections and one for the positions, not two per target:
         // the card polls every five seconds even with twenty targets.
@@ -1153,105 +1219,6 @@ public class ProjectController {
                     config.setAutoSyncKnownTables(null);
                 }
                 config.setAutoSyncNewTables(autoSync);
-                List<Long> fanout = form.getFanoutTargetIds();
-                if (fanout != null) {
-                    List<Long> clean = new ArrayList<>();
-                    for (Long targetId : fanout) {
-                        if (targetId != null && !clean.contains(targetId)) {
-                            clean.add(targetId);
-                        }
-                    }
-                    // One worker, one connection and one queue entry set per target; 19
-                    // extras (20 in total) is the documented ceiling rather than a
-                    // technical limit of the fan-out design.
-                    if (clean.size() > properties.getFanout().getMaxTargets() - 1) {
-                        return ConfigSaveOutcome.error("error.project.fanout.tooMany");
-                    }
-                    if (!clean.isEmpty()) {
-                        CaptureStrategy effective = strategyParam != null
-                                ? CaptureStrategy.valueOf(strategyParam)
-                                : config.getCaptureStrategyOrDefault();
-                        if (!effective.isLogCdc()
-                                || project.getTargetKindOrDefault()
-                                        != SyncTargetKind.JDBC) {
-                            return ConfigSaveOutcome.error(
-                                    "error.project.fanout.requires.binlog");
-                        }
-                        for (Long targetId : clean) {
-                            DatabaseConfig target = databaseConfigService.findById(targetId)
-                                    .orElse(null);
-                            if (target == null || target.getRole() != ConnectionRole.TARGET
-                                    || java.util.Objects.equals(targetId, project.getSourceDbId())
-                                    || java.util.Objects.equals(targetId, project.getTargetDbId())) {
-                                return ConfigSaveOutcome.error("error.project.fanout.invalid");
-                            }
-                        }
-                    }
-                    config.setFanoutTargetDbIds(clean);
-                }
-                // Per-project transport choice. A change moves where UNDELIVERED events
-                // live: the capture anchor has already advanced past events sitting in the
-                // old place, so the safe move is the same as a target-list change — refuse
-                // while running, and drop the anchor so the next start re-baselines every
-                // target instead of silently skipping that window.
-                String requestedTransport = form.getFanoutTransport();
-                if (requestedTransport != null) {
-                    String cleanTransport = requestedTransport.trim();
-                    if (cleanTransport.isEmpty()) {
-                        // A jar-only deployment has two choices: the local queue or a
-                        // configured Redis target. Absent means the local queue.
-                        cleanTransport = "SPOOL";
-                    } else if (!"SPOOL".equalsIgnoreCase(cleanTransport)
-                            && !"REDIS".equalsIgnoreCase(cleanTransport)) {
-                        return ConfigSaveOutcome.error(
-                                "error.project.fanout.transport.invalid");
-                    } else {
-                        cleanTransport = cleanTransport.toUpperCase(java.util.Locale.ROOT);
-                    }
-                    Long requestedRedisTarget = "REDIS".equals(cleanTransport)
-                            ? form.getFanoutRedisTargetId() : null;
-                    if ("REDIS".equals(cleanTransport)) {
-                        // The value is a Redis *target* id: same connection entity (and
-                        // encrypted password) the cache projection uses, so a jar-only
-                        // deployment configures nothing extra on the server.
-                        com.qqmu.jync.model.RedisTarget redisTarget =
-                                redisTargetService == null || requestedRedisTarget == null
-                                        ? null
-                                        : redisTargetService.find(requestedRedisTarget)
-                                                .orElse(null);
-                        if (redisTarget == null) {
-                            return ConfigSaveOutcome.error(
-                                    "error.project.fanout.redisTarget.invalid");
-                        }
-                        if (redisTarget.isClusterMode()) {
-                            return ConfigSaveOutcome.error(
-                                    "error.project.fanout.redisTarget.cluster");
-                        }
-                    }
-                    // A project created before the picker existed stores null, which the
-                    // page renders as SPOOL. Comparing null with the submitted "SPOOL" made
-                    // every ordinary save look like a transport switch — refusing it while
-                    // running and dropping the anchor when stopped.
-                    String existingTransport = config.getFanoutTransport() == null
-                            || config.getFanoutTransport().isBlank()
-                                    ? "SPOOL" : config.getFanoutTransport();
-                    Long existingRedisTarget = "REDIS".equals(existingTransport)
-                            ? config.getFanoutRedisTargetId() : null;
-                    boolean transportChanged = !java.util.Objects.equals(
-                            existingTransport, cleanTransport)
-                            || !java.util.Objects.equals(
-                                    existingRedisTarget, requestedRedisTarget);
-                    if (transportChanged && config.getFanoutTargetDbIds() != null
-                            && !config.getFanoutTargetDbIds().isEmpty()) {
-                        if (projectService.isRunning(project)) {
-                            return ConfigSaveOutcome.error(
-                                    "error.project.stop.before.config");
-                        }
-                        cdcPositionStore.delete(project.getId());
-                    }
-                    config.setFanoutTransport(cleanTransport);
-                    config.setFanoutRedisTargetId(requestedRedisTarget);
-                }
                 // A strategy switch away from binlog leaves no fan-out to run; stale extra
                 // targets would otherwise sit in the config and surprise a later switch back.
                 CaptureStrategy effectiveForFanout = strategyParam != null

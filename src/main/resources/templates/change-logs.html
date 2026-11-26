@@ -19,7 +19,8 @@
         </div>
         <div class="page-actions">
             <form method="get" th:action="@{/change-logs}" class="inline-form">
-                <select class="select" name="projectId" onchange="this.form.submit()" style="min-width:210px">
+                <select class="select" name="projectId" onchange="this.form.submit()"
+                        style="min-width:210px" th:attr="aria-label=#{log.allProjects}">
                     <option value="" th:text="#{log.allProjects}">All projects</option>
                     <option th:each="p : ${projects}" th:value="${p.id}"
                             th:selected="${selectedProjectId != null and selectedProjectId == p.id}"

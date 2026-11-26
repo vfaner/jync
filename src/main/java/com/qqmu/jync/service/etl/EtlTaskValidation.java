@@ -43,10 +43,46 @@ final class EtlTaskValidation {
             // accepted here and fail on its first write, after a run had already started.
             throw new IllegalArgumentException("error.etl.target.readOnly");
         }
-        if (Objects.equals(sourceDbId, targetDbId)) {
+        if (Objects.equals(sourceDbId, targetDbId) || sameEndpoint(source, target)) {
+            // Two connection rows to the same physical database/table are just as
+            // destructive: an OVERWRITE task would delete the rows it is about to read.
             throw new IllegalArgumentException("error.etl.same.database");
         }
         return source;
+    }
+
+    /**
+     * Same physical endpoint and schema, ignoring credentials. Different schemas are a
+     * legitimate ETL direction (copy one schema into another in the same server), so the
+     * schema is part of the identity here; a custom URL is compared verbatim when set.
+     */
+    private static boolean sameEndpoint(com.qqmu.jync.model.DatabaseConfig source,
+                                        com.qqmu.jync.model.DatabaseConfig target) {
+        if (source.getType() != target.getType()) {
+            return false;
+        }
+        String sourceUrl = normalized(source.getCustomUrl());
+        String targetUrl = normalized(target.getCustomUrl());
+        if (!sourceUrl.isEmpty() || !targetUrl.isEmpty()) {
+            return sourceUrl.equals(targetUrl);
+        }
+        // Hand-built/legacy configs without endpoint details cannot prove identity; only the
+        // id check applies there.
+        if (normalized(source.getHost()).isEmpty()
+                && normalized(source.getDatabaseName()).isEmpty()
+                && normalized(target.getHost()).isEmpty()) {
+            return false;
+        }
+        return normalized(source.getHost()).equals(normalized(target.getHost()))
+                && Objects.equals(source.getPort(), target.getPort())
+                && normalized(source.getDatabaseName()).equals(
+                        normalized(target.getDatabaseName()))
+                && normalized(source.getSchemaName()).equals(
+                        normalized(target.getSchemaName()));
+    }
+
+    private static String normalized(String value) {
+        return value == null ? "" : value.trim().toLowerCase(java.util.Locale.ROOT);
     }
 
     static void validateExtraction(EtlTask task, DatabaseConfigService configs) {

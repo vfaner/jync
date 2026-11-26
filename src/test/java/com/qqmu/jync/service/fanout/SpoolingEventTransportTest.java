@@ -96,6 +96,27 @@ class SpoolingEventTransportTest {
     }
 
     @Test
+    void aFailedSpoolIsResetBeforeThePendingRebaseline(@TempDir Path dir) throws Exception {
+        SpoolingEventTransport failing = new SpoolingEventTransport(dir, 64, mapper);
+        failing.subscribe("target");
+        failing.publish(row("tx-1", 1L));
+        assertThat(failing.needsRebaseline()).isTrue();
+        failing.close();
+
+        // A full baseline would keep hitting the same cap (and its barrier could never
+        // complete); reopening with the marker present resets the log/offset instead.
+        SpoolingEventTransport reopened = new SpoolingEventTransport(dir, 1_000_000, mapper);
+        EventTransport.Subscription sub = reopened.subscribe("target");
+        reopened.publish(row("tx-2", 2L));
+        ChangeEvent event = sub.poll(Duration.ofSeconds(1));
+        assertThat(event).isNotNull();
+        assertThat(event.transactionId()).isEqualTo("tx-2");
+        // The marker itself stays until the baseline actually finished.
+        assertThat(reopened.needsRebaseline()).isTrue();
+        reopened.close();
+    }
+
+    @Test
     void aCrashMidRecordDoesNotBrickTheTarget(@TempDir Path dir) throws Exception {
         SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000, mapper);
         EventTransport.Subscription sub = transport.subscribe("torn");

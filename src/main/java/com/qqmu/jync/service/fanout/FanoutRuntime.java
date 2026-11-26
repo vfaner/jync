@@ -53,8 +53,9 @@ public final class FanoutRuntime implements AutoCloseable {
     private final Map<Long, Long> lastPositionWriteAt = new ConcurrentHashMap<>();
     private static final long POSITION_WRITE_INTERVAL_MS = 1_000L;
     private final java.util.Set<Long> barrierAcked = ConcurrentHashMap.newKeySet();
-    /** Targets already reported as capped, so the cap is logged once, not every tick. */
-    private final java.util.Set<Long> cappedWarned = ConcurrentHashMap.newKeySet();
+    /** Next allowed restart per target; dead workers back off instead of being abandoned. */
+    private final Map<Long, Long> nextRestartAt = new ConcurrentHashMap<>();
+    private static final long MAX_RESTART_DELAY_MS = TimeUnit.MINUTES.toMillis(5);
     private volatile String baselineMarker;
     /** Set by close(): a supervisor tick that is already running must not start workers. */
     private volatile boolean closed;
@@ -138,20 +139,22 @@ public final class FanoutRuntime implements AutoCloseable {
                 continue;
             }
             FanoutBaselineService.Target target = targets.get(i);
-            int attempts = restartAttempts.getOrDefault(target.targetDbId(), 0);
-            // Keep the subscription open: closing it would stop spooling for this target
-            // between the failure and the replacement, losing the events in that window.
-            if (attempts >= 5) {
-                // Do not keep counting: the old code logged "stopped 6, 7, 8…" forever.
-                if (cappedWarned.add(target.targetDbId())) {
-                    log.error("Fan-out target {} stopped {} times; not restarting it again"
-                            + " until the project restarts", target.targetDbId(), attempts);
-                }
+            // The supervisor ticks every 5 s. A fixed five-attempt cap abandoned a target
+            // after 25 s — a short database restart was enough to leave it dead while the
+            // project looked healthy. Back off (5 s → 10 s → … → 5 min) and keep trying.
+            long now = System.currentTimeMillis();
+            Long next = nextRestartAt.get(target.targetDbId());
+            if (next != null && now < next) {
                 continue;
             }
-            restartAttempts.put(target.targetDbId(), attempts + 1);
-            log.warn("Fan-out target {} worker stopped ({}); restarting attempt {}",
-                    target.targetDbId(), worker.getLastError(), attempts);
+            int attempts = restartAttempts.merge(target.targetDbId(), 1, Integer::sum);
+            long delay = Math.min(MAX_RESTART_DELAY_MS,
+                    5_000L << Math.min(attempts - 1, 6));
+            nextRestartAt.put(target.targetDbId(), now + delay);
+            // Keep the subscription open: closing it would stop spooling for this target
+            // between the failure and the replacement, losing the events in that window.
+            log.warn("Fan-out target {} worker stopped ({}); restart attempt {}, next delay"
+                    + " {} ms", target.targetDbId(), worker.getLastError(), attempts, delay);
             if (closed) {
                 return;
             }
@@ -159,10 +162,6 @@ public final class FanoutRuntime implements AutoCloseable {
             workers.set(i, replacement);
             replacement.start();
         }
-    }
-
-    private FanoutTargetWorker newWorker(FanoutBaselineService.Target target) {
-        return newWorker(target, transport.subscribe(String.valueOf(target.targetDbId())));
     }
 
     private FanoutTargetWorker newWorker(FanoutBaselineService.Target target,
@@ -266,7 +265,10 @@ public final class FanoutRuntime implements AutoCloseable {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
+        // Same monitor as the supervisor: without it a tick can create and start a
+        // replacement after close() has already closed the subscription, leaving a thread
+        // spinning on poll() with no owner.
         closed = true;
         if (supervisor != null) {
             supervisor.shutdownNow();
@@ -275,14 +277,18 @@ public final class FanoutRuntime implements AutoCloseable {
             worker.close();
         }
         // The throttle may still hold the last transaction's position: write it before the
-        // runtime (and its metadata connection) goes away.
-        for (Long targetDbId : pendingPositions.keySet()) {
-            persistTargetPosition(targetDbId);
-        }
+        // runtime (and its metadata connection) goes away. The transport close is in a
+        // finally so a metadata failure cannot leak the spool handles / Redis client.
         try {
-            transport.close();
-        } catch (Exception e) {
-            log.debug("Fan-out transport close failed: {}", e.toString());
+            for (Long targetDbId : pendingPositions.keySet()) {
+                persistTargetPosition(targetDbId);
+            }
+        } finally {
+            try {
+                transport.close();
+            } catch (Exception e) {
+                log.debug("Fan-out transport close failed: {}", e.toString());
+            }
         }
     }
 
@@ -290,12 +296,14 @@ public final class FanoutRuntime implements AutoCloseable {
         // A successful transaction proves the target is healthy again; a later outage gets
         // a fresh restart budget instead of inheriting an old count.
         restartAttempts.remove(targetDbId);
-        cappedWarned.remove(targetDbId);
+        nextRestartAt.remove(targetDbId);
         // Same ruling for the shared repair budget: the counter is keyed by project, so
         // without this a fan-out project would spend its whole allowance across unrelated
         // repairs and then refuse a genuine one until the process restarts.
         if (targetRepair != null) {
-            targetRepair.resetAttempts(sourceCtx.projectId());
+            // Per target: a healthy target's commits must not keep resetting a failed
+            // target's repair budget until CAP_REACHED never fires.
+            targetRepair.resetAttempts(sourceCtx.projectId(), targetDbId);
         }
         if (position != null && position.equals(baselineMarker)) {
             barrierAcked.add(targetDbId);

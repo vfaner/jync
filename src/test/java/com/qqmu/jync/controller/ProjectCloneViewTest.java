@@ -120,7 +120,7 @@ class ProjectCloneViewTest {
     void savingTheCloneCopiesTheSourceSettingsOntoTheNewProject() throws Exception {
         Project saved = new Project();
         saved.setId(2L);
-        when(projectService.saveCloneWithFanout(any(), eq(1L), any(), any()))
+        when(projectService.saveCloneWithFanout(any(), eq(1L), any(), any(), any(), any()))
                 .thenReturn(saved);
 
         mvc.perform(post("/projects/save").with(asAdmin()).with(csrf())
@@ -133,7 +133,7 @@ class ProjectCloneViewTest {
         // Creating the row, copying the settings and applying the fan-out target list is
         // one service call (one transaction). Runtime state is not copied because a
         // brand-new project has none — and must start from zero.
-        verify(projectService).saveCloneWithFanout(any(), eq(1L), any(), any());
+        verify(projectService).saveCloneWithFanout(any(), eq(1L), any(), any(), any(), any());
         verify(projectService, never()).save(any(), any());
         verify(projectService, never()).configureFanout(any(), any());
     }

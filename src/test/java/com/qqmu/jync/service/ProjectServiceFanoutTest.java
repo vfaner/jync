@@ -223,6 +223,59 @@ class ProjectServiceFanoutTest {
     }
 
     @Test
+    void aRedisTransportRequiresAConfiguredSingleNodeTarget() {
+        project(DatabaseType.MYSQL);
+        givenConfig(CaptureStrategy.BINLOG_CDC);
+        var redisTargets = mock(com.qqmu.jync.service.projection.redis.RedisTargetService.class);
+        when(redisTargets.find(9L)).thenReturn(Optional.empty());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "redisTargets",
+                redisTargets);
+
+        assertThatThrownBy(() -> service.configureFanout(1L, List.of(3L), "REDIS", 9L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.fanout.redisTarget.invalid");
+        verify(positionStore, never()).delete(anyLong());
+    }
+
+    @Test
+    void aClusterRedisTargetIsRefusedAsTheRelay() {
+        project(DatabaseType.MYSQL);
+        givenConfig(CaptureStrategy.BINLOG_CDC);
+        var redisTargets = mock(com.qqmu.jync.service.projection.redis.RedisTargetService.class);
+        com.qqmu.jync.model.RedisTarget cluster = new com.qqmu.jync.model.RedisTarget();
+        cluster.setId(9L);
+        cluster.setName("redis-cluster");
+        cluster.setClusterMode(true);
+        when(redisTargets.find(9L)).thenReturn(Optional.of(cluster));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "redisTargets",
+                redisTargets);
+
+        assertThatThrownBy(() -> service.configureFanout(1L, List.of(3L), "REDIS", 9L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("error.project.fanout.redisTarget.cluster");
+    }
+
+    @Test
+    void theChosenRedisRelayIsSavedWithTheExtraTargets() {
+        project(DatabaseType.MYSQL);
+        givenConfig(CaptureStrategy.BINLOG_CDC);
+        var redisTargets = mock(com.qqmu.jync.service.projection.redis.RedisTargetService.class);
+        com.qqmu.jync.model.RedisTarget redis = new com.qqmu.jync.model.RedisTarget();
+        redis.setId(9L);
+        redis.setName("redis-1");
+        when(redisTargets.find(9L)).thenReturn(Optional.of(redis));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "redisTargets",
+                redisTargets);
+
+        service.configureFanout(1L, List.of(3L), "redis", 9L);
+
+        SyncConfig saved = savedConfig();
+        assertThat(saved.getFanoutTransport()).isEqualTo("REDIS");
+        assertThat(saved.getFanoutRedisTargetId()).isEqualTo(9L);
+        verify(positionStore).delete(1L);
+    }
+
+    @Test
     void anUnchangedTargetListDoesNotResetTheAnchor() {
         Project project = project(DatabaseType.MYSQL);
         project.setSyncConfig("{}");

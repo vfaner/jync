@@ -280,7 +280,9 @@
             <button type="button" class="btn btn-ghost btn-sm" data-role="batch-select-all"
                     th:text="#{etl.batch.selectAll}">Select all</button>
             <input type="text" class="input" style="max-width:260px"
-                   data-role="batch-table-filter" autocomplete="off">
+                   data-role="batch-table-filter" autocomplete="off"
+                   th:placeholder="#{etl.batch.pickTables}"
+                   th:attr="aria-label=#{etl.batch.pickTables}">
         </div>
         <div class="small" data-role="batch-table-list"></div>
         <div class="help" data-role="batch-table-status" th:text="#{etl.batch.tablesHint}">Ticked tables become tasks using select * by default.</div>

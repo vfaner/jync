@@ -65,10 +65,16 @@ public final class FanoutTargetWorker implements AutoCloseable {
                 switch (event.kind()) {
                     case ROW:
                         if (transactionId != null && !transactionId.equals(event.transactionId())) {
-                            // A missing COMMIT is a capture bug; applying the partial
-                            // transaction would silently drop its tail. Fail this worker.
-                            throw new IllegalStateException("transaction " + transactionId
-                                    + " ended without a COMMIT");
+                            // The previous transaction never got its COMMIT: the capture
+                            // died between the last ROW and the commit record, so that
+                            // transaction was never acknowledged. Discard it and continue
+                            // with the new one. The old code threw here, and the baseline
+                            // that follows a restart appends new tokens to the same spool,
+                            // wedging the target in a permanent restart loop.
+                            log.warn("Fan-out target '{}': discarding {} uncommitted row(s)"
+                                    + " of transaction {} (no COMMIT in the spool)",
+                                    thread.getName(), buffer.size(), transactionId);
+                            buffer = new ArrayList<>();
                         }
                         transactionId = event.transactionId();
                         buffer.add(event);

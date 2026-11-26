@@ -239,8 +239,25 @@ class SyncPrecheckServiceTest {
         assertThat(columns).isNotNull();
         assertThat(columns.severity()).isEqualTo(PrecheckReport.Severity.INFO);
         assertThat(columns.detail()).contains("SUMMARY");
+        // Polling is the only mode that needs the updated-at advice.
+        assertThat(columns.messageKey())
+                .isEqualTo("precheck.target.uncomparableColumns.polling");
         // It is context, not a reason to call the whole rehearsal failed.
         assertThat(report.passed()).isTrue();
+    }
+
+    @Test
+    void theLobNoteFollowsTheCaptureMode() {
+        assertThat(SyncPrecheckService.uncomparableMessageKey(CaptureStrategy.BINLOG_CDC))
+                .isEqualTo("precheck.target.uncomparableColumns.cdc");
+        assertThat(SyncPrecheckService.uncomparableMessageKey(CaptureStrategy.PG_LOGICAL_CDC))
+                .isEqualTo("precheck.target.uncomparableColumns.cdc");
+        assertThat(SyncPrecheckService.uncomparableMessageKey(CaptureStrategy.FULL_COMPARE))
+                .isEqualTo("precheck.target.uncomparableColumns.fullCompare");
+        assertThat(SyncPrecheckService.uncomparableMessageKey(CaptureStrategy.POLLING))
+                .isEqualTo("precheck.target.uncomparableColumns.polling");
+        assertThat(SyncPrecheckService.uncomparableMessageKey(null))
+                .isEqualTo("precheck.target.uncomparableColumns.polling");
     }
 
     @Test

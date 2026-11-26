@@ -83,8 +83,11 @@ public class CdcTargetRepairService {
     private final CdcDdlTaskReconciler ddlTaskReconciler;
     private final SyncProperties properties;
 
-    /** 每个项目连续未成功提交的修复轮次;成功提交一笔事务后由调用方清零。 */
-    private final ConcurrentHashMap<Long, AtomicInteger> attempts = new ConcurrentHashMap<>();
+    /**
+     * 每个 (项目, 目标) 连续未成功提交的修复轮次。键包含目标连接: 一个多目标项目里
+     * 健康目标的持续提交不能把另一个目标已到上限的修复预算一直清零。
+     */
+    private final ConcurrentHashMap<String, AtomicInteger> attempts = new ConcurrentHashMap<>();
 
     public CdcTargetRepairService(DataSourceManager dataSourceManager, SyncEngine syncEngine,
                                   SyncStateWriter stateWriter,
@@ -127,7 +130,7 @@ public class CdcTargetRepairService {
 
         int maxAttempts = Math.max(1, properties.getCdc().getTargetTableRepairMaxAttempts());
         long projectId = ctx.projectId();
-        AtomicInteger used = attempts.computeIfAbsent(projectId, id -> new AtomicInteger());
+        AtomicInteger used = attempts.computeIfAbsent(attemptKey(ctx), id -> new AtomicInteger());
         if (used.get() >= maxAttempts) {
             return Outcome.of(Status.CAP_REACHED, List.of(),
                     "the target table was missing in " + used.get() + " consecutive repair"
@@ -201,8 +204,22 @@ public class CdcTargetRepairService {
     /** 一笔流式事务成功提交:本次故障已经过去,下一次删表应当重新获得完整预算。 */
     public void resetAttempts(Long projectId) {
         if (projectId != null) {
-            attempts.remove(projectId);
+            String prefix = projectId + ":";
+            attempts.keySet().removeIf(key -> key.startsWith(prefix));
         }
+    }
+
+    /** 只重置某一个目标的预算；多目标项目里由该目标自己的成功提交调用。 */
+    public void resetAttempts(Long projectId, Long targetDbId) {
+        if (projectId != null) {
+            attempts.remove(projectId + ":" + (targetDbId == null ? "default" : targetDbId));
+        }
+    }
+
+    private static String attemptKey(SyncContext ctx) {
+        Long targetId = ctx.getTargetConfig() == null
+                ? null : ctx.getTargetConfig().getId();
+        return ctx.projectId() + ":" + (targetId == null ? "default" : targetId);
     }
 
     /**

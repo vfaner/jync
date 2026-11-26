@@ -489,7 +489,9 @@ class OwnershipMatrixTest {
         config.setRole(role);
         config.setHost("127.0.0.1");
         config.setPort(3306);
-        config.setDatabaseName("demo");
+        // Distinct physical databases: the ETL same-endpoint guard must not mask the
+        // ownership verdict these cases assert.
+        config.setDatabaseName(name);
         config.setUsername("sync");
         return databaseConfigs.save(config, "pw", null, guardOf(owner));
     }

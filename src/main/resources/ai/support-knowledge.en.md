@@ -280,6 +280,32 @@ executes once when a worker becomes free.
   max-tables-per-cycle (1), timeout-seconds (60).
 - LOB, JSON and XML columns are excluded by default.
 
+## Large columns and drift comparison (LONGTEXT / LONGBLOB)
+
+- The precheck note "these target columns are excluded from drift comparison" does **not**
+  mean the columns are unsupported. LONGTEXT / LONGBLOB, CLOB / BLOB, JSON / XML and similar
+  large columns are read and written normally by full loads, polling and CDC; large values
+  are streamed/spilled according to `sync.lob.streaming-enabled`, `sync.lob.inline-max-bytes`
+  and the spill settings.
+- The note only means they are excluded from **content-level drift comparison**: databases
+  generally do not define a reliable `=` / `<>` for these types, so Jync cannot safely compare
+  their contents column by column.
+- This affects content audit, full comparison, and the upsert "row did not change, do not
+  rewrite" guard. Row-count checks, primary-key matching and comparisons of ordinary columns
+  are unaffected. If a table has any non-comparable column, replay rewrites the row instead
+  of skipping it; the data is still correct.
+- The precheck wording is capture-mode specific: CDC states that every change is written and
+  does not recommend an updated-at column; full compare states that every cycle re-reads and
+  writes these columns; only polling says an update limited to a large column may be missed
+  and recommends a changing cursor column such as `updated_at`.
+- In polling mode, an update that changes only a LOB column while the cursor column stays the
+  same may not be detected by the drift audit. Use CDC (MySQL binlog, PG logical decoding,
+  Oracle/Dameng LogMiner, SQL Server CDC, Yashan YStream) or add a changing cursor column such
+  as `updated_at` to cover those updates.
+- Byte/hash-level LOB comparison is not implemented. To detect updates that only change a
+  large column, use CDC or add a changing cursor column such as `updated_at`; do not tell
+  users hash comparison already exists.
+
 ## Reliability and timeout settings
 
 - sync.safety-lag-ms (1000) rewinds the timestamp watermark so out-of-order commits are not

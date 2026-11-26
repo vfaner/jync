@@ -112,10 +112,12 @@ public class SyncJob implements Job {
             return;
         }
         try {
-            SyncTaskRunner.Outcome outcome = runner.runOnce(projectId);
+            SyncTaskRunner.Outcome outcome = runner.runOnce(projectId, false);
             String detail = outcome.result()
                     .map(SyncResult::summary)
-                    .orElse("another cycle is still running; this fire was queued");
+                    .orElse(outcome.kind() == SyncTaskRunner.Outcome.Kind.BUSY
+                            ? "another cycle is still running; this scheduled fire is skipped"
+                            : "another cycle is still running; this fire was queued");
             boolean noteworthy = outcome.result()
                     .map(result -> result.hasChanges() || !result.isSuccess())
                     .orElse(false);

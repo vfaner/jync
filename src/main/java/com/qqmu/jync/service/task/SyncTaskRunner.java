@@ -115,6 +115,15 @@ public class SyncTaskRunner {
      *         in flight (this request will be served right after it), or no project
      */
     public Outcome runOnce(Long projectId) {
+        return runOnce(projectId, true);
+    }
+
+    /**
+     * @param coalesce when the lock is held elsewhere, remember this request as one rerun.
+     *     A scheduled fire passes false: another node's cycle is already the work for this
+     *     interval, and queueing it made two nodes run cycles back-to-back forever.
+     */
+    public Outcome runOnce(Long projectId, boolean coalesce) {
         Optional<Project> maybeProject = projectRepository.findById(projectId);
         if (maybeProject.isEmpty()) {
             log.warn("Sync requested for project {}, which no longer exists", projectId);
@@ -126,6 +135,9 @@ public class SyncTaskRunner {
         SyncResult result;
         try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
             if (lock == null) {
+                if (!coalesce) {
+                    return Outcome.busy();
+                }
                 // Another runner holds the lock, so the work is already happening — but this
                 // click may know about changes the running cycle's window no longer covers.
                 // Remember it as at most one rerun instead of dropping it.
@@ -434,7 +446,7 @@ public class SyncTaskRunner {
     /** What became of a sync request. */
     public static final class Outcome {
 
-        public enum Kind { EXECUTED, QUEUED, NO_PROJECT }
+        public enum Kind { EXECUTED, QUEUED, BUSY, NO_PROJECT }
 
         private final Kind kind;
         private final SyncResult result;
@@ -450,6 +462,10 @@ public class SyncTaskRunner {
 
         static Outcome queued() {
             return new Outcome(Kind.QUEUED, null);
+        }
+
+        static Outcome busy() {
+            return new Outcome(Kind.BUSY, null);
         }
 
         static Outcome noProject() {

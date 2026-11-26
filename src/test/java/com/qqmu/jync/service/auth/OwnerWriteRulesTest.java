@@ -217,7 +217,9 @@ class OwnerWriteRulesTest {
         config.setRole(role);
         config.setHost("127.0.0.1");
         config.setPort(3306);
-        config.setDatabaseName("demo");
+        // Distinct physical databases: the ETL guard refuses a task whose source and target
+        // are the same endpoint, and these fixtures exist to test ownership, not that.
+        config.setDatabaseName(name);
         config.setUsername("sync");
         return config;
     }

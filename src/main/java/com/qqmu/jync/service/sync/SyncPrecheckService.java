@@ -290,14 +290,29 @@ public class SyncPrecheckService {
                 if (!uncomparable.isEmpty()) {
                     checks.add(new PrecheckReport.Check("target.columns.uncomparable",
                             PrecheckReport.Severity.INFO, "TABLE", table.getName(),
-                            "precheck.target.uncomparableColumns", String.join(", ",
-                                    uncomparable)));
+                            uncomparableMessageKey(config.getCaptureStrategyOrDefault()),
+                            String.join(", ", uncomparable)));
                 }
             } catch (SQLException | RuntimeException e) {
                 checks.add(error("target.inspect", "TABLE", table.getName(),
                         "precheck.target.inspectFailed", messageOf(e)));
             }
         }
+    }
+
+    /**
+     * The same fact needs different wording per capture mode: CDC delivers every LOB change,
+     * a full compare re-reads and writes the table each cycle, while polling can only see
+     * changes through its cursor column. "Not compared" must never read as "not synced".
+     */
+    static String uncomparableMessageKey(CaptureStrategy strategy) {
+        CaptureStrategy effective = strategy == null ? CaptureStrategy.POLLING : strategy;
+        if (effective.isLogCdc()) {
+            return "precheck.target.uncomparableColumns.cdc";
+        }
+        return effective == CaptureStrategy.FULL_COMPARE
+                ? "precheck.target.uncomparableColumns.fullCompare"
+                : "precheck.target.uncomparableColumns.polling";
     }
 
     /**

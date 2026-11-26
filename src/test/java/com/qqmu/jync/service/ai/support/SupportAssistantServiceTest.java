@@ -746,6 +746,15 @@ class SupportAssistantServiceTest {
     }
 
     @Test
+    void theSystemPromptExplainsThatLobColumnsAreSynchronizedButNotDriftCompared() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("不是不支持同步")
+                .contains("LONGTEXT/LONGBLOB")
+                .contains("内容审计")
+                .contains("updated_at");
+    }
+
+    @Test
     void theSystemPromptExplainsArm64ForDeploymentQuestions() {
         assertThat(SupportAssistantService.SYSTEM_PROMPT)
                 .contains("exec format error")

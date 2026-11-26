@@ -318,7 +318,7 @@ class ProjectFormViewTest {
         String redisSelect = selectBlock(page, "targetRedisId");
         assertThat(redisSelect).containsPattern("value=\"5\"[^>]*selected");
         assertThat(redisSelect).contains("required");
-        assertThat(selectBlock(page, "targetDbId")).doesNotContain("required");
+        assertThat(selectBlock(page, "targetDbId")).doesNotContain(" required");
     }
 
     @Test
@@ -349,7 +349,20 @@ class ProjectFormViewTest {
         assertThat(page).contains("data-role=\"target-picker\"");
         assertThat(page).contains("data-id=\"2\"", "data-id=\"3\"");
         assertThat(page).contains("name=\"fanoutTargetIds\"");
-        assertThat(page).doesNotContain("id=\"fanout-target-field\"");
+        // The relay picker lives in the form now (revealed by the script when a second
+        // target chip exists); the detail page is read-only.
+        assertThat(page).contains("id=\"fanout-target-field\"",
+                "name=\"fanoutTransport\"", "name=\"fanoutRedisTargetId\"",
+                "data-required-message=");
+        // Two separate cards side by side; the save action lives in the page header and
+        // joins the form by id (the header is outside the form element).
+        assertThat(page).contains("class=\"project-cards\"", "id=\"project-form\"",
+                "form=\"project-form\"");
+        // Header actions mirror the detail page: small save first, then a back button
+        // that returns to wherever the form was opened from.
+        assertThat(page).contains("data-role=\"project-form-back\"",
+                "data-fallback=");
+        assertThat(page).contains("value=\"SPOOL\"", "value=\"REDIS\"");
         // The box itself is the dropdown: the menu is rendered empty and filled by the script,
         // and no separate 「+ 添加目标」 select sits next to the chips any more.
         assertThat(page).contains("data-role=\"target-menu\"");
@@ -373,7 +386,7 @@ class ProjectFormViewTest {
 
         mvc.perform(request).andExpect(status().is3xxRedirection());
 
-        verify(projectService, never()).saveWithFanout(any(), anyList(), any());
+        verify(projectService, never()).saveWithFanout(any(), anyList(), any(), any(), any());
     }
 
     @Test
@@ -391,7 +404,27 @@ class ProjectFormViewTest {
                         .param("fanoutTargetIds", "3"))
                 .andExpect(status().is3xxRedirection());
 
-        verify(projectService, never()).saveWithFanout(any(), anyList(), any());
+        verify(projectService, never()).saveWithFanout(any(), anyList(), any(), any(), any());
+    }
+
+    @Test
+    void redisStreamWithoutAConfiguredRelayIsRefusedBeforeAnythingIsSaved()
+            throws Exception {
+        when(databaseConfigService.findById(1L)).thenReturn(Optional.of(
+                config(1L, "src", ConnectionRole.SOURCE)));
+        when(databaseConfigService.findById(3L)).thenReturn(Optional.of(
+                config(3L, "tgt", ConnectionRole.TARGET)));
+
+        mvc.perform(post("/projects/save").with(asAdmin()).with(csrf())
+                        .param("name", "fan")
+                        .param("sourceDbId", "1")
+                        .param("targetKind", "JDBC")
+                        .param("targetDbId", "2")
+                        .param("fanoutTargetIds", "3")
+                        .param("fanoutTransport", "REDIS"))
+                .andExpect(status().is3xxRedirection());
+
+        verify(projectService, never()).saveWithFanout(any(), anyList(), any(), any(), any());
     }
 
     private static RedisTarget redisTarget(long id, String name) {

@@ -34,12 +34,6 @@ public class SyncConfigForm {
     private boolean disableTargetConstraints;
     private boolean truncateBeforeInitialLoad;
     private boolean autoSyncNewTables;
-    /** Additional target connection ids for a fan-out project. */
-    private List<Long> fanoutTargetIds;
-
-    /** Fan-out transport: blank/SPOOL is the local queue, REDIS uses a configured target. */
-    private String fanoutTransport;
-    private Long fanoutRedisTargetId;
 
     private Long pollIntervalMs;
     private String cronExpression;

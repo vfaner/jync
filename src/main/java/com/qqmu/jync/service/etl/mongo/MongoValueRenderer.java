@@ -48,19 +48,31 @@ public final class MongoValueRenderer {
             case Types.LONGNVARCHAR:
                 return text(value);
             case Types.INTEGER:
-                return value instanceof Number number ? number.intValue() : text(value);
+                return value instanceof Number number
+                        ? (int) integral(column, number, Integer.MIN_VALUE, Integer.MAX_VALUE)
+                        : text(value);
             case Types.BIGINT:
                 if (value instanceof BsonTimestamp timestamp) {
                     // getTime() is int; the column is BIGINT, so widen the Java value too.
                     return (long) timestamp.getTime();
                 }
-                return value instanceof Number number ? number.longValue() : text(value);
+                return value instanceof Number number
+                        ? integral(column, number, Long.MIN_VALUE, Long.MAX_VALUE)
+                        : text(value);
             case Types.SMALLINT:
+                if (value instanceof Boolean bool) {
+                    return bool ? 1 : 0;
+                }
+                return value instanceof Number number
+                        ? (int) integral(column, number, Short.MIN_VALUE, Short.MAX_VALUE)
+                        : text(value);
             case Types.TINYINT:
                 if (value instanceof Boolean bool) {
                     return bool ? 1 : 0;
                 }
-                return value instanceof Number number ? number.intValue() : text(value);
+                return value instanceof Number number
+                        ? (int) integral(column, number, Byte.MIN_VALUE, Byte.MAX_VALUE)
+                        : text(value);
             case Types.DOUBLE:
             case Types.FLOAT:
             case Types.REAL:
@@ -80,6 +92,44 @@ public final class MongoValueRenderer {
             default:
                 return text(value);
         }
+    }
+
+    /**
+     * A column inferred as INTEGER from a 200-document sample must not silently truncate a
+     * later 5,000,000,000 (it used to become 705,032,704). Range-check instead: the run
+     * fails with the column and value named, rather than committing corrupted data.
+     */
+    private static long integral(EtlSourceColumn column, Number number, long min, long max) {
+        BigDecimal exact;
+        if (number instanceof Decimal128 decimal) {
+            exact = decimal.bigDecimalValue();
+        } else if (number instanceof BigDecimal decimal) {
+            exact = decimal;
+        } else if (number instanceof Double || number instanceof Float) {
+            double value = number.doubleValue();
+            if (!Double.isFinite(value) || value != Math.rint(value)) {
+                throw rejected(column, number, "not an integer");
+            }
+            exact = BigDecimal.valueOf(value);
+        } else {
+            exact = BigDecimal.valueOf(number.longValue());
+        }
+        try {
+            long value = exact.longValueExact();
+            if (value < min || value > max) {
+                throw rejected(column, number, "out of range");
+            }
+            return value;
+        } catch (ArithmeticException e) {
+            throw rejected(column, number, "not an integer");
+        }
+    }
+
+    private static IllegalArgumentException rejected(EtlSourceColumn column, Number value,
+                                                    String reason) {
+        return new IllegalArgumentException("Mongo field '" + column.name() + "' holds "
+                + value + ", " + reason + " for the inferred " + column.typeName()
+                + " column; select a wider target type or fix the source value");
     }
 
     private static BigDecimal decimal(Object value) {

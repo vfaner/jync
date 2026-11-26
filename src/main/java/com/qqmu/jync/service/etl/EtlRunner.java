@@ -421,6 +421,14 @@ public class EtlRunner {
                 }
             }
 
+            if (rowsWritten == 0) {
+                // The write-mode DELETE is deliberately part of the first data transaction
+                // (see deleteForWriteMode). With an empty extraction there is no batch
+                // commit, so commit the DELETE here; otherwise OVERWRITE of an empty
+                // source would leave the old rows in place after the connection closes.
+                stage = Side.TARGET;
+                target.commit();
+            }
             log.info("ETL task {} copied {} rows into {} ({} read)",
                     task.getId(), rowsWritten, targetName, rowsRead);
 
@@ -873,19 +881,24 @@ public class EtlRunner {
     private void deleteForWriteMode(Connection target, EtlTask task, String targetName,
                                     EtlCheckpointValue checkpoint) throws SQLException {
         if (task.getWriteMode() == EtlWriteMode.OVERWRITE) {
-            execute(target, "DELETE FROM " + targetName);
+            executeWithinLoad(target, "DELETE FROM " + targetName);
         } else if (task.getWriteMode() == EtlWriteMode.RANGE_OVERWRITE && checkpoint == null) {
             // A continuation run must not delete: the first run already removed the range and
             // committed part of its replacement.
-            execute(target, "DELETE FROM " + targetName
+            executeWithinLoad(target, "DELETE FROM " + targetName
                     + " WHERE " + task.getRangeCondition().trim());
         }
     }
 
-    private static void execute(Connection target, String sql) throws SQLException {
+    /**
+     * The write-mode DELETE must commit together with the first data batch, not before it.
+     * Committing here made a deterministic insert failure (bad column name, NOT NULL column
+     * the extraction does not supply) leave a durable, empty target. The batch commits at
+     * line ~383; an empty extraction commits explicitly at the end of the load.
+     */
+    private static void executeWithinLoad(Connection target, String sql) throws SQLException {
         try (Statement statement = target.createStatement()) {
             statement.executeUpdate(sql);
-            target.commit();
         }
     }
 

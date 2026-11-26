@@ -22,6 +22,45 @@ import tools.jackson.databind.json.JsonMapper;
 class FanoutTargetWorkerRestartTest {
 
     @Test
+    void anOrphanRowTailIsDiscardedInsteadOfWedgingTheWorker(@TempDir Path dir) throws Exception {
+        SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000,
+                JsonMapper.builder().build());
+        EventTransport.Subscription sub = transport.subscribe("t2");
+        // The capture died after appending tx-1's row but before its COMMIT. A restart then
+        // publishes tx-2; the incomplete tx-1 must be dropped, not fail the worker forever.
+        transport.publish(ChangeEvent.row("binlog.000001:10", "tx-1", "app", "orders",
+                ChangeEvent.ChangeOperation.UPSERT, Map.of("id", 1), null, 1L));
+        transport.publish(ChangeEvent.row("binlog.000001:30", "tx-2", "app", "orders",
+                ChangeEvent.ChangeOperation.UPSERT, Map.of("id", 2), null, 3L));
+        transport.publish(ChangeEvent.commit("binlog.000001:40", "tx-2", 4L));
+
+        List<String> applied = new ArrayList<>();
+        CountDownLatch done = new CountDownLatch(1);
+        FanoutTargetWorker worker = new FanoutTargetWorker("t2", sub,
+                new EventApplier() {
+                    @Override
+                    public void applyTransaction(String transactionId, String commitPosition,
+                                                 List<ChangeEvent> rows) {
+                        applied.add(transactionId + ":" + rows.size());
+                        done.countDown();
+                    }
+
+                    @Override
+                    public void applyDdl(ChangeEvent event) {
+                    }
+                });
+        worker.start();
+        try {
+            assertThat(done.await(3, TimeUnit.SECONDS)).isTrue();
+            assertThat(applied).containsExactly("tx-2:1");
+            assertThat(worker.isAlive()).isTrue();
+        } finally {
+            worker.close();
+            transport.close();
+        }
+    }
+
+    @Test
     void aReplacementWorkerReplaysTheUncommittedTransaction(@TempDir Path dir) throws Exception {
         SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000,
                 JsonMapper.builder().build());

@@ -130,6 +130,9 @@ public class ProjectService {
     private com.qqmu.jync.repository.FanoutPositionRepository fanoutPositions;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.qqmu.jync.repository.FanoutProgressRepository fanoutProgress;
+    /** Optional so hand-built service tests keep the old constructor. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.qqmu.jync.service.projection.redis.RedisTargetService redisTargets;
     /** Optional: removes the Redis Stream of a deleted project when that transport is on. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.qqmu.jync.service.fanout.FanoutStreamCleanup fanoutStreamCleanup;
@@ -676,16 +679,29 @@ public class ProjectService {
     @Transactional
     public Project saveWithFanout(Project project, java.util.List<Long> extraTargets,
                                   AccessGuard actor) {
+        return saveWithFanout(project, extraTargets, null, null, actor);
+    }
+
+    @Transactional
+    public Project saveWithFanout(Project project, java.util.List<Long> extraTargets,
+                                  String transport, Long redisTargetId, AccessGuard actor) {
         Project saved = save(project, actor);
-        configureFanout(saved.getId(), extraTargets);
+        configureFanout(saved.getId(), extraTargets, transport, redisTargetId);
         return saved;
     }
 
     @Transactional
     public Project saveCloneWithFanout(Project clone, Long sourceProjectId,
                                        java.util.List<Long> extraTargets, AccessGuard actor) {
+        return saveCloneWithFanout(clone, sourceProjectId, extraTargets, null, null, actor);
+    }
+
+    @Transactional
+    public Project saveCloneWithFanout(Project clone, Long sourceProjectId,
+                                       java.util.List<Long> extraTargets, String transport,
+                                       Long redisTargetId, AccessGuard actor) {
         Project saved = saveAsClone(clone, sourceProjectId, actor);
-        configureFanout(saved.getId(), extraTargets);
+        configureFanout(saved.getId(), extraTargets, transport, redisTargetId);
         return saved;
     }
 
@@ -714,14 +730,65 @@ public class ProjectService {
      */
     @Transactional
     public Project configureFanout(Long projectId, java.util.List<Long> extraTargets) {
+        return configureFanout(projectId, extraTargets, null, null);
+    }
+
+    /**
+     * Applies the create/edit form: extra targets plus the event transport chosen there.
+     * The transport is only meaningful with at least one extra target; a Redis transport
+     * must name a configured single-node Redis target.
+     */
+    @Transactional
+    public Project configureFanout(Long projectId, java.util.List<Long> extraTargets,
+                                   String transport, Long redisTargetId) {
         Project project = require(projectId);
         SyncConfig config = loadConfig(project);
         java.util.List<Long> old = config.getFanoutTargetDbIds() == null
                 ? java.util.List.of() : config.getFanoutTargetDbIds();
         java.util.List<Long> clean = extraTargets == null
                 ? new java.util.ArrayList<>() : new java.util.ArrayList<>(extraTargets);
-        boolean changed = !new java.util.HashSet<>(old).equals(new java.util.HashSet<>(clean));
-        if (changed && isRunning(project)) {
+        boolean targetsChanged = !new java.util.HashSet<>(old)
+                .equals(new java.util.HashSet<>(clean));
+        String existingTransport = config.getFanoutTransport() == null
+                || config.getFanoutTransport().isBlank()
+                        ? "SPOOL"
+                        : config.getFanoutTransport().trim().toUpperCase(java.util.Locale.ROOT);
+        Long existingRedisTarget = "REDIS".equals(existingTransport)
+                ? config.getFanoutRedisTargetId() : null;
+        String cleanTransport = null;
+        Long cleanRedisTarget = null;
+        if (!clean.isEmpty()) {
+            if (transport == null || transport.isBlank()) {
+                // No value means "keep what the project already uses"; a freshly created
+                // project has nothing stored and therefore defaults to the local spool.
+                cleanTransport = existingTransport;
+                cleanRedisTarget = existingRedisTarget;
+            } else {
+                cleanTransport = transport.trim().toUpperCase(java.util.Locale.ROOT);
+                if (!"SPOOL".equals(cleanTransport) && !"REDIS".equals(cleanTransport)) {
+                    throw new IllegalStateException("error.project.fanout.transport.invalid");
+                }
+                if ("REDIS".equals(cleanTransport)) {
+                    cleanRedisTarget = redisTargetId;
+                    com.qqmu.jync.model.RedisTarget redis =
+                            redisTargetId == null || redisTargets == null
+                                    ? null : redisTargets.find(redisTargetId).orElse(null);
+                    if (redis == null) {
+                        throw new IllegalStateException(
+                                "error.project.fanout.redisTarget.invalid");
+                    }
+                    if (redis.isClusterMode()) {
+                        throw new IllegalStateException(
+                                "error.project.fanout.redisTarget.cluster");
+                    }
+                }
+            }
+        }
+        boolean transportChanged = !clean.isEmpty()
+                && (!java.util.Objects.equals(existingTransport, cleanTransport)
+                || !java.util.Objects.equals(existingRedisTarget, cleanRedisTarget));
+        boolean changed = targetsChanged;
+        if ((changed || transportChanged) && isRunning(project)) {
             // Adding targets, removing one, or turning fan-out off all move where
             // undelivered events live; editing the topology under a live stream would
             // split the targets' positions from the capture anchor.
@@ -744,13 +811,17 @@ public class ProjectService {
                 config.setCaptureStrategy(preferred);
             }
         }
-        if (changed) {
+        if (changed || transportChanged) {
             // Adding a target has no baseline yet; shrinking (including down to zero)
             // leaves the shared anchor past events the remaining targets may never have
             // applied. Either way the next start re-baselines instead of skipping a window.
             positionStore.delete(projectId);
         }
         config.setFanoutTargetDbIds(clean);
+        if (!clean.isEmpty()) {
+            config.setFanoutTransport(cleanTransport);
+            config.setFanoutRedisTargetId(cleanRedisTarget);
+        }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         return projectRepository.save(project);
     }

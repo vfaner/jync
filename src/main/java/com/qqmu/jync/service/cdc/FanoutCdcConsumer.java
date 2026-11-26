@@ -1,6 +1,8 @@
 package com.qqmu.jync.service.cdc;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
 import com.github.shyiko.mysql.binlog.event.EventHeaderV4;
@@ -27,6 +29,13 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public final class FanoutCdcConsumer implements ManagedCdcConsumer {
 
+    /**
+     * Handler failures already disconnect the stream. Repeating one on every reconnect
+     * cannot help (a poison event or a deterministic publish failure), so after this many
+     * consecutive failures the capture parks instead of reconnecting forever.
+     */
+    private static final int MAX_HANDLER_FAILURES = 5;
+
     private final Project project;
     private final SyncLockService.LockHandle lock;
     private final SyncContext ctx;
@@ -45,6 +54,8 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
     private volatile boolean rebaselineRequested;
     private volatile BinaryLogClient client;
     private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
+    private final AtomicInteger handlerFailures = new AtomicInteger();
+    private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
 
     public FanoutCdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,
                              BinlogClientFactory clientFactory, CdcPositionStore positionStore,
@@ -71,9 +82,12 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
     @Override
     public void run() {
         long projectId = project.getId();
-        taskStore.markCdcRunning(projectId);
         FanoutRuntime runtime = null;
         try {
+            // Inside the try: a metadata failure here must not leave the caller's lease
+            // handle open with an uncaught exception (the single-target path was fixed the
+            // same way).
+            taskStore.markCdcRunning(projectId);
             runtime = runtimes.create(project, ctx, "fanout-" + projectId, lock::renew, stats);
             runtime.startWorkers();
             // Registered like the engine-backed fan-out consumers: an administrator DDL
@@ -193,6 +207,8 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 new CdcFanoutSink(runtime.transport());
         CdcEventStreamHandler.TransactionSink sink = (changes, mark) -> {
             capture.apply(changes, mark);
+            // A published transaction proves the handler is making progress again.
+            handlerFailures.set(0);
             // The inner stream loop can run for hours without reaching its own lease check;
             // an expired/force-released lease must stop this node before it advances the
             // shared anchor, or a takeover node would stream the same window in parallel.
@@ -252,6 +268,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             });
             handler.attachClient(current);
             current.registerEventListener(handler);
+            lastFailure.set(null);
             current.registerLifecycleListener(new BinaryLogClient.AbstractLifecycleListener() {
                 @Override
                 public void onConnect(BinaryLogClient client) {
@@ -261,7 +278,20 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
 
                 @Override
                 public void onCommunicationFailure(BinaryLogClient client, Exception e) {
-                    // connect() returns/throws; the loop below handles the retry.
+                    lastFailure.compareAndSet(null, e);
+                }
+
+                @Override
+                public void onEventDeserializationFailure(BinaryLogClient client, Exception e) {
+                    lastFailure.compareAndSet(null, e);
+                    if (handlerFailures.incrementAndGet() > MAX_HANDLER_FAILURES) {
+                        // The client would otherwise stream past poison events; force the
+                        // drop so the loop below can park instead of advancing past them.
+                        log.error("Fan-out capture for project {} hit {} consecutive"
+                                + " deserialization failures; dropping the connection",
+                                projectId, handlerFailures.get());
+                        disconnect(current);
+                    }
                 }
             });
             try {
@@ -287,7 +317,35 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             if (!running || rebaselineRequested) {
                 break;
             }
-            if (!CdcWaits.sleepWhileRunning(() -> running, backoff.nextDelayMs())) {
+            // The handler stores the real cause and disconnects itself; without reading it
+            // here a schema-drift / poison-event / publish failure looked like a clean drop
+            // and the capture reconnected forever without ever surfacing an error.
+            Throwable handlerFailure = handler.takeFailure();
+            if (handlerFailure != null) {
+                handlerFailures.incrementAndGet();
+            }
+            Throwable failure = handlerFailure != null ? handlerFailure : lastFailure.get();
+            if (failure != null) {
+                CdcFailureClassifier.Kind kind = CdcFailureClassifier.classify(failure);
+                stats.setLastError(CdcFailureClassifier.describe(failure));
+                if (kind != CdcFailureClassifier.Kind.TRANSIENT
+                        || handlerFailures.get() > MAX_HANDLER_FAILURES) {
+                    // Rethrow so run() applies the normal fatal/transient bookkeeping
+                    // (recordCdcFailure + ERROR hat). The cause chain keeps the classifier's
+                    // original verdict intact.
+                    throw new IllegalStateException("fan-out capture stopped: "
+                            + CdcFailureClassifier.describe(failure), failure);
+                }
+            }
+            long delay = backoff.nextDelayMs();
+            if (failure == null) {
+                log.info("Fan-out capture for project {} disconnected cleanly, retrying in"
+                        + " {} ms", projectId, delay);
+            } else {
+                log.warn("Fan-out capture for project {} disconnected ({}), retrying in {} ms",
+                        projectId, CdcFailureClassifier.describe(failure), delay);
+            }
+            if (!CdcWaits.sleepWhileRunning(() -> running, delay)) {
                 break;
             }
         }

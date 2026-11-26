@@ -2036,6 +2036,7 @@ public class SyncEngine {
         warnedDeletionSkips.removeIf(key -> key.startsWith(prefix));
         schemaStats.keySet().removeIf(key -> key.startsWith(prefix));
         structureSync.evictProject(projectId);
+        dataSync.evictProject(projectId);
         if (contentAudit != null) {
             contentAudit.evictProject(projectId);
         }

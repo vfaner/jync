@@ -1,9 +1,8 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
-<!--/* 一源多目标的独立卡片：工具条（中转配置 + 搜索）在卡片上方，状态用表格展示。
-      只有配置了额外目标的项目才渲染（fanoutStatuses 非空）。中转下拉通过
-      form="config-form" 挂在详情页的配置表单上，卡片本身不必放进表单。 */-->
+<!--/* 一源多目标的独立卡片：中转方式在创建/编辑任务时选好，这里只读展示；卡片只留
+      搜索和每目标的位点/积压。只有配置了额外目标的项目才渲染（fanoutStatuses 非空）。 */-->
 <div class="card fanout-card" th:fragment="card"
      th:if="${fanoutStatuses != null and !#lists.isEmpty(fanoutStatuses)}"
      th:attr="data-refresh-url=@{/projects/{id}/fanout-status(id=${project.id})}">
@@ -13,51 +12,15 @@
             <span th:text="#{fanoutCard.title}">One source, many targets</span>
             <span class="badge badge-info"
                   th:text="#{fanoutCard.count(${#lists.size(fanoutStatuses)})}">3 targets</span>
+            <span class="badge badge-mute fanout-transport-badge"
+                  th:if="${fanoutTransportLabel != null}"
+                  th:text="${fanoutTransportLabel}">Local spool</span>
         </h2>
+        <input type="text" class="input mono fanout-search-input" data-role="fanout-search"
+               th:placeholder="#{fanoutCard.search}"
+               th:attr="aria-label=#{fanoutCard.search}">
     </div>
     <div class="card-body">
-        <div class="fanout-toolbar">
-            <div class="fanout-toolbar-field">
-                <label for="fanoutTransport" th:text="#{option.fanoutTransport}">Transport</label>
-                <select class="select" id="fanoutTransport" name="fanoutTransport"
-                        form="config-form" data-role="fanout-transport"
-                        th:attr="data-label-backlog-spool=#{fanoutCard.backlogSpool},
-                                 data-label-backlog-redis=#{fanoutCard.backlogRedis}"
-                        th:disabled="${!(access.canEdit(project.ownerUsername) and !project.enabled)}
-                                        ? 'disabled' : null">
-                    <option value="SPOOL"
-                            th:selected="${config.fanoutTransport == null
-                                           or #strings.isEmpty(config.fanoutTransport)
-                                           or config.fanoutTransport == 'SPOOL'}"
-                            th:text="#{option.fanoutTransport.spool}">Local spool</option>
-                    <option value="REDIS" th:selected="${config.fanoutTransport == 'REDIS'}"
-                            th:text="#{option.fanoutTransport.redis}">Redis Stream</option>
-                </select>
-            </div>
-            <div class="fanout-toolbar-field fanout-redis-target"
-                 th:classappend="${config.fanoutTransport == 'REDIS'} ? '' : 'is-hidden'">
-                <label for="fanoutRedisTargetId"
-                       th:text="#{option.fanoutTransport.target}">Redis target</label>
-                <select class="select" id="fanoutRedisTargetId" name="fanoutRedisTargetId"
-                        form="config-form" data-role="fanout-redis-target"
-                        th:attr="data-required-message=#{option.fanoutTransport.required},
-                                 disabled=${!(access.canEdit(project.ownerUsername)
-                                              and !project.enabled)} ? 'disabled' : null">
-                    <option value=""
-                            th:text="#{option.fanoutTransport.target}">Choose a Redis target</option>
-                    <option th:each="rt : ${fanoutRedisTargets}" th:value="${rt.id}"
-                            th:selected="${config.fanoutRedisTargetId != null
-                                           and config.fanoutRedisTargetId == rt.id}"
-                            th:text="|${rt.name} · ${rt.host}:${rt.port}|">redis</option>
-                </select>
-            </div>
-            <div class="fanout-toolbar-search">
-                <input type="text" class="input mono" data-role="fanout-search"
-                       th:placeholder="#{fanoutCard.search}"
-                       th:attr="aria-label=#{fanoutCard.search}">
-            </div>
-        </div>
-        <div class="help fanout-help" th:text="#{option.fanoutTransportHelp}">help</div>
         <div class="tbl-wrap fanout-table-wrap">
             <table class="tbl dense fanout-table" data-role="fanout-table">
                 <thead>
@@ -65,8 +28,8 @@
                     <th th:text="#{fanoutCard.target}">Target</th>
                     <th th:text="#{fanoutCard.position}">Position</th>
                     <th th:text="#{fanoutCard.lastAck}">Last ack</th>
-                    <th><span data-role="fanout-backlog-header"
-                              th:text="#{fanoutCard.backlogSpool}">Backlog</span></th>
+                    <th th:text="${config.fanoutTransport == 'REDIS'}
+                                 ? #{fanoutCard.backlogRedis} : #{fanoutCard.backlogSpool}">Backlog</th>
                     <th class="num" th:text="#{fanoutCard.applied}">Applied</th>
                     <th th:text="#{fanoutCard.worker}">Writer</th>
                 </tr>

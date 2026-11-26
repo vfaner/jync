@@ -60,7 +60,7 @@ class SyncSchedulerCronTest {
 
         runner = mock(SyncTaskRunner.class);
         when(runner.findProject(1L)).thenReturn(Optional.of(project("订单同步")));
-        when(runner.runOnce(1L)).thenReturn(SyncTaskRunner.Outcome.queued());
+        when(runner.runOnce(1L, false)).thenReturn(SyncTaskRunner.Outcome.queued());
         quartz.setJobFactory((bundle, scheduler) -> {
             SyncJob job = new SyncJob();
             injectRunner(job, runner);
@@ -101,7 +101,7 @@ class SyncSchedulerCronTest {
 
         // A registered trigger with a next fire time but no acquisition is exactly the
         // reported symptom; only a real scheduler proves the registration is live.
-        verify(runner, timeout(5000).atLeastOnce()).runOnce(1L);
+        verify(runner, timeout(5000).atLeastOnce()).runOnce(1L, false);
     }
 
     @Test
@@ -120,7 +120,7 @@ class SyncSchedulerCronTest {
         Thread.sleep(5_000); // past fireAt plus the 500ms misfire threshold in setUp
         quartz.resumeAll();
 
-        verify(runner, timeout(5_000).atLeastOnce()).runOnce(1L);
+        verify(runner, timeout(5_000).atLeastOnce()).runOnce(1L, false);
     }
 
     @Test

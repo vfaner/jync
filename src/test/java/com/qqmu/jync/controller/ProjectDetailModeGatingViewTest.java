@@ -108,7 +108,7 @@ class ProjectDetailModeGatingViewTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
-    void aFanoutProjectOffersTheEventTransportChoice() throws Exception {
+    void aFanoutProjectShowsTheTransportChosenWhenItWasSaved() throws Exception {
         Project project = stubProject(SyncTargetKind.JDBC, CaptureStrategy.PG_LOGICAL_CDC, false);
         SyncConfig fanout = new SyncConfig();
         fanout.setCaptureStrategy(CaptureStrategy.PG_LOGICAL_CDC);
@@ -119,10 +119,11 @@ class ProjectDetailModeGatingViewTest {
 
         String page = renderDetail();
 
-        assertThat(page).contains("name=\"fanoutTransport\"", "name=\"fanoutRedisTargetId\"");
-        assertThat(page).contains("value=\"REDIS\"", "value=\"SPOOL\"");
-        // The save path reads this reason and shows it instead of a generic failure toast.
-        assertThat(page).contains("data-required-message=");
+        // The relay is fixed at create/edit time; the detail card only reports it.
+        assertThat(page).contains("fanout-transport-badge");
+        assertThat(page).contains("Local spool");
+        assertThat(page).doesNotContain("name=\"fanoutTransport\"",
+                "name=\"fanoutRedisTargetId\"", "value=\"REDIS\"");
     }
 
     @Test

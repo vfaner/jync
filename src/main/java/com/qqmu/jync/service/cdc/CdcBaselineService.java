@@ -430,6 +430,17 @@ public class CdcBaselineService {
             if (beforeLoad != null) {
                 beforeLoad.accept(added);
             }
+            // A fan-out project has one capture and N writers; engine.runCycle() writes only
+            // the primary target. Run the fan-out baseline instead so every extra target
+            // gets the new table's history in the same generation.
+            com.qqmu.jync.service.fanout.FanoutRuntime fanout =
+                    fanoutRuntimes == null ? null : fanoutRuntimes.get(ctx.projectId());
+            if (fanout != null) {
+                fanout.baseline();
+                log.info("Project '{}': auto-sync fan-out baseline loaded {} new table(s)"
+                        + " into every target: {}", ctx.projectId(), added.size(), added);
+                return true;
+            }
             SyncResult result = engine.runCycle(ctx.toBuilder()
                     .repairTables(new LinkedHashSet<>(added))
                     .cdcRepairRun(true)

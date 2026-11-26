@@ -366,7 +366,9 @@ class DataSyncServiceReplaySafetyTest {
                 service.syncTable(source, target, table, timeCursor, progress, ctx);
         assertThat(seed.isSuccess())
                 .as("TIME cursor seed failed: %s", seed.getError()).isTrue();
-        assertThat(seed.getNewCursorValue()).isEqualTo("08:00:00");
+        // The stored watermark is rewound by the safety margin so a same-second commit
+        // committed out of order is re-read next cycle (upsert-safe, keyed table).
+        assertThat(seed.getNewCursorValue()).isEqualTo("07:59:59");
 
         progress.setInitialLoadDone(true);
         progress.setLastSyncValue(seed.getNewCursorValue());
@@ -397,7 +399,8 @@ class DataSyncServiceReplaySafetyTest {
         DataSyncService.TableSyncResult seed =
                 service.syncTable(source, target, table, dateCursor, progress, ctx);
         assertThat(seed.isSuccess()).as("DATE cursor seed failed: %s", seed.getError()).isTrue();
-        assertThat(seed.getNewCursorValue()).isEqualTo("2026-01-01");
+        // DATE cursors now get a one-day safety margin instead of silently disabling it.
+        assertThat(seed.getNewCursorValue()).isEqualTo("2025-12-31");
 
         progress.setInitialLoadDone(true);
         progress.setLastSyncValue(seed.getNewCursorValue());
