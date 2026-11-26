@@ -1224,6 +1224,24 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   position: absolute !important; width: 1px; height: 1px; padding: 0;
   border: 0; opacity: 0; overflow: hidden; pointer-events: none;
 }
+.fanout-card .card-head .fanout-search-input {
+  width: 200px; flex: 0 1 200px; margin-left: auto;
+}
+.fanout-table-wrap { max-height: 320px; overflow: auto; }
+.fanout-table thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg-tint); border-bottom: 1px solid var(--line);
+}
+/* 创建/编辑任务：两个独立卡片并排（左：任务与源；右：目标与事件中转），
+   窄屏回落单列。.card + .card 的纵向间距在网格里要取消，否则右卡会错位下移。 */
+.project-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px; align-items: start; }
+.project-cards > .card + .card { margin-top: 0; }
+.project-card .card-body > .help:last-child { margin-bottom: 0; }
+.nested-field { margin-top: 12px; }
+@media (max-width: 980px) {
+  .project-cards { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+}
 .fanout-chip-type { color: var(--ink-mute); font-size: 10.5px; }
 
 /* ─── 定义列表（设置页） ────────────────────────────────── */
