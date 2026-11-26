@@ -69,6 +69,11 @@ class DataSyncServiceAdaptiveChunkTest {
         assertThat(DataSyncService.isRetryableCopyFailure(
                 new SQLException("Connection is closed"))).isTrue();
         assertThat(DataSyncService.isRetryableCopyFailure(
+                new SQLException("Error retrieving record: Can not read response from server."
+                        + " Expected to read 273 bytes, read 237 bytes before connection was"
+                        + " unexpectedly lost", null,
+                        new java.io.EOFException("server closed the stream")))).isTrue();
+        assertThat(DataSyncService.isRetryableCopyFailure(
                 new NullPointerException(
                         "Cannot invoke \"com.mysql.cj.NativeSession.getCancelTimer()\""
                                 + " because \"this.session\" is null"))).isTrue();

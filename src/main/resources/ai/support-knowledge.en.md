@@ -407,6 +407,7 @@ executes once when a worker becomes free.
   position; more than 3 consecutive repairs stop the consumer.
 - A source DDL that leaves the target missing a column is trimmed in-stream and recorded as a todo;
   the task keeps running.
+- `Error retrieving record: Can not read response from server ... before connection was unexpectedly lost` comes from Connector/J streaming a query result, not from binlog decoding. The source connection was killed/restarted, a proxy/network timeout fired, or the target was slow enough to exceed MySQL `net_write_timeout`. Check the MySQL error log/`Aborted_clients`, raise `net_write_timeout`/proxy idle timeouts, or reduce batch size/parallelism. Replacing the jar only triggers it when the old process was still querying.
 - A skipped DDL is recorded as a todo (Change log → execute DDL on target); with "Auto-add nullable CDC columns" enabled, a single-target project automatically applies ALTER statements containing only ADD COLUMN where every new column is nullable and has no key/unique/identity/generated/reference clause. A failure returns to the todo. Fan-out stays manual. DROP TABLE / DROP VIEW
   is stored with `IF EXISTS`; Oracle/DM/YashanDB strip the clause and treat "object already gone"
   as done, so an already-dropped target table no longer leaves the todo red forever.

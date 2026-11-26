@@ -337,6 +337,9 @@ public class SupportAssistantService {
                     为大写，表名可逐表映射，字段名不支持批量改名。
                   - 源 `DATETIME` 目标 `DATETIME(6)`：MySQL→MySQL 同族精度问题；2.4.5 起新建
                     目标保留源精度，已有目标列不会自动改。
+                  - `Error retrieving record` + `Can not read response from server`：Connector/J
+                    流式查询被源端断开，不是 binlog；查 MySQL 错误日志/Aborted_clients、
+                    net_write_timeout/代理超时，或降批量/并行度；不要先归因于替换 jar。
                   - 连接超时 / `Communications link failure` / `Broken pipe` /
                     `getCancelTimer`：先分清是建立连接超时、读流超时、目标写入太慢还是网络
                     中断。Jync 已对 MySQL 流式读取关闭 netTimeoutForStreamingResults 并追加

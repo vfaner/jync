@@ -1794,6 +1794,9 @@ public class DataSyncService {
                 if (lower.contains("connection is closed")
                         || lower.contains("connection is broken")
                         || lower.contains("connection has been closed")
+                        || lower.contains("can not read response from server")
+                        || lower.contains("before connection was unexpectedly lost")
+                        || lower.contains("error retrieving record")
                         || lower.contains("getcanceltimer")
                         || lower.contains("this.session\" is null")) {
                     return true;

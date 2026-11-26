@@ -340,6 +340,7 @@ Cron：同步任务用 Quartz 语法，6 段或 7 段（含年份）；ETL 与�
 - 位点过期（归档或 binlog 已被清理）需要重建基线。
 - 目标表被删时默认只重建并重灌这张表，位点不动；连续修复超过 3 次会停车。
 - 源库执行 DDL 导致目标缺列时，流内裁剪并登记待办，任务不停摆。
+- `Error retrieving record: Can not read response from server... before connection was unexpectedly lost`：来自 MySQL Connector/J 的流式查询读取，不是 binlog 解码；通常是源端连接被 `KILL`/重启、网络或代理超时，或目标写入太慢超过源库 `net_write_timeout`。先看 MySQL 错误日志/`Aborted_clients`，调大 `net_write_timeout`、代理空闲超时，或降低批量/并行度；替换 jar 只有在旧进程仍在查询时才会直接触发。
 - 被跳过的 DDL 会登记为待办（变更日志「在目标库执行 DDL」）；开启自动补齐可空列后，安全子集会在目标自动执行，失败仍回到待办。DROP TABLE / DROP VIEW 默认写成 `IF EXISTS` 再执行；Oracle / DM / 崖山会自动去掉该子句，并把「对象本来就不存在」当作完成，所以目标已经删过表不会让待办永远红灯。
 
 ## CDC 停摆与重建基线
