@@ -4792,6 +4792,28 @@
    * 赞赏弹窗的触发属性名不同、还带收款码切换，事件绑定留在 bindDonate 里，
    * 但开/关效果与 Esc 同样复用这一套。
    */
+  /** Focusable controls inside a modal, in DOM order. */
+  function modalFocusables(modal) {
+    return Array.prototype.filter.call(modal.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]),'
+      + ' select:not([disabled]), textarea:not([disabled]),'
+      + ' [tabindex]:not([tabindex="-1"])'
+    ), function (el) {
+      return !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+    });
+  }
+
+  function focusFirstInModal(modal) {
+    var items = modalFocusables(modal);
+    if (items.length) {
+      items[0].focus();
+      return;
+    }
+    // A read-only dialog still needs a focus target so Esc/Tab are not lost behind it.
+    if (!modal.hasAttribute('tabindex')) { modal.setAttribute('tabindex', '-1'); }
+    modal.focus();
+  }
+
   function setModalOpen(id, open) {
     var modal = document.getElementById(id);
     if (!modal) return;
@@ -4800,17 +4822,55 @@
     if (!open && modal.contains(document.activeElement)) {
       document.activeElement.blur();
     }
+    if (open) {
+      modal._opener = document.activeElement;
+    }
     modal.classList.toggle('open', open);
     modal.setAttribute('aria-hidden', open ? 'false' : 'true');
     // 弹窗自己可滚动，锁住背景避免两层滚动条打架
     document.body.style.overflow = open ? 'hidden' : '';
+    if (open) {
+      focusFirstInModal(modal);
+    } else {
+      var opener = modal._opener;
+      modal._opener = null;
+      if (opener && opener.focus) {
+        // The click that closed the modal may move focus; restore after it settles.
+        setTimeout(function () { opener.focus(); }, 0);
+      }
+    }
   }
 
   function bindGenericModals() {
     // 强制改密弹窗由服务端直接渲染成打开状态，没走 setModalOpen，
     // 这里补上背景滚动锁，否则弹窗后面还能滚。
-    document.querySelectorAll('.modal.open[data-forced]').forEach(function () {
+    document.querySelectorAll('.modal.open[data-forced]').forEach(function (modal) {
       document.body.style.overflow = 'hidden';
+      // The forced password modal is rendered open by the server; it never went through
+      // setModalOpen, so give it the same initial focus.
+      if (!modal.contains(document.activeElement)) { focusFirstInModal(modal); }
+    });
+    // Keep Tab inside the topmost open modal; without this the keyboard walks the page
+    // behind the overlay (and the forced password dialog) and the overlay is invisible.
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Tab') { return; }
+      var open = Array.prototype.slice.call(document.querySelectorAll('.modal.open'));
+      if (!open.length) { return; }
+      var modal = open[open.length - 1];
+      var items = modalFocusables(modal);
+      if (!items.length) { return; }
+      var first = items[0];
+      var last = items[items.length - 1];
+      if (!modal.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     });
     document.querySelectorAll('[data-open-modal]').forEach(function (btn) {
       btn.addEventListener('click', function () {

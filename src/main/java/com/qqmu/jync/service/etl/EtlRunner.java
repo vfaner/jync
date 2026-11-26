@@ -579,7 +579,7 @@ public class EtlRunner {
             // The table is built from the full result metadata, so nothing can be missing.
             return null;
         }
-        Set<String> targetColumns = targetColumnNames(target, targetName);
+        TargetColumns targetColumns = targetColumns(target, targetName);
         if (targetColumns == null) {
             // An INSERT-only account may not be able to describe the table. Keep the previous
             // behaviour instead of refusing a run that may work: write every result column.
@@ -590,15 +590,23 @@ public class EtlRunner {
         int[] kept = new int[columnNames.size()];
         int count = 0;
         for (int i = 0; i < columnNames.size(); i++) {
-            if (targetColumns.contains(columnNames.get(i).toLowerCase(Locale.ROOT))) {
+            String folded = columnNames.get(i).toLowerCase(Locale.ROOT);
+            // An identity/calculated column cannot be inserted explicitly. Omitting it lets
+            // the target generate the value; including it made every run against a
+            // pre-existing SQL Server IDENTITY / PostgreSQL GENERATED ALWAYS target fail.
+            if (targetColumns.names().contains(folded)
+                    && !targetColumns.generated().contains(folded)) {
                 kept[count++] = i;
             }
         }
         return Arrays.copyOf(kept, count);
     }
 
-    /** The target's column labels, lower-cased; {@code null} when they cannot be read. */
-    private static Set<String> targetColumnNames(Connection target, String targetName) {
+    /** The target's writable columns, lower-cased; {@code null} when they cannot be read. */
+    private record TargetColumns(Set<String> names, Set<String> generated) {
+    }
+
+    private static TargetColumns targetColumns(Connection target, String targetName) {
         String sql = "SELECT * FROM " + targetName + " WHERE 1 = 0";
         try (Statement statement = target.createStatement();
              ResultSet rows = statement.executeQuery(sql)) {
@@ -607,13 +615,21 @@ public class EtlRunner {
                 return null;
             }
             Set<String> names = new HashSet<>();
+            Set<String> generated = new HashSet<>();
             for (int i = 1; i <= meta.getColumnCount(); i++) {
                 String label = meta.getColumnLabel(i);
-                if (label != null) {
-                    names.add(label.toLowerCase(Locale.ROOT));
+                if (label == null) {
+                    continue;
+                }
+                String folded = label.toLowerCase(Locale.ROOT);
+                names.add(folded);
+                // isWritable=false also covers computed/generated columns that some drivers
+                // do not flag as auto-increment.
+                if (meta.isAutoIncrement(i) || !meta.isWritable(i)) {
+                    generated.add(folded);
                 }
             }
-            return names;
+            return new TargetColumns(names, generated);
         } catch (SQLException e) {
             // PostgreSQL-family drivers abort their transaction on any failed statement; the
             // run continues with the old write-everything behaviour, so clear that state.

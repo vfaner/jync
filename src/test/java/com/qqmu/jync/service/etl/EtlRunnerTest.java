@@ -90,6 +90,24 @@ class EtlRunnerTest {
     }
 
     @Test
+    void anIdentityTargetColumnIsLeftToTheTarget() throws SQLException {
+        execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
+                "INSERT INTO src VALUES (5, 'x')");
+        execute(TARGET_URL, "CREATE TABLE dst (id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+                + " name VARCHAR(20))");
+
+        EtlRunResult result = runner.run(task("SELECT id, name FROM src", "dst",
+                EtlWriteMode.APPEND), source, target, connections);
+
+        assertThat(result.success()).isTrue();
+        // Writing the source id into GENERATED ALWAYS would fail on SQL Server/PostgreSQL;
+        // the target must generate it, and the remaining columns still load.
+        assertThat(rows("SELECT name FROM dst")).containsExactly("x");
+        assertThat(result.skippedColumns()).anySatisfy(column ->
+                assertThat(column).isEqualToIgnoringCase("id"));
+    }
+
+    @Test
     void appendKeepsExistingRows() throws SQLException {
         execute(SOURCE_URL, "CREATE TABLE src (id INT PRIMARY KEY, name VARCHAR(20))",
                 "INSERT INTO src VALUES (1, 'a'), (2, 'b')");
