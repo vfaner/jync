@@ -31,6 +31,7 @@ import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
+import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.SyncProgress;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -62,6 +63,13 @@ public class SyncEngine {
     private final DataSyncService dataSync;
     private final SyncStateWriter stateWriter;
     private final SyncProperties properties;
+
+    /**
+     * Durable record of SQL Server tables whose constraints this app disabled. Optional so
+     * hand-built engines in tests keep their constructor; production gets the bean.
+     */
+    @Autowired(required = false)
+    private ConstraintStateStore constraintStates;
     /**
      * Null only on the hand-built engine of the older unit tests. Production wiring always
      * supplies it; a test that wants the audit uses the full constructor and a mock.
@@ -1081,6 +1089,24 @@ public class SyncEngine {
                 ? ctx.getTargetDialect().getConstraintToggleStatements(
                         ctx.getTargetSchema(), toggledTables, true)
                 : List.of();
+        // SQL Server's NOCHECK is persistent table state: record what is about to be disabled
+        // BEFORE doing it. If that record cannot be written, do not disable at all — an
+        // unrecorded crash would leave foreign keys off with no way to know which tables.
+        boolean persistentToggle = ctx.effectiveTargetType() == DatabaseType.SQLSERVER
+                && !toggledTables.isEmpty() && !disableStatements.isEmpty();
+        if (persistentToggle && constraintStates != null) {
+            try {
+                constraintStates.begin(ctx.projectId(),
+                        ctx.getTargetConfig() == null ? null : ctx.getTargetConfig().getId(),
+                        ctx.getTargetSchema(), toggledTables);
+            } catch (RuntimeException e) {
+                log.error("Could not record disabled constraints for project '{}'; keeping"
+                        + " foreign-key enforcement on for this cycle: {}",
+                        ctx.projectName(), e.toString());
+                disableStatements = List.of();
+            }
+        }
+        boolean constraintsDisabled = !disableStatements.isEmpty();
         // The handles the loop actually uses. A table whose statement is cancelled replaces
         // them (see reopenIfClosed), so they are variables rather than the parameters. The
         // cycle's own try-with-resources closes only the original borrows, so any replacement
@@ -1158,7 +1184,7 @@ public class SyncEngine {
                 }
             }
         } finally {
-            if (!disableStatements.isEmpty()) {
+            if (constraintsDisabled) {
                 // Restore enforcement, even when a table failed part-way through, and table by
                 // table: a driver abandons the rest of a multi-statement batch on the first
                 // failure, so one bad table must not leave every later table with checks off.
@@ -1191,6 +1217,16 @@ public class SyncEngine {
                     log.error("Aborting the physical connection so it cannot be recycled with"
                             + " constraint checks still disabled");
                     abortPhysicalConnection(target);
+                } else if (persistentToggle && constraintStates != null) {
+                    // Only now is it safe to forget the tables: every restore statement ran.
+                    try {
+                        constraintStates.clear(ctx.projectId());
+                    } catch (RuntimeException e) {
+                        // The healer will re-run an idempotent restore; keeping the marker is
+                        // safer than losing the only record of what was disabled.
+                        log.warn("Could not clear the disabled-constraint marker for project"
+                                + " '{}': {}", ctx.projectName(), e.toString());
+                    }
                 }
             }
             // Only the cycle's own try-with-resources owns the original borrows; these are ours.

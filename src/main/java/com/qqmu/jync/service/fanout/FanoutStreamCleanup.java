@@ -1,6 +1,7 @@
 package com.qqmu.jync.service.fanout;
 
 import java.time.Duration;
+import java.util.Collection;
 
 import org.springframework.stereotype.Service;
 
@@ -52,16 +53,22 @@ public class FanoutStreamCleanup {
         if (project == null || project.getId() == null) {
             return;
         }
-        String transport = config == null ? null : config.getFanoutTransport();
-        if (!"REDIS".equalsIgnoreCase(transport)
-                && properties.getFanout().getTransport()
-                        != SyncProperties.Fanout.Transport.REDIS) {
+        deleteStream(project.getId(), config == null ? null : config.getFanoutTransport(),
+                config == null ? null : config.getFanoutRedisTargetId());
+    }
+
+    /**
+     * Drops the whole stream. Called on project deletion and when a project switches from
+     * Redis Stream back to the local spool: leaving the old stream behind would leak one
+     * stream (and every consumer group in it) per project/lifetime.
+     */
+    public void deleteStream(Long projectId, String transport, Long redisTargetId) {
+        if (projectId == null || !redisActive(transport)) {
             return;
         }
-        Long projectId = project.getId();
         RedisClient client = null;
         try {
-            RedisURI uri = redisUri(config);
+            RedisURI uri = redisUri(redisTargetId);
             if (uri == null) {
                 log.warn("No Redis endpoint resolves for the fan-out stream of project {};"
                         + " its stream key {} must be removed manually", projectId,
@@ -88,9 +95,53 @@ public class FanoutStreamCleanup {
         }
     }
 
+    /**
+     * Destroys consumer groups of targets removed from the project. Without this every
+     * removed target leaves its group and pending list on the stream forever, and the
+     * stream itself keeps growing because Redis never trims it automatically.
+     */
+    public void deleteGroups(Long projectId, String transport, Long redisTargetId,
+                             Collection<Long> targetIds) {
+        if (projectId == null || targetIds == null || targetIds.isEmpty()
+                || !redisActive(transport)) {
+            return;
+        }
+        RedisClient client = null;
+        try {
+            RedisURI uri = redisUri(redisTargetId);
+            if (uri == null) {
+                return;
+            }
+            uri.setTimeout(Duration.ofSeconds(3));
+            client = RedisClient.create(uri);
+            try (StatefulRedisConnection<String, String> connection =
+                         client.connect(io.lettuce.core.codec.StringCodec.UTF8)) {
+                for (Long targetId : targetIds) {
+                    boolean removed = connection.sync()
+                            .xgroupDestroy(streamKey(projectId), String.valueOf(targetId));
+                    log.info("Destroyed fan-out consumer group {} on stream {} ({})",
+                            targetId, streamKey(projectId), removed);
+                }
+            }
+        } catch (RuntimeException e) {
+            log.warn("Could not destroy fan-out consumer groups of project {}: {}",
+                    projectId, e.toString());
+        } finally {
+            if (client != null) {
+                client.shutdown();
+            }
+        }
+    }
+
+    private boolean redisActive(String transport) {
+        return "REDIS".equalsIgnoreCase(transport)
+                || (transport == null
+                    && properties.getFanout().getTransport()
+                            == SyncProperties.Fanout.Transport.REDIS);
+    }
+
     /** The project's selected Redis target first, the server-wide fallback second. */
-    private RedisURI redisUri(SyncConfig config) {
-        Long targetId = config == null ? null : config.getFanoutRedisTargetId();
+    private RedisURI redisUri(Long targetId) {
         RedisTarget target = targetId == null ? null
                 : redisTargets.find(targetId).orElse(null);
         if (target != null) {

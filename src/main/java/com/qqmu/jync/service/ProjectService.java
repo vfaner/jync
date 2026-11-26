@@ -823,7 +823,35 @@ public class ProjectService {
             config.setFanoutRedisTargetId(cleanRedisTarget);
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
-        return projectRepository.save(project);
+        Project saved = projectRepository.save(project);
+        cleanupRedisAfterFanoutChange(projectId, existingTransport, existingRedisTarget,
+                cleanTransport, cleanRedisTarget, old, clean);
+        return saved;
+    }
+
+    /**
+     * Removes the Redis-side state a configuration change orphaned: the whole stream when
+     * the project leaves Redis Stream (or switches relay), or the consumer groups of targets
+     * that were removed. Best-effort — a Redis outage must not fail the saved config.
+     */
+    private void cleanupRedisAfterFanoutChange(Long projectId, String oldTransport,
+                                               Long oldRedisTarget, String newTransport,
+                                               Long newRedisTarget,
+                                               java.util.List<Long> oldTargets,
+                                               java.util.List<Long> newTargets) {
+        if (fanoutStreamCleanup == null || !"REDIS".equals(oldTransport)) {
+            return;
+        }
+        boolean relayChanged = !java.util.Objects.equals(oldRedisTarget, newRedisTarget);
+        if (!"REDIS".equals(newTransport) || newTargets.isEmpty() || relayChanged) {
+            fanoutStreamCleanup.deleteStream(projectId, "REDIS", oldRedisTarget);
+            return;
+        }
+        java.util.Set<Long> removed = new java.util.LinkedHashSet<>(oldTargets);
+        removed.removeAll(newTargets);
+        if (!removed.isEmpty()) {
+            fanoutStreamCleanup.deleteGroups(projectId, "REDIS", oldRedisTarget, removed);
+        }
     }
 
     /**
