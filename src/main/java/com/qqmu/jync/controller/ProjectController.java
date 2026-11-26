@@ -813,18 +813,31 @@ public class ProjectController {
 
     /** Polled by the detail page so per-target positions and spool backlog stay live. */
     @GetMapping("/{id}/fanout-status")
-    public String fanoutStatusFragment(@PathVariable Long id, Model model) {
+    public String fanoutStatusFragment(@PathVariable Long id,
+            @RequestParam(name = "transport", required = false) String transport,
+            Model model) {
         Project project = projectService.findById(id).orElse(null);
         if (project == null) {
-            return "project-detail/fanout-status :: missing";
+            return "project-detail/fanout-card :: rows";
         }
         SyncConfig config = projectService.loadConfig(project);
-        model.addAttribute("fanoutStatuses", buildFanoutStatuses(id, project, config));
+        model.addAttribute("fanoutStatuses", buildFanoutStatuses(id, project, config,
+                transport));
         return "project-detail/fanout-card :: rows";
     }
 
     private List<Map<String, Object>> buildFanoutStatuses(Long projectId, Project project,
                                                           SyncConfig config) {
+        return buildFanoutStatuses(projectId, project, config, null);
+    }
+
+    /**
+     * @param transportOverride display-only transport (the page previews a selection before
+     *     it is saved); null means the saved/server default
+     */
+    private List<Map<String, Object>> buildFanoutStatuses(Long projectId, Project project,
+                                                          SyncConfig config,
+                                                          String transportOverride) {
         if (fanoutPositionStore == null || config == null
                 || config.getFanoutTargetDbIds() == null
                 || config.getFanoutTargetDbIds().isEmpty()) {
@@ -838,6 +851,11 @@ public class ProjectController {
         String transport = config.getFanoutTransport();
         if (transport == null || transport.isBlank()) {
             transport = properties.getFanout().getTransport().name();
+        }
+        if ("REDIS".equalsIgnoreCase(transportOverride)) {
+            transport = "REDIS";
+        } else if ("SPOOL".equalsIgnoreCase(transportOverride)) {
+            transport = "SPOOL";
         }
         // One query for the connections and one for the positions, not two per target:
         // the card polls every five seconds even with twenty targets.

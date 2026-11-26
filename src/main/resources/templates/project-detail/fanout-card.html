@@ -21,6 +21,8 @@
                 <label for="fanoutTransport" th:text="#{option.fanoutTransport}">Transport</label>
                 <select class="select" id="fanoutTransport" name="fanoutTransport"
                         form="config-form" data-role="fanout-transport"
+                        th:attr="data-label-backlog-spool=#{fanoutCard.backlogSpool},
+                                 data-label-backlog-redis=#{fanoutCard.backlogRedis}"
                         th:disabled="${!(access.canEdit(project.ownerUsername) and !project.enabled)}
                                         ? 'disabled' : null">
                     <option value="SPOOL"
@@ -63,7 +65,8 @@
                     <th th:text="#{fanoutCard.target}">Target</th>
                     <th th:text="#{fanoutCard.position}">Position</th>
                     <th th:text="#{fanoutCard.lastAck}">Last ack</th>
-                    <th th:text="#{fanoutCard.backlog}">Backlog</th>
+                    <th><span data-role="fanout-backlog-header"
+                              th:text="#{fanoutCard.backlogSpool}">Backlog</span></th>
                     <th class="num" th:text="#{fanoutCard.applied}">Applied</th>
                     <th th:text="#{fanoutCard.worker}">Writer</th>
                 </tr>
@@ -95,9 +98,10 @@
                         th:text="${s.ageSeconds != null} ? #{option.fanoutAge(${s.ageSeconds})} : '—'">—</td>
                     <td>
                         <span th:if="${s.transport != 'REDIS'}" class="fanout-spool-metric"
-                              th:text="#{option.fanoutSpool(${s.spoolText})}">spool</span>
+                              th:text="${s.spoolText}">0 B</span>
                         <span th:if="${s.transport == 'REDIS'}" class="fanout-transport-badge"
-                              th:text="#{option.fanoutRedisQueue}">Redis Stream</span>
+                              th:attr="data-tip=#{fanoutCard.redisBacklogHint}"
+                              th:text="#{fanoutCard.redisBacklog}">Redis</span>
                     </td>
                     <td class="num small"
                         th:text="${s.appliedTransactions != null} ? ${s.appliedTransactions} : '—'">—</td>

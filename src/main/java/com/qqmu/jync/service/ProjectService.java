@@ -2218,12 +2218,28 @@ public class ProjectService {
                                   Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt,
                                   String cursorStrategy, String cursorColumn,
                                   Boolean resumableLoad, Boolean fullLoadWithoutCursor,
-                                  IncrementalState incremental) {
+                                  IncrementalState incremental,
+                                  Integer targetsDone, Integer targetsTotal) {
         /** Compatibility constructor for callers/tests that only need the full-load state. */
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
                                Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
-                    null, null, null, null, IncrementalState.NOT_STARTED);
+                    null, null, null, null, IncrementalState.NOT_STARTED, null, null);
+        }
+
+        public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
+                               Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt,
+                               String cursorStrategy, String cursorColumn,
+                               Boolean resumableLoad, Boolean fullLoadWithoutCursor,
+                               IncrementalState incremental) {
+            this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
+                    cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
+                    incremental, null, null);
+        }
+
+        /** True when this row aggregates a one-source-many-targets baseline. */
+        public boolean fanout() {
+            return targetsTotal != null;
         }
     }
 
@@ -2276,6 +2292,40 @@ public class ProjectService {
             baselinePending = position == null
                     || !Boolean.TRUE.equals(position.isBaselineDone());
         }
+        // Fan-out: the shared baseline writes fanout_progress per target, not sync_progress.
+        // Aggregate it so the page says "done 2/3 targets" instead of showing the stale
+        // single-target row.
+        Map<String, FanoutTableAgg> fanoutByTable = new LinkedHashMap<>();
+        int fanoutTargets = 0;
+        if (config.getFanoutTargetDbIds() != null
+                && !config.getFanoutTargetDbIds().isEmpty() && fanoutProgress != null) {
+            java.util.Set<Long> targetIds = new java.util.LinkedHashSet<>(
+                    config.getFanoutTargetDbIds());
+            if (project != null && project.getTargetDbId() != null) {
+                targetIds.add(project.getTargetDbId());
+            }
+            fanoutTargets = targetIds.size();
+            for (com.qqmu.jync.model.FanoutProgress row
+                    : fanoutProgress.findByProjectId(projectId)) {
+                if (row.getObjectName() == null) {
+                    continue;
+                }
+                String key = row.getObjectName().toUpperCase(Locale.ROOT);
+                FanoutTableAgg agg = fanoutByTable.computeIfAbsent(key,
+                        k -> new FanoutTableAgg());
+                if (Boolean.TRUE.equals(row.getInitialLoadDone())) {
+                    agg.done++;
+                }
+                if (row.getLastSyncTime() != null && (agg.lastSync == null
+                        || row.getLastSyncTime().isAfter(agg.lastSync))) {
+                    agg.lastSync = row.getLastSyncTime();
+                }
+                if (row.getRowsSyncedTotal() != null && (agg.rows == null
+                        || row.getRowsSyncedTotal() > agg.rows)) {
+                    agg.rows = row.getRowsSyncedTotal();
+                }
+            }
+        }
         Map<String, ProgressStatusRow> progressByName = new LinkedHashMap<>();
         for (ProgressStatusRow progress : progressRepository.findStatusRowsByProjectId(
                 projectId, ObjectType.TABLE)) {
@@ -2315,6 +2365,30 @@ public class ProjectService {
             } else {
                 state = SyncState.NOT_STARTED;
             }
+            Long rowsSynced = progress == null ? null : progress.rowsSyncedTotal();
+            Instant lastSync = progress == null ? null : progress.lastSyncTime();
+            Integer targetsDone = null;
+            Integer targetsTotal = null;
+            if (fanoutTargets > 0) {
+                FanoutTableAgg agg = fanoutByTable.get(key);
+                targetsDone = agg == null ? 0 : agg.done;
+                targetsTotal = fanoutTargets;
+                if (targetsDone >= fanoutTargets) {
+                    state = SyncState.COMPLETED;
+                } else if (working) {
+                    state = SyncState.IN_PROGRESS;
+                } else {
+                    state = targetsDone > 0 ? SyncState.INCOMPLETE : SyncState.NOT_STARTED;
+                }
+                if (agg != null) {
+                    if (agg.rows != null) {
+                        rowsSynced = agg.rows;
+                    }
+                    if (agg.lastSync != null) {
+                        lastSync = agg.lastSync;
+                    }
+                }
+            }
             IncrementalState incremental;
             if (state != SyncState.COMPLETED) {
                 incremental = IncrementalState.NOT_STARTED;
@@ -2332,18 +2406,23 @@ public class ProjectService {
             } else {
                 incremental = IncrementalState.RUNNING;
             }
-            result.add(new TableSyncStatus(name, state,
-                    progress == null ? null : progress.rowsSyncedTotal(),
-                    progress == null ? null : progress.lastSyncTime(),
+            result.add(new TableSyncStatus(name, state, rowsSynced, lastSync,
                     load == null ? null : load.getRowsCopied(),
                     load == null ? null : load.getLastUpdatedAt(),
                     progress == null ? null : progress.cursorStrategy(),
                     progress == null ? null : progress.cursorColumn(),
                     progress == null ? null : progress.resumableLoad(),
                     progress == null ? null : progress.fullLoadWithoutCursor(),
-                    incremental));
+                    incremental, targetsDone, targetsTotal));
         }
         return result;
+    }
+
+    /** Aggregated fan-out baseline state of one table across its targets. */
+    private static final class FanoutTableAgg {
+        private int done;
+        private Instant lastSync;
+        private Long rows;
     }
 
     /** One table's chunked full-load state, derived from its checkpoint rows. */

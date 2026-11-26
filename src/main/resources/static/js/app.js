@@ -1803,7 +1803,12 @@
     function apply() {
       target.classList.toggle('is-hidden', select.value !== 'REDIS');
     }
-    select.addEventListener('change', apply);
+    select.addEventListener('change', function () {
+      apply();
+      // Preview the table for the new transport (the value is not saved yet).
+      var card = select.closest('.fanout-card');
+      if (card && card._fanoutRefresh) { card._fanoutRefresh(select.value); }
+    });
     apply();
   }
 
@@ -3953,10 +3958,23 @@
     if (!url) return;
     var timer = null;
     var inFlight = false;
-    function refresh() {
+    function headerApply(transport) {
+      var select = box.querySelector('[data-role="fanout-transport"]');
+      var header = box.querySelector('[data-role="fanout-backlog-header"]');
+      if (!select || !header) return;
+      header.textContent = transport === 'REDIS'
+        ? select.getAttribute('data-label-backlog-redis')
+        : select.getAttribute('data-label-backlog-spool');
+    }
+    function refresh(transport) {
       if (inFlight) return;
+      var select = box.querySelector('[data-role="fanout-transport"]');
+      var chosen = transport || (select ? select.value : '');
+      var requestUrl = chosen
+        ? url + (url.indexOf('?') >= 0 ? '&' : '?') + 'transport=' + encodeURIComponent(chosen)
+        : url;
       inFlight = true;
-      fetch(url, { cache: 'no-store' })
+      fetch(requestUrl, { cache: 'no-store' })
         .then(function (response) {
           if (!response.ok) throw new Error('HTTP ' + response.status);
           return response.text();
@@ -3967,6 +3985,7 @@
           var current = box.querySelector('[data-role="fanout-rows"]');
           if (rows && current) {
             current.innerHTML = rows.innerHTML;
+            headerApply(chosen);
             var search = box.querySelector('[data-role="fanout-search"]');
             if (search) { search.dispatchEvent(new Event('input')); }
           }
@@ -3978,6 +3997,9 @@
       if (timer) { clearInterval(timer); timer = null; }
       if (!document.hidden) timer = setInterval(refresh, 5000);
     }
+    box._fanoutRefresh = refresh;
+    headerApply(box.querySelector('[data-role="fanout-transport"]')
+      ? box.querySelector('[data-role="fanout-transport"]').value : 'SPOOL');
     document.addEventListener('visibilitychange', apply);
     apply();
   }

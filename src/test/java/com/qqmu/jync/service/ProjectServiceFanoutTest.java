@@ -56,6 +56,8 @@ class ProjectServiceFanoutTest {
     private SyncContextFactory contextFactory;
     private SyncTaskStore taskStore;
     private CdcPositionStore positionStore;
+    private SyncProgressRepository progressRepository;
+    private com.qqmu.jync.repository.FanoutProgressRepository fanoutProgressRepository;
     private ProjectService service;
 
     @BeforeEach
@@ -65,8 +67,10 @@ class ProjectServiceFanoutTest {
         contextFactory = mock(SyncContextFactory.class);
         taskStore = mock(SyncTaskStore.class);
         positionStore = mock(CdcPositionStore.class);
+        progressRepository = mock(SyncProgressRepository.class);
+        fanoutProgressRepository = mock(com.qqmu.jync.repository.FanoutProgressRepository.class);
         service = new ProjectService(projectRepository, databaseConfigRepository,
-                mock(SyncProgressRepository.class), mock(ChangeLogRepository.class),
+                progressRepository, mock(ChangeLogRepository.class),
                 mock(ChunkCheckpointRepository.class), mock(DataSourceManager.class),
                 mock(MetadataReaderFactory.class), mock(MetadataSnapshotService.class),
                 contextFactory, mock(SyncScheduler.class), mock(SyncTaskRunner.class),
@@ -78,6 +82,58 @@ class ProjectServiceFanoutTest {
         when(taskStore.find(anyLong())).thenReturn(Optional.empty());
         when(projectRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(contextFactory.serializeConfig(any())).thenReturn("{}");
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "fanoutProgress",
+                fanoutProgressRepository);
+    }
+
+    private static com.qqmu.jync.model.FanoutProgress fanoutRow(long targetId, boolean done) {
+        com.qqmu.jync.model.FanoutProgress row = new com.qqmu.jync.model.FanoutProgress();
+        row.setProjectId(1L);
+        row.setTargetDbId(targetId);
+        row.setObjectType(com.qqmu.jync.model.ObjectType.TABLE);
+        row.setObjectName("orders");
+        row.setInitialLoadDone(done);
+        row.setRowsSyncedTotal(done ? 10L : 0L);
+        row.setLastSyncTime(done ? java.time.Instant.parse("2026-11-26T07:00:00Z") : null);
+        return row;
+    }
+
+    @Test
+    void tableProgressAggregatesEveryFanoutTarget() {
+        Project project = project(DatabaseType.MYSQL);
+        project.setEnabled(false);
+        SyncConfig config = givenConfig(CaptureStrategy.BINLOG_CDC);
+        config.getTables().add("orders");
+        config.setFanoutTargetDbIds(List.of(3L));
+        org.mockito.Mockito.when(fanoutProgressRepository.findByProjectId(1L))
+                .thenReturn(List.of(fanoutRow(2L, true), fanoutRow(3L, true)));
+
+        List<ProjectService.TableSyncStatus> statuses =
+                service.findTableSyncStatuses(1L, config);
+
+        assertThat(statuses).hasSize(1);
+        ProjectService.TableSyncStatus status = statuses.get(0);
+        assertThat(status.targetsDone()).isEqualTo(2);
+        assertThat(status.targetsTotal()).isEqualTo(2);
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.COMPLETED);
+        assertThat(status.rowsSyncedTotal()).isEqualTo(10L);
+    }
+
+    @Test
+    void aPartlyLoadedFanoutTableIsNotReportedComplete() {
+        Project project = project(DatabaseType.MYSQL);
+        project.setEnabled(false);
+        SyncConfig config = givenConfig(CaptureStrategy.BINLOG_CDC);
+        config.getTables().add("orders");
+        config.setFanoutTargetDbIds(List.of(3L));
+        org.mockito.Mockito.when(fanoutProgressRepository.findByProjectId(1L))
+                .thenReturn(List.of(fanoutRow(2L, true), fanoutRow(3L, false)));
+
+        ProjectService.TableSyncStatus status =
+                service.findTableSyncStatuses(1L, config).get(0);
+
+        assertThat(status.targetsDone()).isEqualTo(1);
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.INCOMPLETE);
     }
 
     private Project project(DatabaseType sourceType) {
