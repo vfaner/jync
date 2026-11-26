@@ -5773,6 +5773,123 @@
     window.addEventListener('resize', hide);
   }
 
+  /**
+   * 变更日志里的错误详情气泡：只给错误行，浅底红字、带向上/向下小三角的聊天框。
+   * 默认在错误文字下方居中；下方空间不足时翻到上方。气泡可停留、可选中复制，
+   * 鼠标移入气泡不会立刻消失；移出后短暂延迟再收起。
+   */
+  function bindErrorDetailTips() {
+    var bubble = null;
+    var textBox = null;
+    var currentHost = null;
+    var hideTimer = null;
+
+    function bubbleEl() {
+      if (!bubble) {
+        bubble = document.createElement('div');
+        bubble.className = 'tip-body tip-float error-tip';
+        bubble.setAttribute('role', 'tooltip');
+        textBox = document.createElement('div');
+        textBox.className = 'error-tip-text';
+        bubble.appendChild(textBox);
+        document.body.appendChild(bubble);
+        bubble.addEventListener('mouseenter', cancelHide);
+        bubble.addEventListener('mouseleave', scheduleHide);
+      }
+      return bubble;
+    }
+
+    function cancelHide() {
+      if (hideTimer) {
+        clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+    }
+
+    function hide() {
+      cancelHide();
+      currentHost = null;
+      if (bubble) { bubble.classList.remove('is-on'); }
+    }
+
+    function scheduleHide() {
+      cancelHide();
+      hideTimer = setTimeout(hide, 220);
+    }
+
+    function show(host) {
+      var text = host.getAttribute('data-error-tip');
+      if (!text) { return; }
+      cancelHide();
+      currentHost = host;
+      var tip = bubbleEl();
+      textBox.textContent = text;
+      tip.classList.remove('is-above', 'is-below');
+      tip.classList.add('is-on');
+      // Measure with the content in place and at its natural width/height.
+      var rect = host.getBoundingClientRect();
+      var gap = 12;
+      var left = rect.left + rect.width / 2 - tip.offsetWidth / 2;
+      left = Math.max(gap, Math.min(left, window.innerWidth - tip.offsetWidth - gap));
+      var above = false;
+      var top = rect.bottom + gap;
+      if (top + tip.offsetHeight > window.innerHeight - gap) {
+        top = rect.top - tip.offsetHeight - gap;
+        above = true;
+      }
+      if (top < gap) {
+        top = gap;
+      }
+      tip.classList.add(above ? 'is-above' : 'is-below');
+      tip.style.left = left + 'px';
+      tip.style.top = top + 'px';
+    }
+
+    function hostOf(node) {
+      while (node && node.getAttribute) {
+        if (node.getAttribute('data-error-tip')) { return node; }
+        node = node.parentNode;
+      }
+      return null;
+    }
+
+    document.addEventListener('mouseover', function (e) {
+      var host = hostOf(e.target);
+      if (host) { show(host); }
+    });
+    document.addEventListener('mouseout', function (e) {
+      var host = hostOf(e.target);
+      if (!host) { return; }
+      var to = e.relatedTarget;
+      if (to && ((host.contains && host.contains(to))
+              || (bubble && bubble.contains(to)))) {
+        return;
+      }
+      scheduleHide();
+    });
+    document.addEventListener('focusin', function (e) {
+      var host = hostOf(e.target);
+      if (host) { show(host); }
+    });
+    document.addEventListener('focusout', function (e) {
+      if (hostOf(e.target)) { scheduleHide(); }
+    });
+    // Keep the bubble usable: selecting text or scrolling inside it must not dismiss it.
+    document.addEventListener('mousedown', function (e) {
+      if (!bubble || !bubble.classList.contains('is-on')) { return; }
+      if ((currentHost && currentHost.contains(e.target))
+              || bubble.contains(e.target)) {
+        return;
+      }
+      hide();
+    });
+    window.addEventListener('scroll', function (e) {
+      if (bubble && bubble.contains(e.target)) { return; }
+      hide();
+    }, true);
+    window.addEventListener('resize', hide);
+  }
+
   /* ─── 初始化 ────────────────────────────────────────────── */
 
   document.addEventListener('DOMContentLoaded', function () {
@@ -5827,6 +5944,7 @@
     document.querySelectorAll('[data-role="target-table"]').forEach(bindTargetTablePicker);
     document.querySelectorAll('[data-batch-tables]').forEach(bindBatchTablePicker);
     bindInstantTips();
+    bindErrorDetailTips();
     initConfigDirtyTracking();
     bindConfigSave();
     document.querySelectorAll('[data-tls-upload]').forEach(bindTlsUpload);

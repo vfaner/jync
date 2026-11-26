@@ -776,6 +776,36 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .tip-body.tip-float { position: fixed; top: 0; left: 0; transform: none;
   max-width: calc(100vw - 16px); max-height: 60vh; overflow: hidden; z-index: 1450; }
 .tip-body.tip-float.is-on { opacity: 1; visibility: visible; }
+/* 变更日志里的错误详情：浅底红字的聊天气泡，默认在错误文字下方居中；下方空间
+   不足时由脚本翻到上方，并切换箭头方向。 */
+.tip-body.error-tip {
+  background: #f8fafc; color: var(--danger);
+  border: 1px solid #e2e8f0; border-radius: 12px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .16);
+  white-space: pre-wrap;
+  /* The caret must be outside the box, so the bubble itself cannot clip. The text
+     child scrolls instead, and the bubble stays interactive for copy/paste. */
+  max-height: none; overflow: visible; pointer-events: auto;
+}
+.tip-body.error-tip .error-tip-text {
+  max-height: 55vh; overflow: auto; cursor: text; user-select: text;
+}
+.tip-body.error-tip::after {
+  content: ""; position: absolute; left: 50%; transform: translateX(-50%);
+  border: 6px solid transparent;
+}
+.tip-body.error-tip.is-below::after {
+  top: -12px; border-bottom-color: #f8fafc;
+}
+.tip-body.error-tip.is-above::after {
+  bottom: -12px; border-top-color: #f8fafc;
+}
+[data-theme="dark"] .tip-body.error-tip {
+  background: #1f2937; color: #fca5a5; border-color: #4b5563;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .45);
+}
+[data-theme="dark"] .tip-body.error-tip.is-below::after { border-bottom-color: #1f2937; }
+[data-theme="dark"] .tip-body.error-tip.is-above::after { border-top-color: #1f2937; }
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0 16px; }
 .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }
