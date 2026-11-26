@@ -363,7 +363,7 @@ class ProjectDetailModeGatingViewTest {
 
         assertThat(page).contains("id=\"external-baseline-modal\"");
         assertThat(page).contains("SHOW MASTER STATUS");
-        assertThat(page).contains("digit");
+        assertThat(page).contains("Digits only");
         assertThat(page).contains("@@GLOBAL.gtid_executed");
     }
 
