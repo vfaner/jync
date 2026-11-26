@@ -121,7 +121,8 @@ public class SupportAssistantService {
                  本次全量已拷贝行数 → project_table_status：table 是表名子串（不区分
                  大小写），state 可按状态过滤；默认最多返回 20 行，truncated=true 时
                  先报 matched 总数，再列返回的部分，不要把它当成全部
-               - 变更日志（CDC）断流、位点、最近错误、跳过 DDL → cdc_status
+               - 变更日志（CDC）断流、位点、最近错误、跳过 DDL → cdc_status；某个任务还有哪些
+                 未执行/待回放的 DDL 待办 → project_ddl_tasks（只读，最多 20 条）
                - 变更日志前提不明或怀疑源库日志与权限有问题 → cdc_probe 自检（会连源库，
                  很贵，一次对话最多 2 次；只能查自己有编辑权的任务）
                - ETL 任务失败与最近结果 → etl_status
@@ -156,6 +157,7 @@ public class SupportAssistantService {
                  就说没查到，不要补充片段以外的细节
                - CDC DDL：默认只登记待办，不自动改目标表；单目标项目可开启「CDC 自动补齐新增可空列」，
                  只自动执行仅含 ADD COLUMN 且所有新列可空、无主键/唯一/自增/生成/引用约束的 ALTER；
+                 自动执行后任务仍会保留「补齐缺失数据」待办，等待管理员回放；缺口回放要求任务先停止。
                  其余 DDL 和一源多目标仍需人工执行。缺列时行事件会裁剪该列，不会停摆。
                - 预检里的「列不参与漂移比对」不是不支持同步：LONGTEXT/LONGBLOB 等大字段会
                  正常全量/轮询/CDC 同步，只是不参与内容审计、全表比对和 upsert 的无变化判断。
@@ -206,7 +208,11 @@ public class SupportAssistantService {
                  SQL Server CDC、崖山 YStream），基线与日志只读源一次，目标并行写入；DDL 待办
                  由管理员执行时会分发到每个目标；额外目标缺表自愈、缺列需人工；多实例 /
                  跨节点部署应选 Redis 中转或共享数据目录。目标上限默认 20，确有 1 对 25 这类
-                 需求时用 update_system_params 调整 sync.fanout.max-targets。sync.fanout.redis-max-len 的裁剪是 group-ack 感知的：所有活跃目标确认到最后一条
+                 需求时用 update_system_params 调整 sync.fanout.max-targets。基线屏障最多等
+                 5 分钟，超时后继续启动并只给已确认目标写进度——未确认目标靠 spool 保留快照与
+                 后续事件追平，状态页会显示落后；spool 达 2GB 或坏记录会停该目标并要求重建基线。
+                 Redis 新建消费组仅在本次要跑基线时从流尾开始，恢复时仍从流头重放积压。
+                 sync.fanout.redis-max-len 的裁剪是 group-ack 感知的：所有活跃目标确认到最后一条
                  已发布事件才裁剪，不会丢未消费事件；仍按最慢目标积压设置并监控 XINFO。
                  删除项目/切换中转/移除目标会自动清理流或消费组。
                - 以上变更工具都只生成确认卡，不会执行。任务级修改要求该任务已停止；连接

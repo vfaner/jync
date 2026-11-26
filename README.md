@@ -26,6 +26,10 @@ Jync 是面向**信创迁移与异构数据集成**的开源同步工具：单�
 - **增量很轻**：轮询只读游标之后的变化；六类源库可切换日志 CDC，做到秒级延迟。
 - **一源多目标**：一份源数据同时分发到多个目标，各自独立位点与中转，基线、DDL 与补数按目标推进。
 - **结构与数据一起走**：缺表自动建表、索引、视图与存储过程，内置各方言类型映射与函数转换。
+- **ETL 取数**：按一条 SQL 从源库取数写入 JDBC 目标；OVERWRITE / APPEND / RANGE_OVERWRITE / UPSERT 四种写入模式，支持变量、断点续跑、预检与运行历史。
+- **Redis 缓存投影**：把选中的表投影到 Redis（键前缀、TTL、值格式可选），CDC 变更同步更新或删除。
+- **专属迁移**：Elasticsearch / OpenSearch → Easysearch、MongoDB → MongoDB、MongoDB → KingbaseES；独立连接模型，带预检、进度 / 取消与运行记录。
+- **安全与 HTTPS**：管理员 / 运维 / 访客三角色与资源归属；BCrypt 口令、连接密码与 Webhook 加密存储、CSRF 防护；支持应用内 TLS 1.2/1.3 或前置代理 HTTPS；元数据库可换 MySQL / PostgreSQL / Oracle，内网离线运行。
 - **断点续传**：停机、断网、进程被杀都能从检查点继续；写入幂等，停机期间的变更自动补齐。
 - **角色与告警**：管理员 / 运维 / 访客按资源归属隔离；同步失败、CDC 停摆、数据漂移等可推送钉钉、企业微信、飞书或 Webhook。
 - **可选 AI 运维助手**：自然语言查状态、逐表进度与性能，断流自检、粘贴日志分析，生成任务草稿并按确认卡调参。
@@ -137,7 +141,7 @@ com.qqmu.jync
 - **真库验证矩阵**：[docs/verification-matrix.md](docs/verification-matrix.md)
 - **发布说明**：[docs/release-notes/](docs/release-notes/)
 
-`mvn test` 运行单元测试（6804 项：6800 通过、3 个 TLS 证书用例受本机证书配置影响、1 个仅限 Linux 的用例按环境跳过），覆盖方言与 SQL 改写、全量与续传、六类 CDC、Redis 投影、专属迁移、ETL、告警、角色归属、AI 助手与安全。真库集成测试（`*IT`）需 Docker，命令见验证矩阵。
+`mvn test` 运行全量单元测试，覆盖方言与 SQL 改写、全量与续传、六类 CDC、Redis 投影、专属迁移、ETL、告警、角色归属、AI 助手与安全。真库集成测试（`*IT`）需 Docker，命令见验证矩阵。
 
 ## 参与贡献
 

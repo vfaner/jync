@@ -37,6 +37,15 @@ cache projections and one-source-many-target fan-out, with an optional AI operat
   and transport; baseline, DDL and gap replay advance per target.
 - **Schema travels with data**: missing tables, indexes, views and routines are created; type
   mapping and function conversion are built in.
+- **ETL**: run one SQL query into a JDBC target with OVERWRITE, APPEND, RANGE_OVERWRITE or
+  UPSERT, variables, resumable runs, precheck and run history.
+- **Redis cache projection**: project selected tables into Redis (key prefix, TTL and value
+  format), with CDC updates and deletes applied.
+- **Dedicated migrations**: Elasticsearch / OpenSearch → Easysearch, MongoDB → MongoDB and
+  MongoDB → KingbaseES, with their own connection model, precheck, progress/cancel and run history.
+- **Security and HTTPS**: admin / operator / viewer with ownership isolation; BCrypt passwords,
+  encrypted connection passwords and webhook URLs, CSRF protection; in-app TLS 1.2/1.3 or a
+  reverse proxy; the metadata store can be MySQL / PostgreSQL / Oracle; offline-ready.
 - **Resumable by design**: stop, network loss or kill -9 all resume from checkpoints; writes are
   idempotent and changes made while down are replayed on restart.
 - **Roles and alerts**: admin / operator / viewer with ownership isolation; failures, CDC stalls

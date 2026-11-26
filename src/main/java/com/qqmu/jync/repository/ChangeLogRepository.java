@@ -19,6 +19,10 @@ public interface ChangeLogRepository extends JpaRepository<ChangeLog, Long> {
 
     Page<ChangeLog> findByProjectIdOrderByOccurredAtDesc(Long projectId, Pageable pageable);
 
+    /** One resolution state's rows, newest first; used by the DDL-task support tool. */
+    Page<ChangeLog> findByProjectIdAndResolutionStatusOrderByOccurredAtDesc(
+            Long projectId, String resolutionStatus, Pageable pageable);
+
     Page<ChangeLog> findAllByOrderByOccurredAtDesc(Pageable pageable);
 
     /** The dashboard feed is a glance, not a report: ten rows; the full list lives at /change-logs. */
