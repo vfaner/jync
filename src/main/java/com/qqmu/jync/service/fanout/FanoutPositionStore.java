@@ -56,15 +56,4 @@ public class FanoutPositionStore {
         }
         repository.save(position);
     }
-
-    @Transactional
-    public void delete(Long projectId, Long targetDbId) {
-        repository.findByProjectIdAndTargetDbId(projectId, targetDbId)
-                .ifPresent(repository::delete);
-    }
-
-    @Transactional
-    public void deleteByProject(Long projectId) {
-        repository.deleteByProjectId(projectId);
-    }
 }

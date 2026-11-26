@@ -89,18 +89,24 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             // same way).
             taskStore.markCdcRunning(projectId);
             runtime = runtimes.create(project, ctx, "fanout-" + projectId, lock::renew, stats);
-            runtime.startWorkers();
-            // Registered like the engine-backed fan-out consumers: an administrator DDL
-            // reaches this runtime through the registry and drops the workers' cached
-            // column layouts.
-            registry.register(projectId, runtime);
+            boolean baselinePending = positionStore.find(projectId)
+                    .map(position -> !Boolean.TRUE.equals(position.isBaselineDone()))
+                    .orElse(true);
             if (runtime.needsRebaseline()) {
                 // A target's queue overflowed in an earlier run: the rows it missed are no
                 // longer in any spool. Forget the shared anchor and reload every target.
                 log.warn("Fan-out project {} dropped events for a target earlier;"
                         + " re-running the baseline", projectId);
                 positionStore.delete(projectId);
+                baselinePending = true;
             }
+            // Pass the flag before subscribing: a brand-new Redis consumer group created for
+            // a baseline can start at the stream tail instead of replaying all history.
+            runtime.startWorkers(baselinePending);
+            // Registered like the engine-backed fan-out consumers: an administrator DDL
+            // reaches this runtime through the registry and drops the workers' cached
+            // column layouts.
+            registry.register(projectId, runtime);
             while (running && !Thread.currentThread().isInterrupted()) {
                 reconcileAutoSync(projectId);
                 ensureBaseline(runtime, projectId);

@@ -12,6 +12,16 @@ public interface EventTransport extends AutoCloseable {
 
     Subscription subscribe(String consumerGroup);
 
+    /**
+     * Subscribe knowing whether a full baseline is about to run. A transport that creates a
+     * consumer group can then start a brand-new group at the stream tail (the baseline
+     * republishes everything the target needs), while a group created during normal resume
+     * still starts at the head to replay any backlog.
+     */
+    default Subscription subscribe(String consumerGroup, boolean newGroupAtTail) {
+        return subscribe(consumerGroup);
+    }
+
     void publish(ChangeEvent event) throws InterruptedException;
 
     /**

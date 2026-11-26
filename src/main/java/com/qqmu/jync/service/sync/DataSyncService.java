@@ -1758,6 +1758,7 @@ public class DataSyncService {
             Connection src = sourceConn;
             Connection tgt = targetConn;
             boolean borrowed = false;
+            boolean constraintsToggled = false;
             try {
                 if (attempt > 0 || src == null || tgt == null) {
                     if (ctx.getConnectionProvider() == null) {
@@ -1766,6 +1767,13 @@ public class DataSyncService {
                     src = ctx.getConnectionProvider().openWaiting(ctx.getSourceConfig());
                     borrowed = true;
                     tgt = ctx.getConnectionProvider().openWaiting(ctx.getTargetConfig());
+                }
+                // Session-scoped FK toggle for a parallel worker's own connection. The
+                // cycle-wide connection is toggled by SyncEngine, but a worker borrows a
+                // different one, where that SET never applied. Restored in finally so the
+                // connection does not return to the pool with checks off.
+                if (borrowed) {
+                    constraintsToggled = disableWorkerConstraints(tgt, ctx, targetTable);
                 }
                 // A failed attempt may have committed some batches. The retry must therefore
                 // be idempotent even when the first attempt used INSERT-only on an empty
@@ -1787,6 +1795,9 @@ public class DataSyncService {
                 log.warn("Full-load chunk of {} failed on attempt {} ({}); retrying on fresh"
                                 + " connections", table.getName(), attempt + 1, e.getMessage());
             } finally {
+                if (constraintsToggled) {
+                    restoreWorkerConstraints(tgt, ctx, targetTable);
+                }
                 if (borrowed) {
                     closeQuietly(src);
                     closeQuietly(tgt);
@@ -1794,6 +1805,49 @@ public class DataSyncService {
             }
         }
         throw new SQLException("Full-load chunk failed after " + maxAttempts + " attempts");
+    }
+
+    /**
+     * Disables FK checks on a borrowed parallel-worker connection. Only MySQL's toggle is
+     * session-scoped and cheap; SQL Server's is persistent DDL and stays on the cycle
+     * connection path only.
+     */
+    private boolean disableWorkerConstraints(Connection target, SyncContext ctx,
+                                             String targetTable) {
+        if (ctx.getConfig() == null || !ctx.getConfig().isDisableTargetConstraints()
+                || ctx.resolveTargetFamily() != DatabaseType.DialectFamily.MYSQL
+                || !ctx.getTargetDialect().supportsConstraintToggle()) {
+            return false;
+        }
+        try (java.sql.Statement st = target.createStatement()) {
+            st.execute(ctx.getTargetDialect().getDisableConstraintsSql(
+                    ctx.getTargetSchema(), List.of(targetTable)));
+            return true;
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not disable target constraints for the full-load worker of {}:"
+                    + " {}", targetTable, e.getMessage());
+            return false;
+        }
+    }
+
+    /** Best-effort restore before the worker connection returns to the pool. */
+    private void restoreWorkerConstraints(Connection target, SyncContext ctx,
+                                          String targetTable) {
+        try (java.sql.Statement st = target.createStatement()) {
+            st.execute(ctx.getTargetDialect().getEnableConstraintsSql(
+                    ctx.getTargetSchema(), List.of(targetTable)));
+        } catch (SQLException | RuntimeException e) {
+            // Returning this connection to the pool with FOREIGN_KEY_CHECKS=0 would disable
+            // checks for an unrelated later borrower. Abort the physical connection so the
+            // pool discards it instead.
+            log.warn("Could not restore target constraints on the full-load worker connection"
+                    + " for {}; aborting it: {}", targetTable, e.getMessage());
+            try {
+                target.abort(Runnable::run);
+            } catch (SQLException | RuntimeException abort) {
+                log.debug("Aborting the worker connection failed: {}", abort.toString());
+            }
+        }
     }
 
     /**
@@ -3870,6 +3924,17 @@ public class DataSyncService {
                     && !meetsAtEdge(recorded[index - 1], recorded[index], numeric)) {
                 return null;
             }
+        }
+        // A truncate + reseed can move the whole span DOWN: the first range is marked
+        // RANGE_DONE, but the rows now sit below its upper edge. Trusting the layout would
+        // skip them and then advance the watermark past them. Reject the layout so the
+        // caller recomputes it (and discards the now-invalid checkpoints).
+        if (numeric && currentMax != null && recorded[0] != null
+                && recorded[0].upperLong() != null && currentMax < recorded[0].upperLong()) {
+            log.info("Discarding resumed full-load ranges: current MAX {} is below the first"
+                    + " recorded range upper {} (the source shrank or was reseeded)",
+                    currentMax, recorded[0].upperLong());
+            return null;
         }
         // An index that wrote nothing (an empty slice, or a worker the failed attempt never
         // got to) leaves a hole; one fresh range covers the gap to its recorded neighbour.

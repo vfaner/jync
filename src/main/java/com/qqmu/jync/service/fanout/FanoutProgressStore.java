@@ -47,14 +47,4 @@ public class FanoutProgressStore {
     public void save(FanoutProgress progress) {
         repository.save(progress);
     }
-
-    @Transactional
-    public void deleteTarget(Long projectId, Long targetDbId) {
-        repository.deleteByProjectIdAndTargetDbId(projectId, targetDbId);
-    }
-
-    @Transactional
-    public void deleteProject(Long projectId) {
-        repository.deleteByProjectId(projectId);
-    }
 }

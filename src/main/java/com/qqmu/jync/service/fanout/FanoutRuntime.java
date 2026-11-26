@@ -77,24 +77,6 @@ public final class FanoutRuntime implements AutoCloseable {
         this.targetRepair = targetRepair;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.baselineService = new FanoutBaselineService(structureSync);
-        try {
-            for (FanoutBaselineService.Target target : targets) {
-                String group = String.valueOf(target.targetDbId());
-                EventTransport.Subscription subscription = transport.subscribe(group);
-                workers.add(new FanoutTargetWorker(group, subscription, applierFor(target),
-                        position -> onTargetCommit(target.targetDbId(), position)));
-            }
-        } catch (RuntimeException e) {
-            // The factory retries this constructor on every supervise tick; a subscribe or
-            // worker build failure must not leak the transport (and its open files/client).
-            try {
-                transport.close();
-            } catch (Exception close) {
-                log.debug("Fan-out transport close after a failed start: {}",
-                        close.toString());
-            }
-            throw e;
-        }
     }
 
     /** One target's write path, with the missing-table repair shared by every target. */
@@ -108,6 +90,38 @@ public final class FanoutRuntime implements AutoCloseable {
 
     /** Must run before the baseline so published rows are consumed immediately. */
     public synchronized void startWorkers() {
+        startWorkers(false);
+    }
+
+    /**
+     * @param newGroupAtTail true when the caller is about to run a full baseline: a brand-new
+     *     Redis consumer group may then start at the stream tail, because the baseline
+     *     republishes every row the target needs. Normal resume keeps the replay-from-0
+     *     semantics.
+     */
+    public synchronized void startWorkers(boolean newGroupAtTail) {
+        if (supervisor != null) {
+            return;
+        }
+        try {
+            for (FanoutBaselineService.Target target : targets) {
+                String group = String.valueOf(target.targetDbId());
+                EventTransport.Subscription subscription = transport.subscribe(group,
+                        newGroupAtTail);
+                workers.add(new FanoutTargetWorker(group, subscription, applierFor(target),
+                        position -> onTargetCommit(target.targetDbId(), position)));
+            }
+        } catch (RuntimeException e) {
+            // The factory retries the runtime on every supervise tick; a subscribe or worker
+            // build failure must not leak the transport (and its open files/client).
+            try {
+                transport.close();
+            } catch (Exception close) {
+                log.debug("Fan-out transport close after a failed start: {}",
+                        close.toString());
+            }
+            throw e;
+        }
         workers.forEach(FanoutTargetWorker::start);
         supervisor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "fanout-supervisor-" + sourceCtx.projectId());
@@ -235,11 +249,24 @@ public final class FanoutRuntime implements AutoCloseable {
             Thread.sleep(50L);
         }
         if (!barrierAcked.containsAll(wanted)) {
-            throw new IllegalStateException("fan-out baseline barrier timed out: acked "
-                    + barrierAcked + " of " + wanted);
+            // A dead or very slow extra target used to fail the whole baseline, which made
+            // the consumer re-read and re-publish every table on a five-minute retry loop
+            // while the healthy targets could not start either. The published rows and the
+            // marker stay in that target's spool, so starting now is still at-least-once;
+            // its worker catches up when the target recovers. Only acked targets get the
+            // "baseline done" progress mark — the lagging one stays visibly incomplete.
+            java.util.Set<Long> missing = new java.util.LinkedHashSet<>(wanted);
+            missing.removeAll(barrierAcked);
+            log.error("Fan-out baseline barrier timed out for project {}: target(s) {} did"
+                    + " not acknowledge the snapshot; starting capture anyway — their spools"
+                    + " retain the rows, and the target status shows the lag",
+                    sourceCtx.projectId(), missing);
         }
         for (FanoutBaselineService.TableLoad load : loads) {
             for (FanoutBaselineService.Target target : targets) {
+                if (!barrierAcked.contains(target.targetDbId())) {
+                    continue;
+                }
                 com.qqmu.jync.model.FanoutProgress progress = progressStore.loadOrCreate(
                         sourceCtx.projectId(), target.targetDbId(), load.table());
                 progress.setInitialLoadDone(true);

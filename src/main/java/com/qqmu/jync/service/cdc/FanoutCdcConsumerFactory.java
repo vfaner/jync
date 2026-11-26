@@ -62,7 +62,11 @@ public class FanoutCdcConsumerFactory {
                 taskStore, stats, () -> {
                     com.qqmu.jync.service.fanout.FanoutRuntime runtime = runtimes.create(
                             project, ctx, "fanout-" + project.getId(), lock::renew, stats);
-                    runtime.startWorkers();
+                    boolean baselinePending = positionStore == null || positionStore
+                            .find(project.getId())
+                            .map(position -> !Boolean.TRUE.equals(position.isBaselineDone()))
+                            .orElse(true);
+                    runtime.startWorkers(baselinePending);
                     return runtime;
                 }, positionStore);
     }

@@ -63,11 +63,19 @@ public final class RedisStreamEventTransport implements EventTransport {
     private final List<Sub> subscriptions = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
+    private final boolean newGroupsAtTail;
+
     public RedisStreamEventTransport(RedisURI uri, String streamKey) {
-        this(uri, streamKey, 0L);
+        this(uri, streamKey, 0L, false);
     }
 
     public RedisStreamEventTransport(RedisURI uri, String streamKey, long maxLen) {
+        this(uri, streamKey, maxLen, false);
+    }
+
+    public RedisStreamEventTransport(RedisURI uri, String streamKey, long maxLen,
+                                     boolean newGroupsAtTail) {
+        this.newGroupsAtTail = newGroupsAtTail;
         this.client = RedisClient.create(uri);
         this.maxLen = maxLen;
         // A blocking XREADGROUP parks the command for the poll timeout; the command timeout
@@ -81,10 +89,15 @@ public final class RedisStreamEventTransport implements EventTransport {
 
     @Override
     public Subscription subscribe(String consumerGroup) {
+        return subscribe(consumerGroup, newGroupsAtTail);
+    }
+
+    @Override
+    public Subscription subscribe(String consumerGroup, boolean newGroupAtTail) {
         if (closed) {
             throw new IllegalStateException("transport is closed");
         }
-        Sub sub = new Sub(consumerGroup == null ? "default" : consumerGroup);
+        Sub sub = new Sub(consumerGroup == null ? "default" : consumerGroup, newGroupAtTail);
         subscriptions.add(sub);
         return sub;
     }
@@ -193,16 +206,19 @@ public final class RedisStreamEventTransport implements EventTransport {
         private volatile String lastAckedId;
         private volatile boolean closed;
 
-        Sub(String group) {
+        Sub(String group, boolean newGroupAtTail) {
             this.group = group;
             this.consumerName = "target-" + group;
             this.connection = client.connect(CODEC);
             try {
-                // A fresh group starts at 0: everything still in the stream is replayed, and
-                // re-applying rows is idempotent. Starting at "$" would silently skip events
-                // published before a restart that lost the group.
+                // A group created for a run that will publish a full baseline starts at the
+                // tail: the baseline republishes everything the target needs, so replaying
+                // the stream's entire history (weeks, with trimming off) is unnecessary.
+                // Any other new group starts at 0 and replays the backlog — starting at "$"
+                // there would silently skip events after a lost group.
+                String start = newGroupAtTail ? "$" : "0";
                 connection.sync().xgroupCreate(
-                        XReadArgs.StreamOffset.from(streamKey, "0"), group,
+                        XReadArgs.StreamOffset.from(streamKey, start), group,
                         XGroupCreateArgs.Builder.mkstream());
             } catch (RedisBusyException e) {
                 // The group already exists — its pending list is the resume point.
