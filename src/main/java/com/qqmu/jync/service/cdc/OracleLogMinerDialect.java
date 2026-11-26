@@ -72,8 +72,11 @@ public final class OracleLogMinerDialect implements MiningDialect {
      */
     private static final String Q_OLDEST_MINEABLE_SCN =
             "SELECT MIN(FIRST_CHANGE#) FROM ("
+                    // Deleted archives keep a V$ARCHIVED_LOG row with the old SCN. Counting
+                    // them made the floor look older than the anchor and produced the
+                    // misleading "resume is covered, yet a file is missing" hint.
                     + "SELECT FIRST_CHANGE# FROM V$ARCHIVED_LOG"
-                    + " WHERE DEST_ID = 1 AND NAME IS NOT NULL"
+                    + " WHERE DEST_ID = 1 AND DELETED = 'NO' AND NAME IS NOT NULL"
                     + " UNION ALL"
                     + " SELECT FIRST_CHANGE# FROM V$LOG WHERE STATUS = 'CURRENT')";
 

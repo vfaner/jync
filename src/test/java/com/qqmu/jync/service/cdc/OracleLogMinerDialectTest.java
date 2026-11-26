@@ -43,6 +43,9 @@ class OracleLogMinerDialectTest {
         // not been archived yet, and the online group alone misses every older archive.
         verify(conn.createStatement()).executeQuery(contains("V$ARCHIVED_LOG"));
         verify(conn.createStatement()).executeQuery(contains("V$LOG"));
+        // Deleted archives keep SCN rows; counting them made the floor look older than it
+        // is and hid a real retention gap behind a misleading hint.
+        verify(conn.createStatement()).executeQuery(contains("DELETED = 'NO'"));
     }
 
     @Test

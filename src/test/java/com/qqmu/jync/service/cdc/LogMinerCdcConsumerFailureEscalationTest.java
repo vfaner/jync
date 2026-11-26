@@ -362,7 +362,7 @@ class LogMinerCdcConsumerFailureEscalationTest {
         assertThat(detail.getValue())
                 .startsWith("PURGED: ORA-01291")
                 .contains("resume SCN " + anchor)
-                .contains("oldest redo still on the source starts at SCN " + floor);
+                .contains("oldest still-available redo starts at SCN " + floor);
     }
 
     @Test

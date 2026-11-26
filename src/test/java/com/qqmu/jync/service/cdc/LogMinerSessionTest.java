@@ -570,4 +570,11 @@ class LogMinerSessionTest {
                 .contains("RS_ID, CSCN,")
                 .doesNotContain("RS_ID, CSN,");
     }
+
+    @Test
+    void archivedLogSelectionIgnoresDeletedFiles() {
+        // V$ARCHIVED_LOG keeps a row (with its old SCN) after the file is gone. Adding that
+        // path makes ADD_LOGFILE raise ORA-01291 even though the resume point is "covered".
+        assertThat(LogMinerSession.Q_ARCHIVED_LOGS_SINCE).contains("DELETED = 'NO'");
+    }
 }

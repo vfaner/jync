@@ -233,7 +233,23 @@ class CdcFailureClassifierTest {
         assertThat(detail)
                 .startsWith("PURGED: ORA-01291: missing logfile")
                 .contains("resume SCN 7095423")
-                .contains("oldest redo still on the source starts at SCN 7106400")
+                .contains("oldest still-available redo starts at SCN 7106400")
+                .contains("rebuild the baseline");
+    }
+
+    @Test
+    void purgedHintNamesAGapWhenTheFloorIsOlderThanTheResumePoint() {
+        // The V$ARCHIVED_LOG floor can be older than the anchor while a file in the range
+        // was deleted (or a thread/incarnation is missing). Telling the operator to raise
+        // retention would not fix a gap; the hint must name continuity instead.
+        String detail = CdcFailureClassifier.withPurgeHint(
+                "PURGED: ORA-01291: missing logfile", 7_106_400L, 7_095_423L);
+
+        assertThat(detail)
+                .contains("resume SCN 7106400")
+                .contains("oldest still-available redo starts at SCN 7095423")
+                .contains("a log file needed between the resume point and now is missing")
+                .contains("V$ARCHIVED_LOG")
                 .contains("rebuild the baseline");
     }
 
@@ -244,7 +260,7 @@ class CdcFailureClassifierTest {
 
         assertThat(detail)
                 .contains("resume SCN 7095423")
-                .doesNotContain("oldest redo still on the source")
+                .doesNotContain("oldest still-available redo")
                 .contains("rebuild the baseline");
     }
 

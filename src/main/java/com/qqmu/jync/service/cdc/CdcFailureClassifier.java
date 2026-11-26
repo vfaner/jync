@@ -217,12 +217,25 @@ public final class CdcFailureClassifier {
         StringBuilder text = new StringBuilder(detail)
                 .append(" [resume SCN ").append(anchorScn == null ? "unknown" : anchorScn);
         if (oldestMineableScn != null) {
-            text.append("; oldest redo still on the source starts at SCN ")
+            text.append("; oldest still-available redo starts at SCN ")
                     .append(oldestMineableScn);
         }
-        text.append("; the logs covering the resume point are gone, so retrying cannot work")
-                .append(" — rebuild the baseline from a fresh snapshot, and raise the")
-                .append(" source's archive retention first if the full load outlasted it]");
+        boolean gapWithinRetention = anchorScn != null && oldestMineableScn != null
+                && oldestMineableScn <= anchorScn;
+        if (gapWithinRetention) {
+            // The oldest available log is older than the resume point, yet a file in the
+            // range is missing: this is a gap/deleted archive, not "retention starts too
+            // late". Raising retention alone will not fix it; continuity must be checked.
+            text.append("; a log file needed between the resume point and now is missing")
+                    .append(" (archive gap, a deleted file, another thread, or a resetlogs")
+                    .append(" incarnation). Check V$ARCHIVED_LOG continuity and the archive")
+                    .append(" destinations; retrying cannot work, so rebuild the baseline")
+                    .append(" from a fresh snapshot after restoring the missing logs]");
+        } else {
+            text.append("; the logs covering the resume point are gone, so retrying cannot")
+                    .append(" work — rebuild the baseline from a fresh snapshot, and raise the")
+                    .append(" source's archive retention first if the full load outlasted it]");
+        }
         return text.toString();
     }
 
