@@ -991,6 +991,13 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 - `sync.cdc.logminer.missing-lob-policy=skip` keeps the old target value and counts the skip; `fail` stops at the first missing LOB.
 - A LogMiner `PURGED` (ORA-01291) detail includes the resume SCN and oldest still-available redo. If the oldest is EARLIER than resume but a file is still missing, it is an archive gap/deleted file/thread/resetlogs issue — raising retention will not help; check `V$ARCHIVED_LOG` continuity. If the oldest is LATER than resume, retention is too short. Rows with `DELETED=YES` are no longer selected or counted in the floor.
 
+## MySQL auto-increment synced to Dameng
+
+- Jync does not use native DM IDENTITY. It creates a `SEQ_<table>_<column>` sequence and a `TRG_<table>_<column>` BEFORE INSERT trigger that draws from the sequence only when the inserted value is NULL; explicit source IDs are written as-is. The target dictionary will not show an "auto-increment" flag; that is expected, not data loss.
+- After the first full load, Jync advances the sequence to `MAX(id)+1` only when the auto-increment column is a single-column primary key. Composite keys or non-key auto-increment columns are not advanced, so an ID-less target insert may start at 1 and collide.
+- If the SEQ/TRG objects are missing, check whether Sync structure is enabled, whether the target table was pre-created with structure sync off, whether the MySQL AUTO_INCREMENT flag was read from metadata, and whether this is an old baseline. Rebuild the baseline to reload. Do not recommend native DM IDENTITY: explicit ID inserts are rejected.
+- DM has no global identifier-case switch either: bare identifiers fold to upper case. Table names can be mapped per table; column names cannot be renamed globally. Do not suggest a "global lowercase" switch — it creates a different quoted object.
+
 ## Target identifier case and type precision
 
 - On Vastbase and other PG-family targets with `lower_case_column_names`, quoted columns may be stored lower-case. 2.4.5 reads the target catalog's actual spelling before writing.

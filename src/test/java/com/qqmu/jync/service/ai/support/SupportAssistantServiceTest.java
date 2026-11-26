@@ -755,6 +755,14 @@ class SupportAssistantServiceTest {
     }
 
     @Test
+    void theSystemPromptExplainsMysqlToDamengAutoIncrementAndCase() {
+        assertThat(SupportAssistantService.SYSTEM_PROMPT)
+                .contains("SEQ_*")
+                .contains("原生 IDENTITY")
+                .contains("没有全局开关");
+    }
+
+    @Test
     void theSystemPromptExplainsExternalBaselineAndRealtimeBoundaries() {
         assertThat(SupportAssistantService.SYSTEM_PROMPT)
                 .contains("外部基线接入")

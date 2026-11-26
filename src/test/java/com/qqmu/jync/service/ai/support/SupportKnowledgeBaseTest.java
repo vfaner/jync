@@ -248,4 +248,22 @@ class SupportKnowledgeBaseTest {
         assertThat(hits).anySatisfy(hit ->
                 assertThat(hit.title()).isEqualTo("Keyless tables"));
     }
+
+    @Test
+    void aChineseQuestionAboutMysqlAutoIncrementToDamengFindsTheSection() {
+        var hits = kb.search("zh", "mysql 自增 同步到达梦 丢失 IDENTITY 序列", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("MySQL 自增同步到达梦");
+            assertThat(hit.body()).contains("SEQ_").contains("TRG_");
+        });
+    }
+
+    @Test
+    void anEnglishQuestionAboutMysqlAutoIncrementToDamengFindsTheSection() {
+        var hits = kb.search("en", "mysql auto increment lost Dameng identity sequence", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit ->
+                assertThat(hit.title()).isEqualTo("MySQL auto-increment synced to Dameng"));
+    }
 }

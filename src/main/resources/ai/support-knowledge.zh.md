@@ -782,6 +782,13 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 - `sync.cdc.logminer.missing-lob-policy=skip` 会保留目标旧值并计数；`fail` 会在第一条缺失 LOB 处停住，适合不能接受静默偏差的场景。
 - LogMiner 的 `PURGED`（ORA-01291）详情带 resume SCN 与 oldest still-available redo：最老 redo 早于 resume SCN 却仍缺文件，是归档空档/文件被删/其他 thread 或 resetlogs 分支，调大保留期无效，先查 `V$ARCHIVED_LOG` 连续性；最老 redo 晚于 resume SCN 才是保留期不足。`V$ARCHIVED_LOG` 中 `DELETED=YES` 的旧行不再参与选文件或计算下限。
 
+## MySQL 自增同步到达梦
+
+- 达梦目标不使用原生 IDENTITY。Jync 为目标表创建 `SEQ_<表>_<列>` 序列和 `TRG_<表>_<列>` BEFORE INSERT 触发器，只在插入值为 NULL 时取序列；源端的显式 ID 会原样写入。目标字典不会显示“自增”，这是正常现象，不代表自增丢失。
+- 首次全量完成后，若自增列是单列主键，Jync 会把序列推进到 `MAX(id)+1`；复合主键或非主键自增列不会自动推进，目标端无 ID 插入可能从 1 开始撞主键。
+- 目标没有对应 SEQ/TRG 时检查：任务是否开启「同步结构」；目标表是否手工预建且结构同步关闭；源端 MySQL 的 AUTO_INCREMENT 是否被元数据读到；是否是旧版本/旧基线。需要重灌时用「重建基线」。不要建议改成达梦原生 IDENTITY——显式 ID 插入会被拒绝。
+- 达梦目标也没有全局大小写开关：未加引号的标识符会折叠为大写；表名可逐表映射，字段名不支持批量改名。不要建议用“全局转小写”解决，容易生成另一个带引号的小写对象。
+
 ## 目标端列名大小写与类型精度
 
 - 海量等 PG 系目标开启 `lower_case_column_names` 后，带引号建出的列可能存成小写；Jync 2.4.5 起写海量前会读取目标目录的实际列名，按实际大小写生成 INSERT / UPDATE / DELETE，不需要改库参数。
