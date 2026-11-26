@@ -83,6 +83,19 @@ class SpoolingEventTransportTest {
     }
 
     @Test
+    void aCappedTargetsDroppedWindowIsMarkedForRebaseline(@TempDir Path dir) throws Exception {
+        SpoolingEventTransport transport = new SpoolingEventTransport(dir, 64, mapper);
+        transport.subscribe("capped");
+        transport.publish(row("tx-1", 1L));
+
+        assertThat(transport.needsRebaseline()).isTrue();
+        transport.clearRebaselineMarks();
+        assertThat(transport.needsRebaseline()).isFalse();
+        transport.close();
+        // The marker is on disk, so a restart (a fresh transport) still sees it.
+    }
+
+    @Test
     void aCrashMidRecordDoesNotBrickTheTarget(@TempDir Path dir) throws Exception {
         SpoolingEventTransport transport = new SpoolingEventTransport(dir, 1_000_000, mapper);
         EventTransport.Subscription sub = transport.subscribe("torn");

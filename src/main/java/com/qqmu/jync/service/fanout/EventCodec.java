@@ -51,6 +51,12 @@ final class EventCodec {
         String name = type.getName();
         if (ALLOWED_TYPES.contains(type)
                 || name.startsWith(ChangeEvent.class.getName() + "$")
+                // Value classes whose serialized form uses their own support classes
+                // (java.time.Ser / ZoneRegion, java.math internals, java.sql subclasses).
+                // These packages contain no reflective/execution gadgets.
+                || name.startsWith("java.time.")
+                || name.startsWith("java.math.")
+                || name.startsWith("java.sql.")
                 || type == ChangeEvent.class
                 || type == java.util.LinkedHashMap.class
                 || type == java.util.HashMap.class

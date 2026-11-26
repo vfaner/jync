@@ -152,8 +152,14 @@ public class AutoSyncService {
 
     private void persist(Project project, SyncConfig config) {
         try {
-            project.setSyncConfig(objectMapper.writeValueAsString(config));
-            projects.save(project);
+            String json = objectMapper.writeValueAsString(config);
+            project.setSyncConfig(json);
+            // Save a freshly loaded row with only the config replaced: this cycle holds a
+            // snapshot taken before the operator may have saved a column rule, and saving
+            // the stale entity would silently roll that edit back.
+            Project fresh = projects.findById(project.getId()).orElse(project);
+            fresh.setSyncConfig(json);
+            projects.save(fresh);
         } catch (RuntimeException e) {
             // The in-memory config still carries the new names, so the current cycle uses
             // them; the next cycle retries the snapshot/write.

@@ -1910,6 +1910,20 @@
       if (locked || !menu) return;
       renderMenu();
       menu.hidden = false;
+      // The picker lives inside a card whose overflow is hidden; an absolutely positioned
+      // menu was clipped at the card edge. Position it against the viewport instead and
+      // flip above the box when the list would run off the bottom.
+      var rect = chips.getBoundingClientRect();
+      var width = Math.max(rect.width, 220);
+      menu.style.width = width + 'px';
+      var left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+      var top = rect.bottom + 4;
+      var height = menu.offsetHeight;
+      if (top + height > window.innerHeight - 8 && rect.top - height - 4 >= 8) {
+        top = rect.top - height - 4;
+      }
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
       picker.classList.add('is-open');
       chips.setAttribute('aria-expanded', 'true');
     }
@@ -1957,6 +1971,15 @@
     document.addEventListener('click', function (event) {
       if (!picker.contains(event.target)) closeMenu();
     });
+    // Fixed coordinates do not follow the page; a scroll or resize would leave the menu
+    // floating over unrelated content.
+    window.addEventListener('scroll', function (event) {
+      // Scrolling INSIDE the menu is how a long target list is browsed; only a page
+      // scroll invalidates the fixed coordinates.
+      if (menu && event.target && menu.contains(event.target)) { return; }
+      closeMenu();
+    }, true);
+    window.addEventListener('resize', closeMenu);
     // Preserve the stored primary target: the template renders chips in option order, but
     // the first chip is what sync() treats as primary.
     var initialPrimary = primary.value;

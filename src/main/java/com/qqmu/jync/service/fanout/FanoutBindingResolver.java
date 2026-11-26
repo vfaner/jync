@@ -23,7 +23,6 @@ import lombok.extern.slf4j.Slf4j;
 public final class FanoutBindingResolver implements CdcBindingResolver {
 
     private final SyncContext sourceCtx;
-    private final Connection sourceConn;
     private final Map<String, CdcTableBinding> cache = new ConcurrentHashMap<>();
     /**
      * One JDBC connection serves every target worker; JDBC connections are not thread-safe
@@ -40,9 +39,8 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
     private final Map<String, Long> lastWarnAt = new ConcurrentHashMap<>();
     private static final long WARN_INTERVAL_MS = 60_000L;
 
-    public FanoutBindingResolver(SyncContext sourceCtx, Connection sourceConn) {
+    public FanoutBindingResolver(SyncContext sourceCtx) {
         this.sourceCtx = sourceCtx;
-        this.sourceConn = sourceConn;
     }
 
     @Override
@@ -58,8 +56,14 @@ public final class FanoutBindingResolver implements CdcBindingResolver {
         try {
             TableMeta meta;
             synchronized (readLock) {
-                meta = sourceCtx.getSourceReader()
-                        .readTable(sourceConn, sourceCtx.getSourceSchema(), table);
+                // A connection per (cache-miss) read: the runtime holds no long-lived
+                // binding connection, so a source restart or an idle timeout cannot leave
+                // every target resolving against a dead socket.
+                try (Connection conn = sourceCtx.getConnectionProvider()
+                        .open(sourceCtx.getSourceConfig())) {
+                    meta = sourceCtx.getSourceReader()
+                            .readTable(conn, sourceCtx.getSourceSchema(), table);
+                }
             }
             if (meta == null || !meta.hasPrimaryKey()) {
                 cache.put(key, NULL_BINDING);

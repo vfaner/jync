@@ -80,6 +80,13 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             // reaches this runtime through the registry and drops the workers' cached
             // column layouts.
             registry.register(projectId, runtime);
+            if (runtime.needsRebaseline()) {
+                // A target's queue overflowed in an earlier run: the rows it missed are no
+                // longer in any spool. Forget the shared anchor and reload every target.
+                log.warn("Fan-out project {} dropped events for a target earlier;"
+                        + " re-running the baseline", projectId);
+                positionStore.delete(projectId);
+            }
             while (running && !Thread.currentThread().isInterrupted()) {
                 reconcileAutoSync(projectId);
                 ensureBaseline(runtime, projectId);
@@ -125,6 +132,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 mark.getGtidSet(), clientFactory.serverIdFor(projectId));
         runtime.baseline();
         positionStore.markBaselineDone(projectId);
+        runtime.clearRebaselineMarks();
         log.info("Fan-out baseline for project {} finished", projectId);
     }
 
@@ -208,10 +216,8 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
             BinaryLogClient current = clientFactory.createClient(ctx.getSourceConfig(),
                     projectId, resume);
             this.client = current;
-            java.sql.Connection bindingConn = openSource();
             FanoutMetaSupplier supplier = new FanoutMetaSupplier(
-                    new com.qqmu.jync.service.fanout.FanoutBindingResolver(ctx,
-                            bindingConn));
+                    new com.qqmu.jync.service.fanout.FanoutBindingResolver(ctx));
             CdcEventStreamHandler handler = new CdcEventStreamHandler(
                     ctx.getConfig(), ctx.getSourceSchema(), supplier, new CdcRowMapper(), stats,
                     current::getGtidSet, sink, lobSpillStore.get(properties),
@@ -220,7 +226,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                     (db, sql, file, position) -> stateWriter.recordSkippedDdl(
                             projectId, db, sql, file, position),
                     null,
-                    (db, table, sql) -> {
+                    (db, table, sql, file, position) -> {
                         if (!ctx.getConfig().isAutoSyncNewTables()) {
                             return;
                         }
@@ -277,11 +283,6 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 disconnect(current);
                 stats.setConnected(false);
                 this.client = null;
-                try {
-                    bindingConn.close();
-                } catch (Exception e) {
-                    log.debug("Fan-out binding connection close failed: {}", e.toString());
-                }
             }
             if (!running || rebaselineRequested) {
                 break;

@@ -79,6 +79,31 @@ public final class SpoolingEventTransport implements EventTransport {
     }
 
     @Override
+    public boolean needsRebaseline() {
+        try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+            return files.anyMatch(path -> path.getFileName().toString().endsWith(".failed"));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    @Override
+    public void clearRebaselineMarks() {
+        try (java.util.stream.Stream<Path> files = Files.list(directory)) {
+            files.filter(path -> path.getFileName().toString().endsWith(".failed"))
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException e) {
+                            log.debug("Could not delete {}: {}", path, e.toString());
+                        }
+                    });
+        } catch (IOException e) {
+            log.debug("Could not list {} for marker cleanup: {}", directory, e.toString());
+        }
+    }
+
+    @Override
     public void close() {
         closed = true;
         for (SpoolSubscription sub : subscriptions) {
@@ -183,6 +208,16 @@ public final class SpoolingEventTransport implements EventTransport {
                 failure = e;
                 log.error("Fan-out spool for target '{}' stopped accepting events: {}",
                         group, e.getMessage());
+                // The capture keeps advancing for the healthy targets, so the events this
+                // target missed are gone from the stream. The marker makes the next start
+                // re-baseline instead of resuming and pretending nothing happened.
+                try {
+                    Files.writeString(directory.resolve(group + ".failed"),
+                            e.getMessage() == null ? e.toString() : e.getMessage());
+                } catch (IOException marker) {
+                    log.warn("Could not write the fan-out rebaseline marker for '{}': {}",
+                            group, marker.toString());
+                }
             }
         }
 
@@ -221,8 +256,11 @@ public final class SpoolingEventTransport implements EventTransport {
                 readPosition = spool.getFilePointer();
                 return EventCodec.deserialize(bytes);
             } catch (IOException e) {
+                // Name the cause in the message: the target panel shows this string, and
+                // "could not read the spool" alone hides a decode rejection (an unsupported
+                // value type) behind what looks like a disk problem.
                 throw new IllegalStateException("could not read the fan-out spool for '"
-                        + group, e);
+                        + group + "': " + e, e);
             }
         }
 

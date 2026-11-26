@@ -1232,9 +1232,12 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
   border-color: var(--brand);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 12%, transparent);
 }
+/* fixed: the picker sits inside .card (overflow: hidden) and the menu was clipped at
+   the card edge. app.js positions it against the box's viewport rect and closes it on
+   scroll/resize, so the fixed coordinates cannot go stale. */
 .target-menu {
-  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 60;
-  max-height: 260px; overflow: auto; padding: 4px;
+  position: fixed; left: 0; top: 0; z-index: 1060;
+  min-width: 220px; max-height: 260px; overflow: auto; padding: 4px;
   border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
   box-shadow: 0 12px 28px rgba(0, 0, 0, .14);
 }

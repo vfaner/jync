@@ -721,14 +721,17 @@ public class ProjectService {
         java.util.List<Long> clean = extraTargets == null
                 ? new java.util.ArrayList<>() : new java.util.ArrayList<>(extraTargets);
         boolean changed = !new java.util.HashSet<>(old).equals(new java.util.HashSet<>(clean));
+        if (changed && isRunning(project)) {
+            // Adding targets, removing one, or turning fan-out off all move where
+            // undelivered events live; editing the topology under a live stream would
+            // split the targets' positions from the capture anchor.
+            throw new IllegalStateException("error.project.stop.before.config");
+        }
         if (!clean.isEmpty()) {
             if (project.getTargetKindOrDefault() != SyncTargetKind.JDBC) {
                 // A cache target has no fan-out runner; accept it here and start would
                 // refuse later, leaving a task that can never run.
                 throw new IllegalStateException("error.project.fanout.requires.binlog");
-            }
-            if (changed && isRunning(project)) {
-                throw new IllegalStateException("error.project.stop.before.config");
             }
             if (!config.getCaptureStrategyOrDefault().isLogCdc()) {
                 // Picking extra targets on a polling project turns on the log-based strategy
@@ -741,13 +744,13 @@ public class ProjectService {
                 config.setCaptureStrategy(preferred);
             }
         }
-        config.setFanoutTargetDbIds(clean);
-        if (changed && !clean.isEmpty()) {
-            // A new target has no baseline yet. Dropping the capture position makes the next
-            // start re-run the shared baseline for every target instead of streaming only
-            // future changes into an empty new target.
+        if (changed) {
+            // Adding a target has no baseline yet; shrinking (including down to zero)
+            // leaves the shared anchor past events the remaining targets may never have
+            // applied. Either way the next start re-baselines instead of skipping a window.
             positionStore.delete(projectId);
         }
+        config.setFanoutTargetDbIds(clean);
         project.setSyncConfig(contextFactory.serializeConfig(config));
         return projectRepository.save(project);
     }

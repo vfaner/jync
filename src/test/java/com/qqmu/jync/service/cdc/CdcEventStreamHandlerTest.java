@@ -421,7 +421,7 @@ class CdcEventStreamHandlerTest {
         CdcEventStreamHandler withSink = new CdcEventStreamHandler(config, "app", supplier,
                 new CdcRowMapper(), stats, () -> "uuid:1-7", sink, null, 0L,
                 CdcTransactionBudget.unlimited(), null, null,
-                (db, table, sql) -> {
+                (db, table, sql, file, position) -> {
                     captured.add(db);
                     captured.add(table);
                     captured.add(sql);

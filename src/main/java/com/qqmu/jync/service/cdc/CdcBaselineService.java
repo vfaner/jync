@@ -570,9 +570,16 @@ public class CdcBaselineService {
                 redisBaseline.run(ctx, lockRenewer, this::recordBaselineAnchor);
                 return;
             }
-            logMinerAnchorScn = recordBaselineAnchor(ctx);
             com.qqmu.jync.service.fanout.FanoutRuntime fanout =
                     fanoutRuntimes == null ? null : fanoutRuntimes.get(projectId);
+            if (fanout != null && fanout.needsRebaseline()) {
+                // A target's queue overflowed in an earlier run; the anchor has advanced
+                // past rows it never received. Drop it so this baseline anchors afresh.
+                log.warn("Fan-out project {} dropped events for a target earlier;"
+                        + " re-baselining from a new anchor", projectId);
+                positionStore.delete(projectId);
+            }
+            logMinerAnchorScn = recordBaselineAnchor(ctx);
             if (fanout != null) {
                 // A fan-out baseline reads the source once and publishes to the shared
                 // transport, so every target receives the same snapshot. The anchor was
@@ -585,6 +592,7 @@ public class CdcBaselineService {
                     assertArchiveStillCovers(ctx.getSourceConfig(), logMinerAnchorScn);
                 }
                 positionStore.markBaselineDone(projectId);
+                fanout.clearRebaselineMarks();
                 if (!loads.isEmpty()) {
                     try {
                         taskStore.markCdcDataApplied(projectId);

@@ -24,6 +24,9 @@ class EventCodecTest {
         row.put("amount", new BigDecimal("12.50"));
         row.put("payload", new byte[] {1, 2, 3});
         row.put("created", Timestamp.valueOf("2026-11-25 12:00:00"));
+        row.put("local", java.time.LocalDateTime.of(2026, 11, 25, 12, 0));
+        row.put("zoned", java.time.ZonedDateTime.of(2026, 11, 25, 12, 0, 0, 0,
+                java.time.ZoneId.of("Asia/Shanghai")));
         ChangeEvent event = ChangeEvent.row("0x1", "tx", "src", "orders",
                 ChangeEvent.ChangeOperation.UPSERT, row, null, 1L);
 
@@ -37,6 +40,12 @@ class EventCodecTest {
         assertThat(decoded.row().get("payload")).isEqualTo(new byte[] {1, 2, 3});
         assertThat(decoded.row().get("created"))
                 .isEqualTo(Timestamp.valueOf("2026-11-25 12:00:00"));
+        // java.time values travel through their serialization proxy (java.time.Ser), which
+        // an allow-list of concrete value classes alone would reject.
+        assertThat(decoded.row().get("local"))
+                .isEqualTo(java.time.LocalDateTime.of(2026, 11, 25, 12, 0));
+        assertThat(decoded.row().get("zoned")).isEqualTo(java.time.ZonedDateTime.of(
+                2026, 11, 25, 12, 0, 0, 0, java.time.ZoneId.of("Asia/Shanghai")));
     }
 
     @Test

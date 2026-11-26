@@ -33,7 +33,6 @@ public final class FanoutRuntime implements AutoCloseable {
 
     private final SyncContext sourceCtx;
     private final List<FanoutBaselineService.Target> targets;
-    private final Connection sourceConn;
     private final FanoutBindingResolver bindings;
     private final EventTransport transport;
     private final List<FanoutTargetWorker> workers = new CopyOnWriteArrayList<>();
@@ -69,9 +68,7 @@ public final class FanoutRuntime implements AutoCloseable {
             throws Exception {
         this.sourceCtx = sourceCtx;
         this.targets = List.copyOf(targets);
-        this.sourceConn = sourceCtx.getConnectionProvider()
-                .open(sourceCtx.getSourceConfig());
-        this.bindings = new FanoutBindingResolver(sourceCtx, sourceConn);
+        this.bindings = new FanoutBindingResolver(sourceCtx);
         this.transport = transport;
         this.progressStore = progressStore;
         this.positionStore = positionStore;
@@ -79,11 +76,23 @@ public final class FanoutRuntime implements AutoCloseable {
         this.targetRepair = targetRepair;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.baselineService = new FanoutBaselineService(structureSync);
-        for (FanoutBaselineService.Target target : targets) {
-            String group = String.valueOf(target.targetDbId());
-            EventTransport.Subscription subscription = transport.subscribe(group);
-            workers.add(new FanoutTargetWorker(group, subscription, applierFor(target),
-                    position -> onTargetCommit(target.targetDbId(), position)));
+        try {
+            for (FanoutBaselineService.Target target : targets) {
+                String group = String.valueOf(target.targetDbId());
+                EventTransport.Subscription subscription = transport.subscribe(group);
+                workers.add(new FanoutTargetWorker(group, subscription, applierFor(target),
+                        position -> onTargetCommit(target.targetDbId(), position)));
+            }
+        } catch (RuntimeException e) {
+            // The factory retries this constructor on every supervise tick; a subscribe or
+            // worker build failure must not leak the transport (and its open files/client).
+            try {
+                transport.close();
+            } catch (Exception close) {
+                log.debug("Fan-out transport close after a failed start: {}",
+                        close.toString());
+            }
+            throw e;
         }
     }
 
@@ -237,6 +246,15 @@ public final class FanoutRuntime implements AutoCloseable {
         return transport;
     }
 
+    /** See {@link EventTransport#needsRebaseline()}. */
+    public boolean needsRebaseline() {
+        return transport.needsRebaseline();
+    }
+
+    public void clearRebaselineMarks() {
+        transport.clearRebaselineMarks();
+    }
+
     /**
      * Drops every cached source binding. An administrator-executed DDL changes the target
      * columns the capture projects; the capture-side supplier has its own copy of this
@@ -265,11 +283,6 @@ public final class FanoutRuntime implements AutoCloseable {
             transport.close();
         } catch (Exception e) {
             log.debug("Fan-out transport close failed: {}", e.toString());
-        }
-        try {
-            sourceConn.close();
-        } catch (Exception e) {
-            log.debug("Fan-out source connection close failed: {}", e.toString());
         }
     }
 

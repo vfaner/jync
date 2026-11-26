@@ -151,13 +151,16 @@ public final class FanoutBaselineService {
             try (ResultSet rs = ps.executeQuery()) {
                 ResultSetMetaData md = rs.getMetaData();
                 int columns = md.getColumnCount();
+                boolean pgFamily = sourceCtx.getSourceFamily()
+                        == com.qqmu.jync.model.DatabaseType.DialectFamily.POSTGRES;
                 List<Map<String, Object>> batch = new ArrayList<>(ROW_BATCH);
                 long batchBytes = 0L;
                 long batchIndex = 0;
                 while (rs.next()) {
                     Map<String, Object> row = new LinkedHashMap<>();
                     for (int i = 1; i <= columns; i++) {
-                        row.put(md.getColumnLabel(i), serializableValue(rs, i));
+                        row.put(md.getColumnLabel(i), serializableValue(rs, i,
+                                md.getColumnType(i), md.getColumnTypeName(i), pgFamily));
                     }
                     batch.add(row);
                     rows++;
@@ -192,9 +195,33 @@ public final class FanoutBaselineService {
         return bytes;
     }
 
-    /** The spool is JSON: turn JDBC LOB handles into bytes/text before publishing. */
-    private static Object serializableValue(ResultSet rs, int index) throws SQLException {
+    /**
+     * Turn a raw driver value into something the serialized event can carry AND the target
+     * binder understands. PG json/enum ({@code PGobject}) and arrays ({@code PgArray}) are
+     * driver-private: read them as text exactly like the single-target full load does,
+     * otherwise the decode allow-list rejects them (or the target driver cannot infer them).
+     */
+    private static Object serializableValue(ResultSet rs, int index, int jdbcType,
+                                            String typeName, boolean pgFamily)
+            throws SQLException {
+        if (pgFamily && (jdbcType == java.sql.Types.OTHER
+                || jdbcType == java.sql.Types.ARRAY)) {
+            return rs.getString(index);
+        }
         Object value = rs.getObject(index);
+        if (value == null) {
+            return null;
+        }
+        if (value.getClass().getName().startsWith("org.postgresql.util.")) {
+            return value.toString();
+        }
+        if (value instanceof java.sql.Array array) {
+            Object elements = array.getArray();
+            if (elements instanceof Object[] objects) {
+                return java.util.Arrays.deepToString(objects);
+            }
+            return String.valueOf(elements);
+        }
         if (value instanceof Blob blob) {
             long length = blob.length();
             return blob.getBytes(1L, (int) Math.min(length, Integer.MAX_VALUE));

@@ -14,6 +14,19 @@ public interface EventTransport extends AutoCloseable {
 
     void publish(ChangeEvent event) throws InterruptedException;
 
+    /**
+     * True when this transport had to drop events for a target (for example the spool hit
+     * its cap). The caller must treat the capture anchor as no longer trustworthy and
+     * re-baseline before continuing, or the dropped window stays missing forever.
+     */
+    default boolean needsRebaseline() {
+        return false;
+    }
+
+    /** Clears the state behind {@link #needsRebaseline()} once a fresh baseline ran. */
+    default void clearRebaselineMarks() {
+    }
+
     interface Subscription extends AutoCloseable {
         String group();
 

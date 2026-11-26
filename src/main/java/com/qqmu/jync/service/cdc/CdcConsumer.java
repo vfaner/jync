@@ -624,7 +624,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                 // The run's cache lives on the target factory; the spiller reads the same
                 // compiled column rules instead of rebuilding them per transaction.
                 targetTransactions.writePlans(ctx)::cleanser,
-                (db, table, sql) -> {
+                (db, table, sql, file, position) -> {
                     // A CREATE TABLE for a table this project does not track yet: drop the
                     // stream so the loop can add it and run its per-table baseline before
                     // resuming from the stored position.
@@ -641,6 +641,14 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                         return;
                     }
                     lastAutoSyncCheckMs = 0L;
+                    // Move the anchor past this DDL first: if the per-table baseline then
+                    // fails, the reconnect must not replay the CREATE and disconnect again
+                    // forever (existing tables would stop with it). The table is retried by
+                    // the next reconciliation instead.
+                    if (file != null && position > 0) {
+                        positionStore.advance(project.getId(), file, position,
+                                client.getGtidSet());
+                    }
                     log.info("CDC project {}: new source table {}.{} created; reconnecting"
                             + " to run its baseline", project.getId(), db, table);
                     try {

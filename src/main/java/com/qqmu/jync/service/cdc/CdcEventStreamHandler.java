@@ -138,7 +138,12 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
 
     /** Reports a CREATE TABLE for a table this project does not track yet. */
     public interface NewTableSink {
-        void created(String database, String table, String sql);
+        /**
+         * @param file the binlog file carrying the CREATE, so the consumer can move its
+         *     stored position past an untracked DDL before reconnecting
+         * @param position the event's next-position, or the last seen position when absent
+         */
+        void created(String database, String table, String sql, String file, long position);
     }
 
     /**
@@ -308,7 +313,7 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
         this.budget = budget;
         this.ddlSink = ddlSink == null ? (db, sql, file, position) -> { } : ddlSink;
         this.spillCleansers = spillCleansers;
-        this.newTableSink = newTableSink == null ? (db, table, sql) -> { } : newTableSink;
+        this.newTableSink = newTableSink == null ? (db, table, sql, file, position) -> { } : newTableSink;
     }
 
     /**
@@ -633,7 +638,10 @@ public final class CdcEventStreamHandler implements BinaryLogClient.EventListene
             if (normalized.stripLeading().toUpperCase(java.util.Locale.ROOT)
                     .startsWith("CREATE TABLE")) {
                 try {
-                    newTableSink.created(data.getDatabase(), singleTable, normalized);
+                    long createdPosition = header.getNextPosition() > 0
+                            ? header.getNextPosition() : lastNextPosition;
+                    newTableSink.created(data.getDatabase(), singleTable, normalized,
+                            currentFile, createdPosition);
                 } catch (RuntimeException e) {
                     log.warn("New-table sink failed for {}.{}: {}", data.getDatabase(),
                             singleTable, e.toString());

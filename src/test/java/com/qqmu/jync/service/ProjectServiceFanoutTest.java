@@ -155,6 +155,18 @@ class ProjectServiceFanoutTest {
     }
 
     @Test
+    void removingEveryExtraTargetAlsoDropsTheAnchor() {
+        Project project = project(DatabaseType.MYSQL);
+        SyncConfig config = givenConfig(CaptureStrategy.BINLOG_CDC);
+        config.setFanoutTargetDbIds(new java.util.ArrayList<>(List.of(3L)));
+
+        service.configureFanout(1L, List.of());
+
+        assertThat(savedConfig().getFanoutTargetDbIds()).isEmpty();
+        verify(positionStore).delete(1L);
+    }
+
+    @Test
     void anUnchangedTargetListDoesNotResetTheAnchor() {
         Project project = project(DatabaseType.MYSQL);
         project.setSyncConfig("{}");

@@ -44,11 +44,12 @@ class FanoutBindingResolverTest {
         return meta;
     }
 
-    private static SyncContext ctx(MetadataReader reader) {
+    private static SyncContext readerCtx(MetadataReader reader) {
         return SyncContext.builder()
                 .config(new SyncConfig())
                 .sourceSchema("dbo")
                 .sourceReader(reader)
+                .connectionProvider(config -> null)
                 .build();
     }
 
@@ -75,7 +76,7 @@ class FanoutBindingResolverTest {
                 inUse.set(false);
             }
         });
-        FanoutBindingResolver resolver = new FanoutBindingResolver(ctx(reader), null);
+        FanoutBindingResolver resolver = new FanoutBindingResolver(readerCtx(reader));
 
         int threads = 6;
         CountDownLatch start = new CountDownLatch(1);
@@ -112,7 +113,7 @@ class FanoutBindingResolverTest {
             }
             return keyed(invocation.getArgument(2));
         });
-        FanoutBindingResolver resolver = new FanoutBindingResolver(ctx(reader), null);
+        FanoutBindingResolver resolver = new FanoutBindingResolver(readerCtx(reader));
 
         assertThatThrownBy(() -> resolver.resolve("dbo", "orders"))
                 .isInstanceOf(IllegalStateException.class)

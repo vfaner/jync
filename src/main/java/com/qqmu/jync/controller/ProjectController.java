@@ -188,6 +188,13 @@ public class ProjectController {
                 || sourceConfig.getFanoutTargetDbIds() == null
                         ? java.util.List.of()
                         : sourceConfig.getFanoutTargetDbIds();
+        if (!clonedExtras.isEmpty()) {
+            // Chips are rendered in connection order and the first chip becomes the primary.
+            // Prefilling only the extras made the source's first extra the clone's PRIMARY
+            // and dropped the real one. Seed the primary too so the chip order is intact;
+            // the user can still replace it.
+            project.setTargetDbId(source.getTargetDbId());
+        }
         model.addAttribute("fanoutSelected", clonedExtras);
         addDatabaseOptions(model, project);
         addRedisOptions(model, project);
