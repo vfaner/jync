@@ -49,9 +49,12 @@ public class LogMinerSession implements AutoCloseable {
             // DELETED='NO' matters: V$ARCHIVED_LOG keeps a row after RMAN/OS removed the
             // file. ADD_LOGFILE on such a path raises ORA-01291, and the row also poisoned
             // the "oldest redo" floor with a file that can no longer be mined.
-            "SELECT NAME, THREAD#, SEQUENCE# FROM V$ARCHIVED_LOG WHERE DEST_ID = 1"
-                    + " AND DELETED = 'NO' AND NEXT_CHANGE# > ? AND NAME IS NOT NULL"
-                    + " ORDER BY FIRST_CHANGE#";
+            // No DEST_ID filter: LOG_ARCHIVE_DEST_1 is not always the local copy (a
+            // production database may archive locally to DEST_ID 2). Dedupe by
+            // thread+sequence below, preferring DEST_ID 1 when both copies exist.
+            "SELECT NAME, THREAD#, SEQUENCE#, DEST_ID FROM V$ARCHIVED_LOG"
+                    + " WHERE DELETED = 'NO' AND NEXT_CHANGE# > ? AND NAME IS NOT NULL"
+                    + " ORDER BY FIRST_CHANGE#, DEST_ID";
 
     private static final String Q_CONTENTS_HEAD =
             // CSCN = commit SCN (populated under COMMITTED_DATA_ONLY); V$LOGMNR_CONTENTS

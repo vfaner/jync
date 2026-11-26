@@ -768,6 +768,7 @@ class SupportAssistantServiceTest {
                 .contains("外部基线接入")
                 .contains("不回填表进度")
                 .contains("PURGED")
+                .contains("DEST_ID=1")
                 .contains("无主键表")
                 .contains("redis-max-len");
     }

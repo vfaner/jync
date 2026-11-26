@@ -266,4 +266,14 @@ class SupportKnowledgeBaseTest {
         assertThat(hits).anySatisfy(hit ->
                 assertThat(hit.title()).isEqualTo("MySQL auto-increment synced to Dameng"));
     }
+
+    @Test
+    void aChineseQuestionAboutRepeatedOra01291FindsTheSection() {
+        var hits = kb.search("zh", "ORA-01291 重建基线 还是报错 归档 DEST_ID", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("LogMiner ORA-01291 反复重建仍失败");
+            assertThat(hit.body()).contains("DEST_ID").contains("FIRST_CHANGE#");
+        });
+    }
 }

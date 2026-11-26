@@ -69,6 +69,14 @@ public interface MiningDialect {
     }
 
     /**
+     * Whether the source can still produce redo for this SCN. Dialects that cannot answer
+     * return true (do not turn a missing diagnostic into a failed baseline).
+     */
+    default boolean archiveCovers(Connection source, long scn) throws SQLException {
+        return true;
+    }
+
+    /**
      * Whether an empty log list is a normal state to wait in rather than a
      * misconfiguration. False on Oracle (an ARCHIVELOG database always has files covering
      * the current SCN, so an empty list means purged logs or ARCHIVELOG off). True on DM,

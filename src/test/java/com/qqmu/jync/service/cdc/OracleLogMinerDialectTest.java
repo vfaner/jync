@@ -72,4 +72,21 @@ class OracleLogMinerDialectTest {
                 .isInstanceOf(SQLException.class)
                 .hasMessageContaining("ORA-00942");
     }
+
+    @Test
+    void archiveCoverageChecksArchivedAndCurrentRedo() throws SQLException {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        ResultSet rs = mock(ResultSet.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(contains("FIRST_CHANGE#"))).thenReturn(rs);
+        when(rs.next()).thenReturn(true);
+        when(rs.getLong(1)).thenReturn(1L);
+
+        assertThat(OracleLogMinerDialect.INSTANCE.archiveCovers(conn, 1_000L)).isTrue();
+        verify(conn.createStatement(), org.mockito.Mockito.atLeastOnce())
+                .executeQuery(contains("V$ARCHIVED_LOG"));
+        verify(conn.createStatement(), org.mockito.Mockito.atLeastOnce())
+                .executeQuery(contains("V$LOG"));
+    }
 }

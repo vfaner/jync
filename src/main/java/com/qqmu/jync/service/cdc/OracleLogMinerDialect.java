@@ -76,9 +76,29 @@ public final class OracleLogMinerDialect implements MiningDialect {
                     // them made the floor look older than the anchor and produced the
                     // misleading "resume is covered, yet a file is missing" hint.
                     + "SELECT FIRST_CHANGE# FROM V$ARCHIVED_LOG"
-                    + " WHERE DEST_ID = 1 AND DELETED = 'NO' AND NAME IS NOT NULL"
+                    + " WHERE DELETED = 'NO' AND NAME IS NOT NULL"
                     + " UNION ALL"
                     + " SELECT FIRST_CHANGE# FROM V$LOG WHERE STATUS = 'CURRENT')";
+
+    /**
+     * Whether an archived log or the CURRENT online group actually contains the anchor
+     * SCN. The floor check alone only proves that some older log exists; a gap or a
+     * resetlogs incarnation can leave the anchor itself uncovered while the floor is
+     * lower, which is exactly the ORA-01291 case.
+     */
+    @Override
+    public boolean archiveCovers(Connection source, long scn) throws SQLException {
+        String sql = "SELECT COUNT(*) FROM ("
+                + "SELECT 1 FROM V$ARCHIVED_LOG WHERE DELETED = 'NO' AND NAME IS NOT NULL"
+                + " AND FIRST_CHANGE# <= " + scn + " AND NEXT_CHANGE# > " + scn
+                + " UNION ALL "
+                + "SELECT 1 FROM V$LOG WHERE STATUS = 'CURRENT' AND FIRST_CHANGE# <= " + scn
+                + ")";
+        try (Statement st = source.createStatement();
+             ResultSet rs = st.executeQuery(sql)) {
+            return rs.next() && rs.getLong(1) > 0L;
+        }
+    }
 
     @Override
     public Long oldestMineableScn(Connection source) throws SQLException {

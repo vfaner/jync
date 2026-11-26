@@ -772,5 +772,21 @@ public class CdcBaselineService {
                     + " RMAN ARCHIVELOG DELETION POLICY) so it covers the whole full-load"
                     + " window, then rebuild the baseline.");
         }
+        Boolean covers;
+        try (Connection conn = dataSourceManager.getConnection(source)) {
+            covers = MiningDialects.detect(conn).archiveCovers(conn, anchorScn);
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not check whether the source still covers the LogMiner baseline"
+                    + " anchor {} ({}); the first mining session will check again",
+                    anchorScn, e.getMessage());
+            return;
+        }
+        if (Boolean.FALSE.equals(covers)) {
+            throw new IllegalStateException("No archived log or CURRENT redo covers the"
+                    + " baseline anchor SCN " + anchorScn + " — the archive chain has a gap"
+                    + " (or a resetlogs incarnation changed). Check V$ARCHIVED_LOG"
+                    + " continuity/DEST_ID and restore the missing log before rebuilding;"
+                    + " this is a source archive problem, not a Jync baseline problem.");
+        }
     }
 }

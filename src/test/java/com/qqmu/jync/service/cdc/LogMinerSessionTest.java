@@ -577,4 +577,12 @@ class LogMinerSessionTest {
         // path makes ADD_LOGFILE raise ORA-01291 even though the resume point is "covered".
         assertThat(LogMinerSession.Q_ARCHIVED_LOGS_SINCE).contains("DELETED = 'NO'");
     }
+
+    @Test
+    void archivedLogSelectionDoesNotHardCodeDestinationOne() {
+        // LOG_ARCHIVE_DEST_1 is not always the local copy; the fixed query reads all
+        // destinations and deduplicates by thread+sequence, preferring DEST_ID 1.
+        assertThat(LogMinerSession.Q_ARCHIVED_LOGS_SINCE).doesNotContain("DEST_ID = 1");
+        assertThat(LogMinerSession.Q_ARCHIVED_LOGS_SINCE).contains("ORDER BY FIRST_CHANGE#, DEST_ID");
+    }
 }
