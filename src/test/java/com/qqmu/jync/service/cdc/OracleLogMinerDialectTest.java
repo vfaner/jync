@@ -88,5 +88,7 @@ class OracleLogMinerDialectTest {
                 .executeQuery(contains("V$ARCHIVED_LOG"));
         verify(conn.createStatement(), org.mockito.Mockito.atLeastOnce())
                 .executeQuery(contains("V$LOG"));
+        verify(conn.createStatement(), org.mockito.Mockito.atLeastOnce())
+                .executeQuery(contains("STANDBY_DEST"));
     }
 }

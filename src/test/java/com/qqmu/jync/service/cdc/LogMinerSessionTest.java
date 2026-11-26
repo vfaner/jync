@@ -584,5 +584,7 @@ class LogMinerSessionTest {
         // destinations and deduplicates by thread+sequence, preferring DEST_ID 1.
         assertThat(LogMinerSession.Q_ARCHIVED_LOGS_SINCE).doesNotContain("DEST_ID = 1");
         assertThat(LogMinerSession.Q_ARCHIVED_LOGS_SINCE).contains("ORDER BY FIRST_CHANGE#, DEST_ID");
+        // Standby copies are not locally readable; only local destinations may be mined.
+        assertThat(LogMinerSession.Q_ARCHIVED_LOGS_SINCE).contains("STANDBY_DEST");
     }
 }

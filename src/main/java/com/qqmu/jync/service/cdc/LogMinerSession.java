@@ -53,7 +53,8 @@ public class LogMinerSession implements AutoCloseable {
             // production database may archive locally to DEST_ID 2). Dedupe by
             // thread+sequence below, preferring DEST_ID 1 when both copies exist.
             "SELECT NAME, THREAD#, SEQUENCE#, DEST_ID FROM V$ARCHIVED_LOG"
-                    + " WHERE DELETED = 'NO' AND NEXT_CHANGE# > ? AND NAME IS NOT NULL"
+                    + " WHERE DELETED = 'NO' AND NAME IS NOT NULL"
+                    + " AND NVL(STANDBY_DEST, 'NO') = 'NO' AND NEXT_CHANGE# > ?"
                     + " ORDER BY FIRST_CHANGE#, DEST_ID";
 
     private static final String Q_CONTENTS_HEAD =

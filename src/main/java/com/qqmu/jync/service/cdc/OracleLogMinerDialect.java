@@ -77,6 +77,7 @@ public final class OracleLogMinerDialect implements MiningDialect {
                     // misleading "resume is covered, yet a file is missing" hint.
                     + "SELECT FIRST_CHANGE# FROM V$ARCHIVED_LOG"
                     + " WHERE DELETED = 'NO' AND NAME IS NOT NULL"
+                    + " AND NVL(STANDBY_DEST, 'NO') = 'NO'"
                     + " UNION ALL"
                     + " SELECT FIRST_CHANGE# FROM V$LOG WHERE STATUS = 'CURRENT')";
 
@@ -90,6 +91,7 @@ public final class OracleLogMinerDialect implements MiningDialect {
     public boolean archiveCovers(Connection source, long scn) throws SQLException {
         String sql = "SELECT COUNT(*) FROM ("
                 + "SELECT 1 FROM V$ARCHIVED_LOG WHERE DELETED = 'NO' AND NAME IS NOT NULL"
+                + " AND NVL(STANDBY_DEST, 'NO') = 'NO'"
                 + " AND FIRST_CHANGE# <= " + scn + " AND NEXT_CHANGE# > " + scn
                 + " UNION ALL "
                 + "SELECT 1 FROM V$LOG WHERE STATUS = 'CURRENT' AND FIRST_CHANGE# <= " + scn
