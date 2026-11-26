@@ -139,6 +139,19 @@ public class DataSyncService {
             new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
+     * Whether the upsert can carry a "nothing changed" guard, per table shape. The target's
+     * column types change only on DDL, but the answer was re-read with a full
+     * {@code DatabaseMetaData.getColumns} for every table on every poll cycle. A short TTL
+     * keeps a DDL change visible without paying that catalog query forever.
+     */
+    private final Map<String, CachedGuardVerdict> guardVerdicts =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final long GUARD_VERDICT_TTL_MS = 60_000L;
+
+    private record CachedGuardVerdict(boolean guardable, long at) {
+    }
+
+    /**
      * Drops everything cached for one project. Called from the engine's
      * evictProjectCaches on reset/delete; without it these maps lived for the whole process
      * and a schema/endpoint switch could reuse a spelling or size computed elsewhere.
@@ -155,6 +168,7 @@ public class DataSyncService {
         String pipePrefix = projectId + "|";
         targetColumnSpellings.keySet().removeIf(key -> key.startsWith(pipePrefix));
         tableStats.keySet().removeIf(key -> key.startsWith(pipePrefix));
+        guardVerdicts.keySet().removeIf(key -> key.startsWith(pipePrefix));
     }
 
     /** Cached schema-wide table sizes, used only to size a full-load chunk. */
@@ -1797,7 +1811,15 @@ public class DataSyncService {
         for (int depth = 0; current != null && depth < 8; depth++) {
             if (current instanceof SQLException sql) {
                 String state = sql.getSQLState();
-                if (state != null && state.startsWith("08")) {
+                if (state != null && (state.startsWith("08")
+                        || "40001".equals(state)      // serialization failure / deadlock
+                        || "40P01".equals(state))) {  // PostgreSQL deadlock_detected
+                    return true;
+                }
+                // Vendor deadlock / lock-wait-timeout codes (MySQL 1213/1205,
+                // SQL Server 1205, Oracle ORA-00060/00054).
+                int code = sql.getErrorCode();
+                if (code == 1213 || code == 1205 || code == 60 || code == 54) {
                     return true;
                 }
             }
@@ -2266,6 +2288,7 @@ public class DataSyncService {
                 + targetTable.toUpperCase(java.util.Locale.ROOT) + "|";
         int before = targetColumnSpellings.size();
         targetColumnSpellings.keySet().removeIf(key -> key.startsWith(prefix));
+        guardVerdicts.keySet().removeIf(key -> key.startsWith(prefix));
         if (targetColumnSpellings.size() != before) {
             log.info("Dropped the cached column spellings of {} after the target rejected them;"
                     + " the next cycle re-reads the catalog", targetTable);
@@ -2357,6 +2380,19 @@ public class DataSyncService {
         if (nonKey.isEmpty()) {
             return false;
         }
+        StringBuilder keyBuilder = new StringBuilder()
+                .append(ctx.getProject() == null ? "-" : ctx.projectId()).append('|')
+                .append(ctx.getTargetSchema()).append('|')
+                .append(targetTable.toUpperCase(java.util.Locale.ROOT)).append('|');
+        for (String column : nonKey) {
+            keyBuilder.append(column.toUpperCase(java.util.Locale.ROOT)).append(',');
+        }
+        String key = keyBuilder.toString();
+        long now = System.currentTimeMillis();
+        CachedGuardVerdict cached = guardVerdicts.get(key);
+        if (cached != null && now - cached.at() <= GUARD_VERDICT_TTL_MS) {
+            return cached.guardable();
+        }
         try {
             List<String> uncomparable = TargetTableVerifier.uncomparableColumns(targetConn,
                     ctx.getTargetSchema(), targetTable, ctx.effectiveTargetType(), nonKey,
@@ -2364,12 +2400,17 @@ public class DataSyncService {
             if (!uncomparable.isEmpty()) {
                 log.debug("Target table {} column(s) {} cannot be compared, so Jync rewrites a"
                         + " replayed row even when nothing changed", targetTable, uncomparable);
+                guardVerdicts.put(key, new CachedGuardVerdict(false, now));
                 return false;
             }
+            guardVerdicts.put(key, new CachedGuardVerdict(true, now));
             return true;
         } catch (SQLException e) {
             log.debug("Could not read {}.{} column types ({}), leaving the upsert unguarded",
                     ctx.getTargetSchema(), targetTable, e.getMessage());
+            // Cache the safe answer briefly too: a metadata failure otherwise repeats this
+            // catalog query for every table on every cycle while the target is unhealthy.
+            guardVerdicts.put(key, new CachedGuardVerdict(false, now));
             return false;
         }
     }

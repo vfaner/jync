@@ -363,6 +363,7 @@ Cron：同步任务用 Quartz 语法，6 段或 7 段（含年份）；ETL 与�
 - **位点是什么**：源端日志流里的一个位置（MySQL 是“binlog 文件名 + 字节偏移”），表示“这份目标数据已经包含到这一刻为止的变更”。Jync 不跑全量，启用后只回放该位置之后的变更；位置之前的行必须已经由你的 dump/备份工具写进目标。它不是行数、不是目标库位点，表进度也不会回填。
 - **前提**：先做一致性 dump，并在同一时刻记录源位点。常见做法：`mysqldump --single-transaction --source-data=2`（旧版本 `--master-data=2`）把 `CHANGE REPLICATION SOURCE`/`CHANGE MASTER` 的 FILE/POS/GTID 写进 dump 文件头；Percona XtraBackup 看 `xtrabackup_binlog_info`；或用 `FLUSH TABLES WITH READ LOCK` → `SHOW MASTER STATUS` → dump → `UNLOCK TABLES`。目标和位点必须来自同一份 dump。
 - **MySQL 示例**：文件名 `mysql-bin.000123`（只填 `SHOW BINARY LOGS` 的 File 名，不填路径）；位点 `7`（只填数字，范围 4 到该文件大小；位点=文件大小表示已到文件末尾，后续事件在下一个文件，Jync 会接着读）；GTID 可选，如 `3E11FA47-71CA-11E1-9E33-C80AA9429562:1-100`，Jync 会核对它是源库 `@@GLOBAL.gtid_executed` 的子集，即使填了 GTID，文件与位点仍会校验。
+- 不知道精确位点时：选一个**确定早于 dump**、且仍在 `SHOW BINARY LOGS` 里的文件，位点填 `4`（文件开头）；会重放一些 dump 已包含的变更，带主键表由 upsert 吸收。不要选晚于 dump 的点。
 - **MySQL 常见错误**：用 dump 之后的 `SHOW MASTER STATUS`（会漏掉 dump 期间的变更）；把位点填成行数、文件大小或 event 序号；文件和位点不是同一次查询的结果；binlog 已被 `PURGE`（报文件不存在）；GTID 与位点不是同一时刻。
 - PostgreSQL：填 `SELECT pg_current_wal_lsn();`（形如 `0/16B6C50`）或 slot 的 `confirmed_flush_lsn`；项目 slot 必须在 dump 前创建，填写值不能早于 `restart_lsn` / `confirmed_flush_lsn`，否则 dump 与 slot 之间有空档，会被拒绝。
 - SQL Server：填 `SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)`（`0x` 开头、共 22 字符）；选中表必须已有 CDC 捕获实例，位点不能晚于源库当前最大 CDC LSN。

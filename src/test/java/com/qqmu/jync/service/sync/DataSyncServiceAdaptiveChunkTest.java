@@ -78,6 +78,10 @@ class DataSyncServiceAdaptiveChunkTest {
                         "Cannot invoke \"com.mysql.cj.NativeSession.getCancelTimer()\""
                                 + " because \"this.session\" is null"))).isTrue();
         assertThat(DataSyncService.isRetryableCopyFailure(
+                new SQLException("deadlock", "40001"))).isTrue();
+        assertThat(DataSyncService.isRetryableCopyFailure(
+                new SQLException("lock wait timeout", "HY000", 1205))).isTrue();
+        assertThat(DataSyncService.isRetryableCopyFailure(
                 new SQLException("syntax error"))).isFalse();
         assertThat(DataSyncService.isRetryableCopyFailure(
                 new StopRequestedException("stop"))).isFalse();
