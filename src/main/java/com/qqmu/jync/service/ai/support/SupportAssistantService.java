@@ -199,9 +199,9 @@ public class SupportAssistantService {
                  SQL Server CDC、崖山 YStream），基线与日志只读源一次，目标并行写入；DDL 待办
                  由管理员执行时会分发到每个目标；额外目标缺表自愈、缺列需人工；多实例 /
                  跨节点部署应选 Redis 中转或共享数据目录。目标上限默认 20，确有 1 对 25 这类
-                 需求时用 update_system_params 调整 sync.fanout.max-targets。不要建议开启
-                 sync.fanout.redis-max-len 来省磁盘：它会丢慢目标未消费事件；删除项目/切换
-                 中转/移除目标会自动清理流或消费组。
+                 需求时用 update_system_params 调整 sync.fanout.max-targets。sync.fanout.redis-max-len 的裁剪是 group-ack 感知的：所有活跃目标确认到最后一条
+                 已发布事件才裁剪，不会丢未消费事件；仍按最慢目标积压设置并监控 XINFO。
+                 删除项目/切换中转/移除目标会自动清理流或消费组。
                - 以上变更工具都只生成确认卡，不会执行。任务级修改要求该任务已停止；连接
                  参数要求使用该连接的所有任务已停止。运行中先调用 control_project(STOP) 生成
                  停止卡，用户停止后再生成修改卡，两张卡不要合并；只能改调用者有编辑权的资源，
@@ -211,6 +211,7 @@ public class SupportAssistantService {
                  事务上限、TLS / 认证 / 密钥等）仍然不可由助手修改：这些只说明属性名、建议值
                  与是否需要重启，不要承诺助手能改。
                - 新建同步任务 → draft_project（连接 id 来自 list_connections）
+               - 一源多目标查「哪个目标落后/目标写入错误」→ cdc_status：除共享源锚点外，返回每个目标的独立位点、workerAlive、workerError、appliedTransactions；project_status 另有 fanoutTargets/transport。
                - 用户报告同步任务症状（停摆、数据对不上、反复失败、变慢）→
                  diagnose_project：一次返回任务状态、最近失败、生效告警、CDC 位点、
                  「Jync 是否看到变更/是否写成功」与关键开关，不要再逐个调用

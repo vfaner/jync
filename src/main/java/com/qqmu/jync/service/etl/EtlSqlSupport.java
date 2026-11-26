@@ -105,13 +105,54 @@ public final class EtlSqlSupport {
     static String qualified(DatabaseConfig targetConfig, String configuredTable) {
         String table = configuredTable.trim();
         if (table.contains(".")) {
-            return table;
+            return quoteTargetName(targetConfig, table);
         }
         String schema = targetConfig.getSchemaName();
         if (schema != null && !schema.isBlank()) {
-            return schema.trim() + "." + table;
+            return quoteTargetName(targetConfig, schema.trim() + "." + table);
         }
-        return table;
+        return quoteTargetName(targetConfig, table);
+    }
+
+    /**
+     * Quotes configured target identifiers with the target family's syntax. ETL builds every
+     * statement from these names; leaving an uppercase schema or a reserved word bare made
+     * PostgreSQL fold it, Oracle/DM reject it, and opened a raw-injection surface for names
+     * that bypassed validation. GENERIC/unknown types keep the old bare spelling.
+     */
+    private static String quoteTargetName(DatabaseConfig targetConfig, String qualified) {
+        DatabaseType.DialectFamily family = targetConfig.resolvedFamily();
+        if (family == null || family == DatabaseType.DialectFamily.GENERIC) {
+            return qualified;
+        }
+        StringBuilder out = new StringBuilder();
+        for (String part : qualified.split("\\.")) {
+            if (part.isBlank()) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append('.');
+            }
+            out.append(quotePart(family, part));
+        }
+        return out.toString();
+    }
+
+    private static String quotePart(DatabaseType.DialectFamily family, String part) {
+        // Already explicitly quoted (legacy config): leave the spelling to the operator.
+        if (part.startsWith("\"") || part.startsWith("`") || part.startsWith("[")) {
+            return part;
+        }
+        return switch (family) {
+            // MySQL identifiers are case-sensitive per the server settings but quoting does
+            // not change that; keep the historical bare spelling for compatibility.
+            case MYSQL -> part;
+            case SQLSERVER -> "[" + part.replace("]", "]]") + "]";
+            case ORACLE -> "\"" + part.toUpperCase(java.util.Locale.ROOT)
+                    .replace("\"", "\"\"") + "\"";
+            case POSTGRES, DB2, HANA -> "\"" + part.replace("\"", "\"\"") + "\"";
+            default -> part;
+        };
     }
 
     /**

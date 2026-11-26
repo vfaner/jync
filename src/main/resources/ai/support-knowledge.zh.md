@@ -73,7 +73,7 @@ sync.delete-compare-max-rows 可分页比较（默认 0 关闭，代价是每轮
 ## 无主键表（keyless）的限制
 
 - 没有主键就没有 upsert：首轮全量按普通 INSERT 写入。目标表非空或无法确认目标为空时，这次全量会被拒绝，避免把整表再插一遍；清空目标表或开启「全量前清空目标表」后重试。
-- 无主键全量优先按可排序列做 OFFSET 分页，续跑点取目标行数；并发写入会移动 offset，可能重复或漏行，不能保证快照一致。强烈建议加主键，或用 CDC / 只读窗口迁移。
+- 无主键全量改为**单条流式 SELECT（语句级快照）**，不再做 OFFSET 分页；不会因并发写入移动页码，但**不能断点续传**，中断后整表重来。目标必须确认空表。强烈建议加主键，或用 CDC / 只读窗口迁移。
 - 日志 CDC 对无主键表只能基线播种，后续变更无法定位目标行；一源多目标的基线会跳过无主键表；FULL_COMPARE 对无主键表只做一次基线播种。
 
 ## 同步进度卡片怎么刷新
@@ -355,7 +355,7 @@ Cron：同步任务用 Quartz 语法，6 段或 7 段（含年份）；ETL 与�
 
 - 入口在任务详情，仅管理员可见；任务必须已停止、数据库单目标、日志 CDC。Redis 缓存目标与一源多目标不支持。助手只能解释，不能执行。
 - 适用：目标已由**一致性 dump** 灌好，并且知道 dump 对应的源位点。Jync 把该位点记为已完成基线，启用后从该位点回放，不拷贝任何行，也不回填表进度；目标数据是否完整由操作者确认。
-- 位点按引擎：MySQL 填 `SHOW BINARY LOGS` 的 File 名称 + 位点（4 到文件大小之间，可选 GTID）；PostgreSQL 填 `pg_lsn`，slot 必须存在且 `restart_lsn` / `confirmed_flush_lsn` 不得晚于填写值；SQL Server 填 `0x` LSN，选中表必须已有 CDC 捕获实例且不得晚于 `fn_cdc_get_max_lsn()`；Oracle/达梦填 SCN，必须介于最老可挖 redo 与当前 SCN 之间；崖山填 `RESTART_POSITION`，必须与现有唯一 YStream 服务的重启位点一致。
+- 位点按引擎：MySQL 填 `SHOW BINARY LOGS` 的 File 名称 + 位点（4 到文件大小之间，可选 GTID；GTID 会与源库 `gtid_executed` 校验为子集）；PostgreSQL 填 `pg_lsn`，slot 必须存在且 `restart_lsn` / `confirmed_flush_lsn` 不得晚于填写值；SQL Server 填 `0x` LSN，选中表必须已有 CDC 捕获实例且不得晚于 `fn_cdc_get_max_lsn()`；Oracle/达梦填 SCN，必须介于最老可挖 redo 与当前 SCN 之间；崖山填 `RESTART_POSITION`，必须与现有唯一 YStream 服务的重启位点一致。
 - 接入会清空旧位点、旧全量 checkpoint 和错误帽；校验或清理失败不会把基线标成完成。外部基线后 `project_table_status` 可能显示 `NOT_STARTED`，这是正常现象，不代表没有同步。之后要重灌请用「重建基线」。
 
 ## 数据没有继续同步怎么查
@@ -407,6 +407,7 @@ ETL 任务用客户自己的取数 SQL 复制结果行，支持覆盖、追加�
 - 运行中不能编辑；同一任务由执行租约防重入，同源同目标可组成批次共享连接与调度。
 - preSql 在目标表创建后、写入方式的 DELETE 与取数之前执行，并立即提交；从检查点续跑时不会重放。APPEND 成功后保留检查点，所以 preSql 通常只在第一次运行执行；OVERWRITE 每次运行都会清检查点，preSql 每次都会执行。postSql 在写入完成后执行；两者共用变量替换与脚本校验。
 - 源连接与目标连接不能指向同一个物理库：同类型、同 host/端口/库/schema 的两条连接记录也会被拒绝（同服务器不同 schema 允许）。
+- 目标 schema/表名按目标方言加引号：MySQL 反引号、PostgreSQL/Oracle/DM 双引号、SQL Server 方括号；Oracle 系按大写折叠，PostgreSQL 保留配置大小写。
 - MongoDB 原生源按采样文档推断目标列；运行中遇到采样未覆盖的字段会中止并报错，不会静默丢字段。Oracle 预检中的 ORA-00942 只给警告：既可能是表不存在，也可能是账号看不到。
 
 ## 结构同步
@@ -824,7 +825,7 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 - **目标自愈**：额外目标缺**表**时自动按源端结构重建、重灌并重放暂存的变更；缺**列**等其它结构漂移不会自动补齐，该目标 worker 会停止、积压增长，人工补齐后自动重放。
 - **事件中转**：任务详情「同步选项 → 事件中转」二选一：
   - 本地队列（默认）：写在 `data/fanout/<任务 id>/<目标 id>.log`，单目标上限 2GB，零外部依赖；
-  - Redis Stream：直接选一个已配置的**单机** Redis 目标（复用缓存投影的连接与加密口令）。每个项目一条 `jync:fanout:<任务 id>:events`、每个目标一个消费组，按事务 ACK，worker 重启先重读 pending。集群 Redis 目标不支持；默认不裁剪，用 `XINFO STREAM` 监控。可选 `sync.fanout.redis-max-len`（0=关闭）设近似 MAXLEN，开启后慢目标可能丢未消费事件，必须按最慢目标的积压设置。
+  - Redis Stream：直接选一个已配置的**单机** Redis 目标（复用缓存投影的连接与加密口令）。每个项目一条 `jync:fanout:<任务 id>:events`、每个目标一个消费组，按事务 ACK，worker 重启先重读 pending。集群 Redis 目标不支持；默认不裁剪，用 `XINFO STREAM` 监控。可选 `sync.fanout.redis-max-len`（0=关闭）设近似 MAXLEN；开启后只有所有活跃目标的确认位点都追上最后一条已发布事件时才裁剪，慢目标未确认时不会裁剪，因此不会因裁剪丢未消费事件。
   - 删除项目、切回本地队列或更换 Redis 目标时，Jync 会删除整条 stream；只移除部分目标时会 `XGROUP DESTROY` 对应消费组。删除是尽力而为，Redis 不可达时要手工清理。
 - 多实例 / 跨节点部署必须用 Redis（或让所有节点共享 data 目录），否则节点切换后本地 spool 里未确认的事件新节点读不到。
 - **性能口径**：源端只有一条日志流、一次基线读、一次目录扫描、每表一次元数据读取，与目标数量无关；目标写入按目标并行。成本在 Jync 与目标侧：每个目标一条 worker、一个连接池位、一份中转；20 目标请确认目标库 `max_connections`，并注意 spool 磁盘上限（每目标 2GB）。

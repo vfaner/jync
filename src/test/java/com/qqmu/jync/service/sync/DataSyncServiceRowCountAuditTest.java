@@ -96,7 +96,7 @@ class DataSyncServiceRowCountAuditTest {
         DataSyncService.RowCountAudit audit = audit("3");
 
         assertThat(audit.isTargetShort()).isFalse();
-        assertThat(audit.isTargetSurplus()).isTrue();
+        assertThat(audit.getTargetRows()).isGreaterThan(audit.getSourceRows());
     }
 
     @Test
@@ -104,7 +104,7 @@ class DataSyncServiceRowCountAuditTest {
         insert(source, 1, 2, 3);
         insert(target, 1, 2, 3);
 
-        assertThat(audit("3").isTargetSurplus()).isFalse();
+        assertThat(audit("3").getTargetRows()).isEqualTo(audit("3").getSourceRows());
     }
 
     @Test
@@ -112,7 +112,7 @@ class DataSyncServiceRowCountAuditTest {
         insert(source, 1, 2, 3);
         insert(target, 1);
 
-        assertThat(audit("3").isTargetSurplus()).isFalse();
+        assertThat(audit("3").getTargetRows()).isLessThan(audit("3").getSourceRows());
     }
 
     @Test

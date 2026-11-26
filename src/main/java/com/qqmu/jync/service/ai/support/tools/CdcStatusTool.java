@@ -11,6 +11,7 @@ import org.springframework.stereotype.Component;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.ai.support.SupportArgs;
 import com.qqmu.jync.service.ai.support.SupportTool;
@@ -18,6 +19,11 @@ import com.qqmu.jync.service.ai.support.ToolContext;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
+import com.qqmu.jync.service.fanout.FanoutPositionStore;
+import com.qqmu.jync.service.fanout.FanoutRuntime;
+import com.qqmu.jync.service.fanout.FanoutRuntimeRegistry;
+
+import lombok.extern.slf4j.Slf4j;
 
 import tools.jackson.databind.JsonNode;
 
@@ -30,6 +36,7 @@ import tools.jackson.databind.JsonNode;
  * consumer (or none is running); the persisted position still answers where the stream stands.
  */
 @Component
+@Slf4j
 public class CdcStatusTool implements SupportTool {
 
     /** A GTID set can be thousands of characters; the model needs its shape, not all of it. */
@@ -38,12 +45,25 @@ public class CdcStatusTool implements SupportTool {
     private final ProjectService projects;
     private final CdcConsumerManager consumers;
     private final CdcPositionStore positions;
+    private final FanoutPositionStore fanoutPositions;
+    private final FanoutRuntimeRegistry fanoutRuntimes;
+    private final DatabaseConfigService databases;
 
     public CdcStatusTool(ProjectService projects, CdcConsumerManager consumers,
                          CdcPositionStore positions) {
+        this(projects, consumers, positions, null, null, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CdcStatusTool(ProjectService projects, CdcConsumerManager consumers,
+                         CdcPositionStore positions, FanoutPositionStore fanoutPositions,
+                         FanoutRuntimeRegistry fanoutRuntimes, DatabaseConfigService databases) {
         this.projects = projects;
         this.consumers = consumers;
         this.positions = positions;
+        this.fanoutPositions = fanoutPositions;
+        this.fanoutRuntimes = fanoutRuntimes;
+        this.databases = databases;
     }
 
     public String name() {
@@ -73,7 +93,8 @@ public class CdcStatusTool implements SupportTool {
         if (project == null) {
             return Map.of("error", "error.project.not.found");
         }
-        CaptureStrategy strategy = projects.loadConfig(project).getCaptureStrategyOrDefault();
+        com.qqmu.jync.dto.SyncConfig config = projects.loadConfig(project);
+        CaptureStrategy strategy = config.getCaptureStrategyOrDefault();
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("name", project.getName());
         out.put("strategy", strategy.name());
@@ -100,7 +121,78 @@ public class CdcStatusTool implements SupportTool {
             p.put("updatedAt", instant(position.getUpdatedAt()));
             out.put("position", p);
         }
+        addFanout(project, config, out);
         return out;
+    }
+
+    /** Per-target fan-out positions and live worker errors; the project anchor is shared. */
+    private void addFanout(Project project, com.qqmu.jync.dto.SyncConfig config,
+                           Map<String, Object> out) {
+        if (fanoutPositions == null || config == null
+                || config.getFanoutTargetDbIds() == null
+                || config.getFanoutTargetDbIds().isEmpty()) {
+            return;
+        }
+        Map<Long, com.qqmu.jync.model.FanoutPosition> byTarget = new LinkedHashMap<>();
+        try {
+            for (com.qqmu.jync.model.FanoutPosition p
+                    : fanoutPositions.list(project.getId())) {
+                byTarget.put(p.getTargetDbId(), p);
+            }
+        } catch (RuntimeException e) {
+            log.debug("Could not read fan-out positions: {}", e.toString());
+        }
+        Map<Long, FanoutRuntime.TargetState> states = new LinkedHashMap<>();
+        FanoutRuntime runtime = fanoutRuntimes == null ? null
+                : fanoutRuntimes.get(project.getId());
+        if (runtime != null) {
+            for (FanoutRuntime.TargetState state : runtime.workerStates()) {
+                states.put(state.targetDbId(), state);
+            }
+        }
+        java.util.List<Long> ids = new java.util.ArrayList<>();
+        if (project.getTargetDbId() != null) {
+            ids.add(project.getTargetDbId());
+        }
+        ids.addAll(config.getFanoutTargetDbIds());
+        java.util.List<Map<String, Object>> targets = new java.util.ArrayList<>();
+        for (Long id : ids) {
+            Map<String, Object> target = new LinkedHashMap<>();
+            target.put("targetDbId", id);
+            target.put("primary", id.equals(project.getTargetDbId()));
+            if (databases != null) {
+                databases.findById(id).ifPresent(db -> {
+                    target.put("name", db.getName());
+                    target.put("type", db.effectiveType().name());
+                });
+            }
+            com.qqmu.jync.model.FanoutPosition p = byTarget.get(id);
+            if (p != null) {
+                target.put("binlogFile", p.getBinlogFile());
+                target.put("binlogPos", p.getBinlogPos());
+                target.put("lsn", p.getLsn());
+                target.put("scn", p.getScn());
+                target.put("updatedAt", instant(p.getUpdatedAt()));
+            }
+            FanoutRuntime.TargetState state = states.get(id);
+            if (state != null) {
+                target.put("workerAlive", state.alive());
+                target.put("workerError", ToolText.safe(state.lastError() == null
+                        ? null : state.lastError(), ToolText.MAX_SUMMARY));
+                target.put("appliedTransactions", state.appliedTransactions());
+                target.put("lastAppliedPosition", state.lastAppliedPosition());
+            }
+            targets.add(target);
+        }
+        Map<String, Object> fanout = new LinkedHashMap<>();
+        fanout.put("transport", config.getFanoutTransport() == null
+                || config.getFanoutTransport().isBlank() ? "SPOOL"
+                        : config.getFanoutTransport());
+        fanout.put("targetCount", targets.size());
+        fanout.put("targets", targets);
+        fanout.put("note", "project position is the shared source anchor; per-target "
+                + "positions above are independent");
+        out.put("fanout", fanout);
     }
 
     /**

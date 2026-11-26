@@ -4,6 +4,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -309,8 +310,12 @@ public class CdcOperationsService {
                 if (binlogPos < 4L || binlogPos > fileSize) {
                     throw new IllegalArgumentException("error.cdc.external.positionInvalid");
                 }
+                String gtid = blankToNull(gtidSet);
+                if (gtid != null) {
+                    assertGtidExecutedOnSource(source, gtid);
+                }
                 positionStore.adoptExternalBaseline(projectId, file, binlogPos,
-                        blankToNull(gtidSet), clientFactory.serverIdFor(projectId), null, null);
+                        gtid, clientFactory.serverIdFor(projectId), null, null);
             }
             case PG_LOGICAL_CDC -> {
                 String value = normalizedLsn(strategy, lsn);
@@ -376,6 +381,73 @@ public class CdcOperationsService {
             throw new IllegalArgumentException("error.cdc.external.positionInvalid");
         }
         return value;
+    }
+
+    /**
+     * GTID is used verbatim by the binlog client when present, so it must describe transactions
+     * the source actually executed. A typo or a set copied from another server would silently
+     * skip rows even though the file/position pair was validated.
+     */
+    private void assertGtidExecutedOnSource(DatabaseConfig source, String gtid) {
+        Map<String, List<long[]>> requested;
+        Map<String, List<long[]>> executed;
+        try (Connection conn = dataSourceManager.getConnection(source);
+             java.sql.Statement st = conn.createStatement();
+             java.sql.ResultSet rs = st.executeQuery(
+                     "SELECT @@GLOBAL.gtid_executed")) {
+            requested = parseGtid(gtid);
+            String current = rs.next() ? rs.getString(1) : null;
+            executed = current == null ? Map.of() : parseGtid(current);
+        } catch (SQLException | IllegalArgumentException e) {
+            if (e instanceof IllegalArgumentException invalid) {
+                throw invalid;
+            }
+            log.warn("Could not validate the GTID set for the external baseline: {}",
+                    e.getMessage());
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
+        }
+        for (Map.Entry<String, List<long[]>> entry : requested.entrySet()) {
+            List<long[]> available = executed.get(entry.getKey());
+            if (available == null) {
+                throw new IllegalArgumentException("error.cdc.external.gtidInvalid");
+            }
+            for (long[] wanted : entry.getValue()) {
+                if (available.stream().noneMatch(range -> range[0] <= wanted[0]
+                        && range[1] >= wanted[1])) {
+                    throw new IllegalArgumentException("error.cdc.external.gtidInvalid");
+                }
+            }
+        }
+    }
+
+    /** Parses MySQL's {@code uuid:1-5:7,uuid2:...} GTID set; malformed input is rejected. */
+    private static Map<String, List<long[]>> parseGtid(String text) {
+        Map<String, List<long[]>> out = new java.util.LinkedHashMap<>();
+        if (text == null || text.isBlank()) {
+            return out;
+        }
+        for (String part : text.split(",")) {
+            String[] pieces = part.trim().split(":");
+            if (pieces.length < 2 || !pieces[0].matches("[0-9a-fA-F-]{36}")) {
+                throw new IllegalArgumentException("error.cdc.external.gtidInvalid");
+            }
+            List<long[]> intervals = out.computeIfAbsent(pieces[0].toLowerCase(
+                    java.util.Locale.ROOT), ignored -> new ArrayList<>());
+            for (int i = 1; i < pieces.length; i++) {
+                String[] range = pieces[i].split("-", 2);
+                try {
+                    long low = Long.parseLong(range[0]);
+                    long high = range.length == 1 ? low : Long.parseLong(range[1]);
+                    if (low < 1 || high < low) {
+                        throw new NumberFormatException();
+                    }
+                    intervals.add(new long[] {low, high});
+                } catch (NumberFormatException e) {
+                    throw new IllegalArgumentException("error.cdc.external.gtidInvalid");
+                }
+            }
+        }
+        return out;
     }
 
     /** SQL Server: an LSN above the source's max change LSN cannot be resumed from yet. */

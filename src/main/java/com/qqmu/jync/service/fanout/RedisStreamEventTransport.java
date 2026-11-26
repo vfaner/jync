@@ -56,6 +56,8 @@ public final class RedisStreamEventTransport implements EventTransport {
     private final long maxLen;
     /** Set after an XTRIM failure so an unsupported command cannot fail every publish. */
     private volatile boolean trimDisabled;
+    /** Last id appended by this transport; trimming waits for every group to ack it. */
+    private volatile String lastPublishedId;
     private final StatefulRedisConnection<String, byte[]> publisher;
     private final Object publishLock = new Object();
     private final List<Sub> subscriptions = new CopyOnWriteArrayList<>();
@@ -94,10 +96,13 @@ public final class RedisStreamEventTransport implements EventTransport {
         }
         byte[] bytes = EventCodec.serialize(event);
         synchronized (publishLock) {
-            publisher.sync().xadd(streamKey, Map.of("e", bytes));
+            // Trim only when every active target has acknowledged every event published so
+            // far; otherwise MAXLEN could remove an event a slow target has not read yet.
+            boolean safeToTrim = allGroupsCaughtUp();
+            lastPublishedId = publisher.sync().xadd(streamKey, Map.of("e", bytes));
             boolean baselineEvent = event.transactionId() != null
                     && event.transactionId().startsWith("baseline");
-            if (maxLen > 0L && !trimDisabled && !baselineEvent) {
+            if (safeToTrim && maxLen > 0L && !trimDisabled && !baselineEvent) {
                 try {
                     // Approximate trimming is deliberate: exact MAXLEN is O(stream) and
                     // Redis recommends ~. 0 means the operator chose never to trim.
@@ -110,6 +115,45 @@ public final class RedisStreamEventTransport implements EventTransport {
                             streamKey, e.toString());
                 }
             }
+        }
+    }
+
+    /** True when every active consumer group has acknowledged the last published event. */
+    private boolean allGroupsCaughtUp() {
+        String published = lastPublishedId;
+        if (published == null) {
+            return true;
+        }
+        boolean any = false;
+        for (Sub sub : subscriptions) {
+            if (sub.closed) {
+                continue;
+            }
+            any = true;
+            if (sub.lastAckedId == null || compareIds(sub.lastAckedId, published) < 0) {
+                return false;
+            }
+        }
+        return any;
+    }
+
+    /** Redis stream ids are {@code <milliseconds>-<sequence>}; compare numerically. */
+    static int compareIds(String left, String right) {
+        if (left == null) {
+            return right == null ? 0 : -1;
+        }
+        if (right == null) {
+            return 1;
+        }
+        String[] a = left.split("-", 2);
+        String[] b = right.split("-", 2);
+        try {
+            int cmp = Long.compare(Long.parseLong(a[0]), Long.parseLong(b[0]));
+            return cmp != 0 ? cmp : Long.compare(
+                    a.length > 1 ? Long.parseLong(a[1]) : 0L,
+                    b.length > 1 ? Long.parseLong(b[1]) : 0L);
+        } catch (NumberFormatException e) {
+            return left.compareTo(right);
         }
     }
 
@@ -145,6 +189,8 @@ public final class RedisStreamEventTransport implements EventTransport {
          */
         private boolean rewindPending = true;
         private String pendingCursor = "0";
+        /** Highest id this group has successfully acknowledged. */
+        private volatile String lastAckedId;
         private volatile boolean closed;
 
         Sub(String group) {
@@ -237,6 +283,11 @@ public final class RedisStreamEventTransport implements EventTransport {
             }
             try {
                 connection.sync().xack(streamKey, group, ids.toArray(new String[0]));
+                for (String id : ids) {
+                    if (lastAckedId == null || compareIds(id, lastAckedId) > 0) {
+                        lastAckedId = id;
+                    }
+                }
             } catch (RuntimeException e) {
                 // The entries stay pending; a restart replays them (idempotent) — never a loss.
                 log.debug("Fan-out Redis XACK {} failed: {}", ids, e.toString());
