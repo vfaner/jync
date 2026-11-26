@@ -54,6 +54,8 @@ public final class RedisStreamEventTransport implements EventTransport {
     private final RedisClient client;
     private final String streamKey;
     private final long maxLen;
+    /** Set after an XTRIM failure so an unsupported command cannot fail every publish. */
+    private volatile boolean trimDisabled;
     private final StatefulRedisConnection<String, byte[]> publisher;
     private final Object publishLock = new Object();
     private final List<Sub> subscriptions = new CopyOnWriteArrayList<>();
@@ -93,10 +95,18 @@ public final class RedisStreamEventTransport implements EventTransport {
         byte[] bytes = EventCodec.serialize(event);
         synchronized (publishLock) {
             publisher.sync().xadd(streamKey, Map.of("e", bytes));
-            if (maxLen > 0L) {
-                // Approximate trimming is deliberate: exact MAXLEN is O(stream) and Redis
-                // recommends ~. 0 means the operator chose never to trim.
-                publisher.sync().xtrim(streamKey, true, maxLen);
+            if (maxLen > 0L && !trimDisabled) {
+                try {
+                    // Approximate trimming is deliberate: exact MAXLEN is O(stream) and
+                    // Redis recommends ~. 0 means the operator chose never to trim.
+                    publisher.sync().xtrim(streamKey, true, maxLen);
+                } catch (RuntimeException e) {
+                    // Old Redis or a command error must not turn every publish into a
+                    // failure; stop trimming and keep the transport alive.
+                    trimDisabled = true;
+                    log.warn("Redis Stream trimming is disabled after a failure on {}: {}",
+                            streamKey, e.toString());
+                }
             }
         }
     }

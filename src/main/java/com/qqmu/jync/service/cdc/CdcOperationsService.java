@@ -484,8 +484,13 @@ public class CdcOperationsService {
             if (services.size() != 1) {
                 throw new IllegalArgumentException("error.cdc.external.ystreamService");
             }
-            YStreamPositionCodec.YStreamPosition existing =
-                    YStreamPositionCodec.parseText(services.get(0).restartPosition());
+            YStreamPositionCodec.YStreamPosition existing;
+            try {
+                existing = YStreamPositionCodec.parseText(services.get(0).restartPosition());
+            } catch (IllegalArgumentException e) {
+                // A service whose RESTART_POSITION is absent/unreadable cannot be verified.
+                throw new IllegalArgumentException("error.cdc.external.ystreamPosition");
+            }
             if (!existing.equals(wanted)) {
                 throw new IllegalArgumentException("error.cdc.external.ystreamPosition");
             }
