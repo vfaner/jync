@@ -1001,9 +1001,9 @@ Users can paste a complete error into the AI assistant; there is no need to trim
 ## LogMiner ORA-01291 keeps failing after rebuilds
 
 - Do not blame retention first: three days of archives with a baseline that takes minutes means retention is not the cause. `ORA-01291: missing logfile` means an archive covering the resume SCN is absent or inaccessible.
-- Version 2.4.6 selects only `DEST_ID = 1`; if the local archive copy is on `DEST_ID = 2` (destination 1 is standby/remote), Jync cannot see it and reports a missing file. The fixed build drops that filter, deduplicates by thread+sequence and prefers the local copy; still verify the files exist.
+- If the deployed build selects only `DEST_ID = 1` while the local archive copy is on `DEST_ID = 2` (destination 1 is standby/remote), Jync cannot see it and reports a missing file. The current implementation reads all destinations, deduplicates by thread+sequence and prefers the local copy; still verify the files exist after deploying such a build.
 - Check `V$ARCHIVED_LOG`: `DEST_ID`, `DELETED`, `STATUS`, sequence continuity and whether each `NEXT_CHANGE#` equals the next `FIRST_CHANGE#`; also require a row with `FIRST_CHANGE# <= resume AND NEXT_CHANGE# > resume`. If none exists, the anchor is not covered (archive gap or resetlogs/incarnation); rebuilding cannot recover it. Every RAC thread must be continuous.
-- The fixed build checks whether the anchor is covered by an archived log or CURRENT redo before marking the baseline done, so a source gap fails early with a clear message instead of a later ORA-01291.
+- The current implementation checks whether the anchor is covered by an archived log or CURRENT redo before marking the baseline done, so a source gap fails early with a clear message instead of a later ORA-01291.
 - Fix by restoring missing archives, or after confirming they are unnecessary run `CROSSCHECK` + `DELETE EXPIRED` to clear stale control-file rows, then rebuild. Logs that are truly gone cannot be recovered incrementally; re-run a full baseline and keep enough retention afterwards.
 
 ## Target identifier case and type precision

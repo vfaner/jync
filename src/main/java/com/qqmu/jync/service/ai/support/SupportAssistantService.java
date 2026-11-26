@@ -322,7 +322,7 @@ public class SupportAssistantService {
                   - `PURGED` / `ORA-01291`：看 lastError 的 resume SCN 与 oldest still-available
                     redo。最老 redo 早于 resume SCN 仍缺文件 = 归档空档（调大保留期无效）；
                     最老 redo 晚于 resume SCN = 保留期不足。两者都需要重建基线。
-                    2.4.6 还固定只看 `DEST_ID=1`，若本地归档在 DEST_ID 2 会误报缺文件；
+                    有些构建只固定看 `DEST_ID=1`，若本地归档在 DEST_ID 2 会误报缺文件；
                     让用户检查 DEST_ID、anchor 覆盖行、NEXT_CHANGE#/thread/resetlogs。
                     保留期远大于基线耗时（如 3 天 vs 几十分钟）时，不要先建议调保留期。
                   - 「MySQL 自增到达梦后没有自增/丢失」：达梦目标用 `SEQ_*` 序列 + `TRG_*`

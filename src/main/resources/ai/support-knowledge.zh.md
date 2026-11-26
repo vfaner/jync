@@ -792,9 +792,9 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 ## LogMiner ORA-01291 反复重建仍失败
 
 - 不要先归因保留期：如果归档保留 3 天、基线只跑几十分钟，保留期不是原因。`ORA-01291: missing logfile` 表示覆盖 resume SCN 的某个归档文件不在或不可访问。
-- 2.4.6 固定从 `DEST_ID = 1` 选归档；如果本地归档实际在 `DEST_ID = 2`（1 号目的地是备库/远程），Jync 看不到就会报缺文件。修复版已去掉该限制，按 thread+sequence 去重并优先本地副本；升级后仍需确认文件真实存在。
+- 如果部署的构建只从 `DEST_ID = 1` 选归档，而本地归档实际在 `DEST_ID = 2`（1 号目的地是备库/远程），Jync 就看不到并会报缺文件。当前实现会读取所有 `DEST_ID`，按 thread+sequence 去重并优先本地副本；部署此类构建后仍需确认文件真实存在。
 - 现场检查：`V$ARCHIVED_LOG` 的 `DEST_ID`、`DELETED`、`STATUS`、`SEQUENCE#` 是否连续、相邻 `NEXT_CHANGE#` 是否等于下一个 `FIRST_CHANGE#`；并确认存在 `FIRST_CHANGE# <= resume AND NEXT_CHANGE# > resume` 的行。没有这行说明锚点未被归档覆盖（归档缺口或 resetlogs/incarnation 变化），重建基线也无法恢复。RAC 每个 thread 都必须连续。
-- 修复版在基线完成时会检查 anchor 是否被归档或 CURRENT redo 覆盖；不覆盖会在标记基线完成前直接报“源端归档缺口”，避免先标完成、稍后才 ORA-01291。
+- 当前实现会在基线完成时检查 anchor 是否被归档或 CURRENT redo 覆盖；不覆盖会在标记基线完成前直接报“源端归档缺口”，避免先标完成、稍后才 ORA-01291。
 - 处理：从备份恢复缺失归档，或对确认不需要的已删除 stale 行执行 `CROSSCHECK` + `DELETE EXPIRED` 清理控制文件记录，再重建。日志确实丢失时无法增量恢复，只能重新全量并保证后续保留期。
 
 ## 目标端列名大小写与类型精度
