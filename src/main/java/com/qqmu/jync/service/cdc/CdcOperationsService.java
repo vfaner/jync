@@ -5,7 +5,10 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+
+import com.qqmu.jync.config.SyncProperties;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
@@ -60,6 +63,10 @@ public class CdcOperationsService {
     private final AdminAuditService auditService;
     private final ChangeLogRepository changeLogRepository;
     private final SyncLockService lockService;
+
+    /** Optional so hand-built service tests keep their constructor; production injects it. */
+    @Autowired(required = false)
+    private SyncProperties properties;
 
     public CdcOperationsService(ProjectRepository projectRepository,
                                 DatabaseConfigRepository databaseConfigRepository,
@@ -299,6 +306,7 @@ public class CdcOperationsService {
             }
             case PG_LOGICAL_CDC -> {
                 String value = normalizedLsn(strategy, lsn);
+                assertPgSlotCovers(projectId, source, value);
                 positionStore.delete(projectId);
                 positionStore.recordBaselineStartLsn(projectId, value);
             }
@@ -394,6 +402,41 @@ public class CdcOperationsService {
         } catch (SQLException e) {
             log.warn("Could not read SQL Server CDC capture tables for the external baseline:"
                     + " {}", e.getMessage());
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
+        }
+    }
+
+    /**
+     * PostgreSQL: the consumer peeks from the slot's confirmed position, never from the
+     * stored LSN. A missing slot parks later; a slot already ahead of the supplied position
+     * would silently skip the changes between the dump and the slot. Reject both up front.
+     */
+    private void assertPgSlotCovers(Long projectId, DatabaseConfig source, String lsn) {
+        if (properties == null) {
+            return;   // hand-built unit tests; production always has the bean
+        }
+        String slot;
+        try {
+            slot = PgLogicalCdcConsumer.slotName(projectId, properties);
+        } catch (RuntimeException e) {
+            throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
+        }
+        try (Connection conn = dataSourceManager.getConnection(source);
+             java.sql.PreparedStatement ps = conn.prepareStatement(
+                     "SELECT confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = ?")) {
+            ps.setString(1, slot);
+            try (java.sql.ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new IllegalArgumentException("error.cdc.external.pgSlotMissing");
+                }
+                String confirmed = rs.getString(1);
+                if (confirmed != null && CdcPositionStore.compareLsn(confirmed, lsn) > 0) {
+                    throw new IllegalArgumentException("error.cdc.external.pgSlotAhead");
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("Could not read PG replication slot '{}' for the external baseline: {}",
+                    slot, e.getMessage());
             throw new IllegalArgumentException("error.cdc.external.probeFailed", e);
         }
     }

@@ -118,6 +118,16 @@ final class EtlTaskValidation {
         // asked for keys that would never be used.
         DatabaseConfig target = configs.findById(task.getTargetDbId())
                 .orElseThrow(() -> new IllegalArgumentException("error.etl.target.missing"));
+        // The target schema is concatenated raw into every statement; an operator-supplied
+        // quote/comment/semicolon there would be SQL injection, not just a naming error.
+        String schema = target.getSchemaName();
+        if (schema != null && !schema.isBlank()) {
+            for (String part : schema.trim().split("\\.")) {
+                if (!EtlSqlSupport.PLAIN_IDENTIFIER.matcher(part).matches()) {
+                    throw new IllegalArgumentException("error.etl.targetSchema.invalid");
+                }
+            }
+        }
         if (target.effectiveType() == DatabaseType.TDENGINE
                 && task.getWriteMode() == EtlWriteMode.UPSERT) {
             throw new IllegalArgumentException("error.etl.tdengine.upsert");
