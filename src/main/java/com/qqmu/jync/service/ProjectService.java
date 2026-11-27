@@ -2551,6 +2551,24 @@ public class ProjectService {
                     }
                 }
             }
+            // A full load is persisted only when its final round commits (advanceCursor), so
+            // rowsSyncedTotal stays at the previous value for the whole load while the
+            // checkpoint rows already show real progress. Add the in-flight rows for the
+            // display; on completion the checkpoints are gone and the persisted total stands
+            // alone, so this cannot double count.
+            if (load != null && (state == SyncState.IN_PROGRESS
+                    || state == SyncState.INCOMPLETE)) {
+                long alreadySynced = rowsSynced == null ? 0L : rowsSynced;
+                rowsSynced = alreadySynced + Math.max(0L, load.getRowsCopied());
+                // The persisted last-sync time only moves when a whole cycle commits, so a
+                // long full load would say "never" while rows are visibly arriving. The
+                // checkpoint timestamp is exactly the last committed chunk.
+                Instant loadUpdatedAt = load.getLastUpdatedAt();
+                if (loadUpdatedAt != null
+                        && (lastSync == null || loadUpdatedAt.isAfter(lastSync))) {
+                    lastSync = loadUpdatedAt;
+                }
+            }
             IncrementalState incremental;
             if (state != SyncState.COMPLETED) {
                 incremental = IncrementalState.NOT_STARTED;
@@ -2571,9 +2589,16 @@ public class ProjectService {
             Long rowsCopied = load == null ? null : load.getRowsCopied();
             Integer fullLoadPercent = null;
             Long estimatedRows = progress == null ? null : progress.fullLoadTotalRows();
-            if (state == SyncState.IN_PROGRESS && rowsCopied != null
-                    && estimatedRows != null && estimatedRows > 0) {
+            if ((state == SyncState.IN_PROGRESS || state == SyncState.INCOMPLETE)
+                    && rowsCopied != null && estimatedRows != null && estimatedRows > 0) {
                 fullLoadPercent = (int) Math.min(100L, rowsCopied * 100L / estimatedRows);
+            } else if (state == SyncState.COMPLETED && !externalBaseline
+                    && ((progress != null && Boolean.TRUE.equals(progress.initialLoadDone()))
+                    || (targetsTotal != null && targetsDone != null
+                        && targetsDone >= targetsTotal))) {
+                // A finished full load has no checkpoints left, but "100%" is still the
+                // truthful answer — and much clearer than the dash this cell used to show.
+                fullLoadPercent = 100;
             }
             result.add(new TableSyncStatus(name, state, rowsSynced, lastSync,
                     rowsCopied,

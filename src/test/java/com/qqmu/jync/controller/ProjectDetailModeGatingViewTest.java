@@ -171,6 +171,27 @@ class ProjectDetailModeGatingViewTest {
 
     @Test
     @WithMockUser(roles = "ADMIN")
+    void aPollingProjectGetsAPollingSpecificReloadConfirmation() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, true);
+
+        String button = enclosingTag(renderDetail(), "data-role=\"table-reload\"", "<button");
+
+        assertThat(button).contains("polling mode")
+                .doesNotContain("CDC position");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void aCdcProjectGetsTheCdcPositionReloadConfirmation() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.BINLOG_CDC, true);
+
+        String button = enclosingTag(renderDetail(), "data-role=\"table-reload\"", "<button");
+
+        assertThat(button).contains("CDC position");
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
     void anAdminGetsTheBulkCursorEditorForAStoppedPollingProject() throws Exception {
         stubProject(SyncTargetKind.JDBC, CaptureStrategy.POLLING, false);
 

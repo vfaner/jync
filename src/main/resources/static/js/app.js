@@ -4224,21 +4224,27 @@
     var timerDelay = 0;
     var inFlight = false;
     var active = card.getAttribute('data-full-load-active') === 'true';
-    var pending = card.getAttribute('data-full-load-pending') === 'true';
     var projectActive = card.getAttribute('data-project-active') === 'true';
     var statusInterval = parseInt(card.getAttribute('data-status-refresh-ms'), 10)
       || STATUS_REFRESH_INTERVAL;
     var watchUntil = 0;
 
     /**
-     * The 「全量进度」 column only has something to say while a load is unfinished. Hide it once
-     * every load completed, but keep it for a stopped load whose checkpoints can still resume;
+     * Keep the 「全量进度」 column only while at least one row has something other than the
+     * constant 100%. A finished load shows 100%, an unfinished one its live percentage;
      * toggling here (instead of re-rendering the table) keeps cursor inputs untouched.
      */
     function applyProgressColumn() {
-      var show = pending || active;
+      var rows = document.querySelectorAll('#progress-card tr[data-progress-table]');
+      var allDone = rows.length > 0;
+      rows.forEach(function (row) {
+        var cell = row.querySelector('[data-status-cell="fullProgress"]');
+        if (!cell || (cell.textContent || '').trim() !== '100%') {
+          allDone = false;
+        }
+      });
       document.querySelectorAll('#progress-card [data-role="progress-full"]')
-        .forEach(function (el) { el.classList.toggle('is-hidden', !show); });
+        .forEach(function (el) { el.classList.toggle('is-hidden', allDone); });
     }
 
     function stopTimer() {
@@ -4311,7 +4317,6 @@
           updateTableStatus(fresh);
           card.innerHTML = freshCard.innerHTML;
           active = freshCard.getAttribute('data-full-load-active') === 'true';
-          pending = freshCard.getAttribute('data-full-load-pending') === 'true';
           applyProgressColumn();
           projectActive = freshCard.getAttribute('data-project-active') === 'true';
           statusInterval = parseInt(freshCard.getAttribute('data-status-refresh-ms'), 10)

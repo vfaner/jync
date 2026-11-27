@@ -1,11 +1,11 @@
 <!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
-<!--/* Shared status cells for the merged table-progress card. Full-load progress hides itself
-       when every load finished (no checkpoints), but stays visible for a stopped load that can
-       still resume. The same fragments are rendered
-       into the hidden polling rows, so the 2-second refresh can replace only these read-only
-       cells and never touch a cursor input or a preview button. */-->
+<!--/* Shared status cells for the merged table-progress card. A finished full load still says
+       100%, but the column hides itself once every visible row is at that constant; a live or
+       stopped load keeps its percentage. The same fragments are rendered into the hidden
+       polling rows, so the 2-second refresh can replace only these read-only cells and never
+       touch a cursor input or a preview button. */-->
 <!--/* Strategy badge / cursor column, shared by the visible row and the polling
        carrier. A full load records the resolved cursor column at its last chunk, and without
        this cell the row kept its "—" until a page reload. */-->
@@ -78,12 +78,12 @@
 
 <td th:fragment="fullProgress(s)" class="num small" data-status-cell="fullProgress"
     data-role="progress-full"
-    th:classappend="${(fullLoadTableCount != null and fullLoadTableCount > 0)
-                      or (tableStatusInProgress != null and tableStatusInProgress > 0)}
-                     ? '' : 'is-hidden'">
-    <span class="badge badge-info" th:if="${s.fullLoadPercent != null}"
+    th:classappend="${fullLoadAllDone} ? 'is-hidden' : ''">
+    <span class="badge" th:if="${s.fullLoadPercent != null}"
+          th:classappend="${s.state.name() == 'COMPLETED' and s.fullLoadPercent == 100}
+                           ? 'badge-ok' : 'badge-info'"
           th:title="#{tablesync.percentHint}"
-          th:text="${'~' + s.fullLoadPercent + '%'}">~0%</span>
+          th:text="${s.state.name() == 'COMPLETED' ? '100%' : '~' + s.fullLoadPercent + '%'}">~0%</span>
     <span th:if="${s.fullLoadPercent == null and s.state.name() == 'IN_PROGRESS'}"
           class="small muted" th:text="#{tablesync.loading}">Loading…</span>
     <span th:if="${s.fullLoadPercent == null and s.state.name() != 'IN_PROGRESS'}"

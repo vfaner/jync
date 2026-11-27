@@ -128,12 +128,17 @@ public class SyncStateWriter {
             progress.setLastSyncTime(Instant.now());
             changed = true;
         }
-        // Counts rows the target actually changed, not rows scanned. A full-compare table is
-        // re-read in its entirety every cycle, so accumulating the scan size would inflate this
-        // total by the table's row count every few seconds and tell the user nothing.
-        if (result.getRowsChanged() > 0) {
+        // A full load reports the rows it actually handed to the target, including a prefix
+        // copied by an interrupted earlier attempt. That is the work the user watched, and it
+        // stays non-zero even when every upsert found identical values (a reload over an
+        // already-populated target). Recurring cycles keep counting changed rows instead: a
+        // full-compare table is re-read every poll, and summing its scan size every few
+        // seconds would inflate the total by the table's row count forever.
+        long addedRows = result.isInitialLoad()
+                ? result.getRowsCopied() : result.getRowsChanged();
+        if (addedRows > 0) {
             progress.setRowsSyncedTotal((progress.getRowsSyncedTotal() == null ? 0L
-                    : progress.getRowsSyncedTotal()) + result.getRowsChanged());
+                    : progress.getRowsSyncedTotal()) + addedRows);
             changed = true;
         }
         // An idle cycle rewrites an identical row otherwise: one UPDATE per table per poll

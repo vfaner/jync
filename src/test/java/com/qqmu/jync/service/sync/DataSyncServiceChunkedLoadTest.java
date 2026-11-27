@@ -97,6 +97,7 @@ class DataSyncServiceChunkedLoadTest {
         assertThat(result.isInitialLoad()).isTrue();
         assertThat(count("ITEMS")).isEqualTo(5);
         assertThat(result.getRowsWritten()).isEqualTo(5);
+        assertThat(result.getRowsCopied()).isEqualTo(5);
         // Cursor semantics are unchanged: identity watermark stored as-is.
         assertThat(result.getNewCursorValue()).isEqualTo("5");
         // The chunked path ran, so the UI may promise checkpointed resume for this table.
@@ -113,16 +114,21 @@ class DataSyncServiceChunkedLoadTest {
         // on the target, the newest checkpoint recording the boundary at id 4.
         exec(target, "INSERT INTO ITEMS VALUES (1,'a'), (2,'b'), (3,'c'), (4,'d')");
         when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS"))
-                .thenReturn(List.of(new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[4]", 2,
-                        ChunkCheckpoint.STATUS_CHUNK)));
+                .thenReturn(List.of(
+                        new ChunkCheckpoint(7L, "ITEMS", 0, 0, "[2]", 2,
+                                ChunkCheckpoint.STATUS_CHUNK),
+                        new ChunkCheckpoint(7L, "ITEMS", 0, 1, "[4]", 2,
+                                ChunkCheckpoint.STATUS_CHUNK)));
         DataSyncService service = service(2);
 
         DataSyncService.TableSyncResult result = service.syncTable(
                 source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
-        // Only the tail (id 5) is re-read; the completed chunks are skipped.
+        // Only the tail (id 5) is re-read; the completed chunks are skipped. The load's
+        // cumulative figure still covers the four rows the earlier attempt copied.
         assertThat(result.getRowsWritten()).isEqualTo(1);
+        assertThat(result.getRowsCopied()).isEqualTo(5);
         assertThat(count("ITEMS")).isEqualTo(5);
         // The resumed load ran one more chunk (index 2) and then cleared everything.
         verify(checkpoints, times(1)).save(any(ChunkCheckpoint.class));

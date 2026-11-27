@@ -66,9 +66,7 @@
                     <th class="num" th:title="#{tablesync.rowsSynced.help}"
                         th:text="#{tablesync.rowsSynced}">Rows synced</th>
                     <th class="num" data-role="progress-full"
-                        th:classappend="${(fullLoadTableCount != null and fullLoadTableCount > 0)
-                                          or (tableStatusInProgress != null and tableStatusInProgress > 0)}
-                                         ? '' : 'is-hidden'"
+                        th:classappend="${fullLoadAllDone} ? 'is-hidden' : ''"
                         th:text="#{tablesync.fullLoad}">Full-load progress</th>
                     <th class="num" th:text="#{tablesync.actions}">Actions</th>
                 </tr>
@@ -139,11 +137,15 @@
                                               or #lists.isEmpty(config.fanoutTargetDbIds))}"
                                 th:attr="data-action=@{/api/projects/{id}/table-reload-job(id=${project.id})},
                                          data-table=${s.name},
-                                         data-confirm=#{tableReload.confirm(${s.name})},
+                                         data-confirm=${cdcActive
+                                             ? #messages.msg('tableReload.confirmCdc', s.name)
+                                             : #messages.msg('tableReload.confirmPolling', s.name)},
                                          data-confirm-cancel=#{tableReload.confirmCancel},
                                          data-running-text=#{tableReload.running},
                                          data-cancelling-text=#{tableReload.cancelling},
-                                         title=#{tableReload.hint}">
+                                         title=${cdcActive
+                                             ? #messages.msg('tableReload.hintCdc')
+                                             : #messages.msg('tableReload.hintPolling')}">
                             <svg class="ico"><use href="#arrow-repeat"/></svg>
                             <span th:text="#{tableReload.open}">Reload table</span>
                         </button>

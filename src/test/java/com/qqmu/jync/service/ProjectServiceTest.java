@@ -1836,6 +1836,38 @@ class ProjectServiceTest {
 
         assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
         assertThat(status.rowsCopied()).isEqualTo(100L);
+        assertThat(status.rowsSyncedTotal()).isEqualTo(100L);
+    }
+
+    @Test
+    void anActiveFullLoadAddsItsInFlightRowsToTheAlreadyPersistedTotal() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        ProgressStatusRow started = new ProgressStatusRow("ORDERS", false, 1200L, null,
+                null, null, null, null);
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a");
+        running.setLockExpiresAt(java.time.Instant.now().plusSeconds(60));
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(started));
+        java.time.Instant chunkAt = java.time.Instant.parse("2026-11-27T15:10:22Z");
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("ORDERS", 0, 0, 300,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK, chunkAt)));
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
+
+        // The persisted total only moves when the load commits; the checkpoint rows are the
+        // rows this load has actually written so far. Its timestamp is the last committed
+        // chunk, so 上次同步 moves while the load is still running.
+        assertThat(status.rowsSyncedTotal()).isEqualTo(1500L);
+        assertThat(status.rowsCopied()).isEqualTo(300L);
+        assertThat(status.lastSyncTime()).isEqualTo(chunkAt);
     }
 
     @Test
@@ -1863,6 +1895,28 @@ class ProjectServiceTest {
 
         assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
         assertThat(status.fullLoadPercent()).isEqualTo(25);
+    }
+
+    @Test
+    void aCompletedFullLoadStillReportsOneHundredPercentAfterItsCheckpointsAreGone() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        ProgressStatusRow done = new ProgressStatusRow("ORDERS", true, 2_300_000L, null,
+                null, null, null, null, null, java.time.Instant.now());
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(done));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
+
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.COMPLETED);
+        assertThat(status.fullLoadPercent()).isEqualTo(100);
+        assertThat(status.rowsSyncedTotal()).isEqualTo(2_300_000L);
     }
 
     @Test

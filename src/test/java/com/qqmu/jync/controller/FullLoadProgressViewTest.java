@@ -189,18 +189,21 @@ class FullLoadProgressViewTest {
     }
 
     /**
-     * 全量都完成后，「全量进度」列没有内容可显示：隐藏该列，而不是给每一行留一个「—」。
+     * 所有值都是恒定的 100% 时整列隐藏；有未完成的表时才显示，完成的行仍显示 100%。
      */
     @Test
-    void theFullProgressColumnIsHiddenOnceEveryLoadFinished() throws Exception {
+    void theFullProgressColumnIsHiddenWhenEveryVisibleValueIsOneHundred() throws Exception {
         stubDetail(Map.of());
         when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.COMPLETED,
-                        null, null, null, null)));
+                        0L, null, null, null, null, null, null, null,
+                        ProjectService.IncrementalState.PAUSED, null, null, false, 100, null)));
 
         String html = render();
 
         assertThat(html).contains("class=\"num is-hidden\" data-role=\"progress-full\"");
+        assertThat(html).contains("badge badge-ok");
+        assertThat(html).contains("100%");
     }
 
     /**
@@ -212,12 +215,16 @@ class FullLoadProgressViewTest {
                 checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK)))));
         when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
                 new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
-                        null, null, 300L, java.time.Instant.now())));
+                        0L, null, 300L, java.time.Instant.now(), null, null, null, null,
+                        ProjectService.IncrementalState.NOT_STARTED, null, null, false, 22,
+                        null)));
 
         String html = render();
 
         assertThat(html).contains("class=\"num\" data-role=\"progress-full\"");
         assertThat(html).contains("data-full-load-pending=\"true\"");
+        assertThat(html).contains("badge badge-info");
+        assertThat(html).contains("~22%");
     }
 
     /**

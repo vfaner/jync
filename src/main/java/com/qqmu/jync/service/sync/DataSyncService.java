@@ -199,6 +199,12 @@ public class DataSyncService {
          * the whole table on every cycle, so it measures work done, not change delivered.
          */
         private long rowsWritten;
+        /**
+         * Rows this full load copied into the target, including the prefix a resumed load
+         * inherited from an earlier attempt. Only meaningful while {@link #initialLoad} is set;
+         * a recurring full-compare cycle keeps counting its actual changes instead.
+         */
+        private long rowsCopied;
         /** Rows the target inserted, where the target reports that distinctly. */
         private long rowsInserted;
         /** Rows the target updated, where the target reports that distinctly. */
@@ -542,6 +548,10 @@ public class DataSyncService {
                         table, targetTable, ctx, null, insertFirst).stats();
 
         result.rowsWritten = stats.read;
+        // A full load counts every row it handed to the target as written, even when the
+        // upsert changed nothing (a reload over an already-populated target). The user asked
+        // for the load's work, and zero here made a completed 2.3M-row load read as 0.
+        result.rowsCopied = stats.read;
         applyStats(result, stats);
         // Same rewind as the incremental path — but only on keyed tables: without a
         // primary key there is no upsert to absorb the replayed margin rows, so the lag
@@ -3217,6 +3227,9 @@ public class DataSyncService {
             saved = List.of();
         }
         List<String> pk = table.getPrimaryKeys();
+        // The resume prefix was already copied (and committed) by an earlier attempt. Count it
+        // in the load's total so the lifetime figure does not fall when the tail completes.
+        long alreadyCopied = copiedRows(saved);
         // A production context can borrow a fresh pair per chunk. That keeps a connection
         // that a previous chunk retired from poisoning every later attempt; hand-built test
         // contexts without a provider keep using the cycle's connections.
@@ -3284,6 +3297,7 @@ public class DataSyncService {
         // The load finished (or the table turned out empty): resume points served their purpose.
         checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         result.rowsWritten = totalRead;
+        result.rowsCopied = alreadyCopied + totalRead;
         result.newCursorValue = fullLoadCursorTail(table, strategy,
                 resumeWatermark(saved, watermark), totalRead);
         return true;
@@ -3466,6 +3480,7 @@ public class DataSyncService {
             log.info("Resuming the {}-range split recorded for {} by an earlier attempt;"
                     + " {} checkpoint(s) kept", ranges.size(), table.getName(), usable.size());
         }
+        long alreadyCopied = copiedRows(usable);
         // One worker per range, so the range count is the worker count: a key span narrower
         // than the split yields fewer ranges than the configured parallelism, and naming the
         // configured value would claim workers that never ran. The requested value is still
@@ -3504,6 +3519,7 @@ public class DataSyncService {
 
         checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         result.rowsWritten = total.read;
+        result.rowsCopied = alreadyCopied + total.read;
         result.rowsInserted += total.inserted;
         result.rowsUpdated += total.updated;
         result.rowsChangedUnclassified += total.unclassified;
@@ -3923,6 +3939,18 @@ public class DataSyncService {
             this.boundary = boundary;
             this.nextChunkIndex = nextChunkIndex;
         }
+    }
+
+    /** Rows already committed by the checkpointed chunks of an interrupted load. */
+    private static long copiedRows(List<ChunkCheckpoint> checkpoints) {
+        long rows = 0;
+        for (ChunkCheckpoint checkpoint : checkpoints) {
+            if (ChunkCheckpoint.STATUS_CHUNK.equals(checkpoint.getStatus())
+                    || ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(checkpoint.getStatus())) {
+                rows += checkpoint.getRowsCopied() == null ? 0 : checkpoint.getRowsCopied();
+            }
+        }
+        return rows;
     }
 
     /**

@@ -115,4 +115,19 @@ class SyncStateWriterIdleCycleTest {
         verify(progressRepository, times(1)).save(progress);
         assertThat(progress.getRowsSyncedTotal()).isEqualTo(11L);
     }
+
+    @Test
+    void aFullLoadCountsCopiedRowsEvenWhenEveryUpsertFoundIdenticalValues() {
+        SyncProgress progress = convergedProgress();
+        progress.setInitialLoadDone(false);
+        progress.setRowsSyncedTotal(0L);
+        DataSyncService.TableSyncResult result = new DataSyncService.TableSyncResult();
+        result.setInitialLoad(true);
+        ReflectionTestUtils.setField(result, "rowsCopied", 2_300_000L);
+
+        writer.advanceCursor(progress, result, STRATEGY);
+
+        verify(progressRepository, times(1)).save(progress);
+        assertThat(progress.getRowsSyncedTotal()).isEqualTo(2_300_000L);
+    }
 }
