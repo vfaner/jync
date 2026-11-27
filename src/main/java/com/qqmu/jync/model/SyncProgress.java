@@ -100,6 +100,14 @@ public class SyncProgress {
     @Column(name = "full_load_without_cursor")
     private Boolean fullLoadWithoutCursor = false;
 
+    /**
+     * Statistics-only estimate of the source table's row count, captured when a full load
+     * starts. Null means the product had no usable statistics; the UI shows no percentage
+     * rather than running COUNT(*) from a polling endpoint.
+     */
+    @Column(name = "full_load_total_rows")
+    private Long fullLoadTotalRows;
+
     @Column(name = "rows_synced_total")
     private Long rowsSyncedTotal = 0L;
 

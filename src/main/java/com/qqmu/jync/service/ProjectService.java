@@ -2347,12 +2347,13 @@ public class ProjectService {
                                   Boolean resumableLoad, Boolean fullLoadWithoutCursor,
                                   IncrementalState incremental,
                                   Integer targetsDone, Integer targetsTotal,
-                                  boolean externalBaseline) {
+                                  boolean externalBaseline, Integer fullLoadPercent) {
         /** Compatibility constructor for callers/tests that only need the full-load state. */
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
                                Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
-                    null, null, null, null, IncrementalState.NOT_STARTED, null, null, false);
+                    null, null, null, null, IncrementalState.NOT_STARTED, null, null, false,
+                    null);
         }
 
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
@@ -2362,7 +2363,7 @@ public class ProjectService {
                                IncrementalState incremental) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
                     cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
-                    incremental, null, null, false);
+                    incremental, null, null, false, null);
         }
 
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
@@ -2373,7 +2374,7 @@ public class ProjectService {
                                Integer targetsDone, Integer targetsTotal) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
                     cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
-                    incremental, targetsDone, targetsTotal, false);
+                    incremental, targetsDone, targetsTotal, false, null);
         }
 
         /** True when this row aggregates a one-source-many-targets baseline. */
@@ -2566,14 +2567,22 @@ public class ProjectService {
             } else {
                 incremental = IncrementalState.RUNNING;
             }
+            Long rowsCopied = load == null ? null : load.getRowsCopied();
+            Integer fullLoadPercent = null;
+            Long estimatedRows = progress == null ? null : progress.fullLoadTotalRows();
+            if (state == SyncState.IN_PROGRESS && rowsCopied != null
+                    && estimatedRows != null && estimatedRows > 0) {
+                fullLoadPercent = (int) Math.min(100L, rowsCopied * 100L / estimatedRows);
+            }
             result.add(new TableSyncStatus(name, state, rowsSynced, lastSync,
-                    load == null ? null : load.getRowsCopied(),
+                    rowsCopied,
                     load == null ? null : load.getLastUpdatedAt(),
                     progress == null ? null : progress.cursorStrategy(),
                     progress == null ? null : progress.cursorColumn(),
                     progress == null ? null : progress.resumableLoad(),
                     progress == null ? null : progress.fullLoadWithoutCursor(),
-                    incremental, targetsDone, targetsTotal, externalBaseline));
+                    incremental, targetsDone, targetsTotal, externalBaseline,
+                    fullLoadPercent));
         }
         return result;
     }

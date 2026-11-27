@@ -217,6 +217,8 @@ public class DataSyncService {
         private String newCursorValue;
         @lombok.Setter
         private boolean initialLoad;
+        /** Statistics-only source estimate captured at the start of a full load. */
+        private Long fullLoadTotalRows;
         /**
          * Set with {@code skipped} when the skip only suppresses the row reload: the deletion
          * scan still applies this cycle. Used by the "cursor column has no value" idle state,
@@ -456,6 +458,12 @@ public class DataSyncService {
                                      TableMeta table, String targetTable,
                                      CursorStrategy strategy,
                                      SyncContext ctx, TableSyncResult result) throws SQLException {
+        // Statistics-only estimate, captured once at the start of the load and persisted by
+        // the engine for the progress percentage. A missing statistics row leaves it null;
+        // never fall back to COUNT(*) here, because that would put a full scan on the load's
+        // critical path just to draw a progress bar.
+        result.fullLoadTotalRows = statisticsRowEstimate(table, sourceConn, ctx);
+
         // Capture the watermark BEFORE reading, so rows committed during the load are not
         // silently covered by a watermark taken afterwards.
         String watermark = strategy.isIncremental()
@@ -2053,9 +2061,29 @@ public class DataSyncService {
     }
 
     private long actualRowBytes(TableMeta table, Connection sourceConn, SyncContext ctx) {
+        MetadataReader.TableStat stat = tableStat(table, sourceConn, ctx);
+        if (stat == null || stat.rows() == null || stat.bytes() == null
+                || stat.rows() <= 0 || stat.bytes() <= 0) {
+            return -1;
+        }
+        return Math.max(1L, stat.bytes() / stat.rows());
+    }
+
+    /**
+     * Statistics-only row estimate for the progress bar. This path never falls back to
+     * COUNT(*); a product with no usable statistics yields null and the UI simply omits the
+     * percentage.
+     */
+    private Long statisticsRowEstimate(TableMeta table, Connection sourceConn, SyncContext ctx) {
+        MetadataReader.TableStat stat = tableStat(table, sourceConn, ctx);
+        return stat == null || stat.rows() == null || stat.rows() <= 0 ? null : stat.rows();
+    }
+
+    private MetadataReader.TableStat tableStat(TableMeta table, Connection sourceConn,
+                                               SyncContext ctx) {
         MetadataReader reader = ctx.getSourceReader();
         if (reader == null || sourceConn == null || !reader.reportsTableStats()) {
-            return -1;
+            return null;
         }
         String key = ctx.projectId() + "|" + ctx.getSourceSchema();
         long now = System.currentTimeMillis();
@@ -2066,18 +2094,12 @@ public class DataSyncService {
             cached = new CachedTableStats(stats == null ? Map.of() : stats, now);
             tableStats.put(key, cached);
         }
-        MetadataReader.TableStat stat = null;
         for (Map.Entry<String, MetadataReader.TableStat> entry : cached.stats.entrySet()) {
             if (entry.getKey().equalsIgnoreCase(table.getName())) {
-                stat = entry.getValue();
-                break;
+                return entry.getValue();
             }
         }
-        if (stat == null || stat.rows() == null || stat.bytes() == null
-                || stat.rows() <= 0 || stat.bytes() <= 0) {
-            return -1;
-        }
-        return Math.max(1L, stat.bytes() / stat.rows());
+        return null;
     }
 
     /** Conservative width estimate used only to size an initial-load chunk. */

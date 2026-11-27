@@ -99,6 +99,12 @@ public class SyncStateWriter {
             progress.setLastSyncValue(null);
             changed = true;
         }
+        if (result.isInitialLoad()
+                && !Objects.equals(progress.getFullLoadTotalRows(),
+                        result.getFullLoadTotalRows())) {
+            progress.setFullLoadTotalRows(result.getFullLoadTotalRows());
+            changed = true;
+        }
         if (result.isInitialLoad()) {
             // Record whether this full load produced a cursor. A null one is not "never
             // loaded": it means the cursor column (or the table) had no usable value, and
@@ -183,6 +189,7 @@ public class SyncStateWriter {
         progress.setLastSyncValue(null);
         progress.setInitialLoadDone(false);
         progress.setFullLoadWithoutCursor(false);
+        progress.setFullLoadTotalRows(null);
         return progressRepository.save(progress);
     }
 

@@ -1749,6 +1749,7 @@ class ProjectServiceTest {
         assertThat(orders.externalBaseline()).isTrue();
         assertThat(orders.incremental()).isEqualTo(ProjectService.IncrementalState.PAUSED);
         assertThat(orders.rowsSyncedTotal()).isNull();
+        assertThat(orders.fullLoadPercent()).isNull();
         assertThat(customers.state()).isEqualTo(ProjectService.SyncState.NOT_STARTED);
         assertThat(customers.externalBaseline()).isFalse();
         assertThat(customers.incremental()).isEqualTo(ProjectService.IncrementalState.NOT_STARTED);
@@ -1835,6 +1836,33 @@ class ProjectServiceTest {
 
         assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
         assertThat(status.rowsCopied()).isEqualTo(100L);
+    }
+
+    @Test
+    void anActiveFullLoadReportsAPercentageFromTheStoredStatisticsEstimate() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        ProgressStatusRow started = new ProgressStatusRow("ORDERS", false, 0L, null,
+                null, null, null, null, 200L);
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a");
+        running.setLockExpiresAt(java.time.Instant.now().plusSeconds(60));
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(started));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("ORDERS", 0, 0, 50,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK,
+                        java.time.Instant.now())));
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
+
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
+        assertThat(status.fullLoadPercent()).isEqualTo(25);
     }
 
     @Test

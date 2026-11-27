@@ -13,5 +13,15 @@ import java.time.Instant;
 public record ProgressStatusRow(String objectName, Boolean initialLoadDone,
                                 Long rowsSyncedTotal, Instant lastSyncTime,
                                 String cursorStrategy, String cursorColumn,
-                                Boolean resumableLoad, Boolean fullLoadWithoutCursor) {
+                                Boolean resumableLoad, Boolean fullLoadWithoutCursor,
+                                Long fullLoadTotalRows) {
+
+    /** Compatibility constructor for callers/tests that do not carry the estimate. */
+    public ProgressStatusRow(String objectName, Boolean initialLoadDone,
+                             Long rowsSyncedTotal, Instant lastSyncTime,
+                             String cursorStrategy, String cursorColumn,
+                             Boolean resumableLoad, Boolean fullLoadWithoutCursor) {
+        this(objectName, initialLoadDone, rowsSyncedTotal, lastSyncTime,
+                cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor, null);
+    }
 }
