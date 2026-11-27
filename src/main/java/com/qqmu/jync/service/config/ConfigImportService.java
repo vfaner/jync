@@ -716,6 +716,8 @@ public class ConfigImportService {
             progress.setFullLoadWithoutCursor(Boolean.TRUE.equals(dto.fullLoadWithoutCursor()));
             progress.setRowsSyncedTotal(dto.rowsSyncedTotal());
             progress.setLastSyncTime(dto.lastSyncTime());
+            progress.setFullLoadTotalRows(dto.fullLoadTotalRows());
+            progress.setFullLoadCompletedAt(dto.fullLoadCompletedAt());
             syncProgress.save(progress);
         }
         for (ConfigPackageDtos.CdcPositionDto dto : state.cdcPositions()) {

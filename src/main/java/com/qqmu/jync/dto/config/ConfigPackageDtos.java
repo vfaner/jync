@@ -243,7 +243,9 @@ public final class ConfigPackageDtos {
                                   Boolean initialLoadDone,
                                   Boolean fullLoadWithoutCursor,
                                   Long rowsSyncedTotal,
-                                  Instant lastSyncTime) {
+                                  Instant lastSyncTime,
+                                  Long fullLoadTotalRows,
+                                  Instant fullLoadCompletedAt) {
     }
 
     public record CdcPositionDto(Long projectId,

@@ -1599,9 +1599,16 @@ public class SyncEngine {
             // finished. Missing statistics stay null; no COUNT(*) is issued here.
             Long estimate = dataSync.statisticsRowEstimate(table, sourceConn, ctx);
             if (!java.util.Objects.equals(progress.getFullLoadTotalRows(), estimate)) {
-                SyncProgress updated = stateWriter.recordFullLoadEstimate(progress, estimate);
-                if (updated != null) {
-                    progress = updated;
+                try {
+                    SyncProgress updated = stateWriter.recordFullLoadEstimate(progress, estimate);
+                    if (updated != null) {
+                        progress = updated;
+                    }
+                } catch (RuntimeException e) {
+                    // The estimate only feeds a progress bar; a metadata-store hiccup must
+                    // not abort the actual load.
+                    log.warn("Project '{}': could not store the full-load estimate for {}: {}",
+                            ctx.projectName(), table.getName(), e.toString());
                 }
             }
         }
