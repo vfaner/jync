@@ -24,7 +24,10 @@
               gtidShort=${gtid != null and #strings.length(gtid) > 12
                           ? #strings.substring(gtid, 0, 12) + '…' : gtid},
               lastError=${stats != null ? stats.lastError : null},
-              lastErrorShort=${lastError != null and #strings.length(lastError) > 160 ? #strings.substring(lastError, 0, 160) + '…' : lastError}">
+              lastErrorShort=${lastError != null and #strings.length(lastError) > 160 ? #strings.substring(lastError, 0, 160) + '…' : lastError},
+              verifyStatus=${cdcPosition != null ? cdcPosition.externalBaselineVerifyStatus : null},
+              verifyDetails=${cdcPosition != null ? cdcPosition.externalBaselineVerifyDetails : null},
+              verifyIssues=${cdcPosition != null ? cdcPosition.externalBaselineVerifyIssues : null}">
     <div class="card-head">
         <div style="display:flex;align-items:center;gap:10px;min-width:0">
             <h2><svg class="ico"><use href="#activity"/></svg> <span th:text="#{cdc.status.title}">CDC status</span></h2>
@@ -36,11 +39,30 @@
                 <span th:text="${stats.connected} ? #{cdc.status.connected} : #{cdc.status.disconnected}">Connected</span>
             </span>
         </div>
-        <span class="badge badge-ok"
-              th:if="${cdcPosition != null and cdcPosition.baselineDone}"
-              th:text="#{cdc.status.baseline.done}">Baseline complete</span>
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+            <span class="badge badge-ok"
+                  th:if="${cdcPosition != null and cdcPosition.baselineDone}"
+                  th:text="#{cdc.status.baseline.done}">Baseline complete</span>
+            <span class="badge"
+                  th:if="${cdcPosition != null and cdcPosition.hasExternalBaseline()}"
+                  th:classappend="${verifyStatus == 'OK'} ? 'badge-ok'
+                                : (${verifyStatus == 'MISMATCH'} ? 'badge-warn'
+                                : (${verifyStatus == 'ERROR'} ? 'badge-danger' : 'badge-info'))"
+                  th:attr="title=${verifyDetails}"
+                  th:text="#{'cdc.verify.' + (verifyStatus == null
+                              ? 'pending' : #strings.toLowerCase(verifyStatus))}">Baseline verification</span>
+        </div>
     </div>
     <div class="card-body">
+        <div class="alert"
+             th:if="${cdcPosition != null and cdcPosition.hasExternalBaseline()
+                      and (verifyStatus == 'MISMATCH' or verifyStatus == 'ERROR')}">
+            <div class="alert-body">
+                <b th:text="#{cdc.verify.details}">Baseline verification details</b>
+                <div class="small mono" style="white-space:pre-line"
+                     th:text="${verifyDetails}">—</div>
+            </div>
+        </div>
         <div class="alert" th:if="${cdcBaselinePending}">
             <div class="alert-body">
                 <b th:text="#{cdc.status.baseline.pending.title}">Baseline pending</b>

@@ -347,6 +347,9 @@ public class DiagnosticBundleService {
             map.put("baselineDone", position.isBaselineDone());
             map.put("externalBaseline", position.hasExternalBaseline());
             map.put("externalBaselineTables", position.getExternalBaselineTables());
+            map.put("externalBaselineVerifyStatus", position.getExternalBaselineVerifyStatus());
+            map.put("externalBaselineVerifyIssues", position.getExternalBaselineVerifyIssues());
+            map.put("externalBaselineVerifiedAt", position.getExternalBaselineVerifiedAt());
             map.put("updatedAt", position.getUpdatedAt());
             return map;
         });

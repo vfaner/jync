@@ -120,6 +120,9 @@ public class CdcStatusTool implements SupportTool {
             p.put("baselineDone", position.isBaselineDone());
             p.put("externalBaseline", position.hasExternalBaseline());
             p.put("externalBaselineTables", position.getExternalBaselineTables());
+            p.put("externalBaselineVerifyStatus", position.getExternalBaselineVerifyStatus());
+            p.put("externalBaselineVerifyIssues", position.getExternalBaselineVerifyIssues());
+            p.put("externalBaselineVerifiedAt", instant(position.getExternalBaselineVerifiedAt()));
             p.put("updatedAt", instant(position.getUpdatedAt()));
             out.put("position", p);
         }

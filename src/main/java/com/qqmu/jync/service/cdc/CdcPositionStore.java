@@ -156,8 +156,26 @@ public class CdcPositionStore {
         position.setSchemaSignatures(null);
         position.setBaselineDone(true);
         position.setExternalBaselineTableNames(externalTables);
+        position.setExternalBaselineVerifyStatus(
+                com.qqmu.jync.model.CdcPosition.VERIFY_PENDING);
+        position.setExternalBaselineVerifiedAt(null);
+        position.setExternalBaselineVerifyIssues(null);
+        position.setExternalBaselineVerifyDetails(null);
         position.setUpdatedAt(Instant.now());
         return repository.save(position);
+    }
+
+    /**
+     * Records the result of the external-baseline structural verification. Kept separate
+     * from the position advance path: this is diagnostic metadata and must not move the
+     * source position or its {@code updated_at} timestamp.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markExternalBaselineVerification(Long projectId, String status,
+                                                 Integer issues, String details,
+                                                 Instant verifiedAt) {
+        repository.markExternalBaselineVerification(projectId, status, issues, details,
+                verifiedAt);
     }
 
     /** Upsert the start-of-baseline position; baselineDone resets to false. */
@@ -915,6 +933,10 @@ public class CdcPositionStore {
             copy.setProjectionSignature(stored.getProjectionSignature());
             copy.setBaselineDone(stored.isBaselineDone());
             copy.setExternalBaselineTables(stored.getExternalBaselineTables());
+            copy.setExternalBaselineVerifyStatus(stored.getExternalBaselineVerifyStatus());
+            copy.setExternalBaselineVerifiedAt(stored.getExternalBaselineVerifiedAt());
+            copy.setExternalBaselineVerifyIssues(stored.getExternalBaselineVerifyIssues());
+            copy.setExternalBaselineVerifyDetails(stored.getExternalBaselineVerifyDetails());
             copy.setUpdatedAt(stored.getUpdatedAt());
             copy.setOptVersion(stored.getOptVersion());
             copy.setBinlogFile(file != null ? file : stored.getBinlogFile());

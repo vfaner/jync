@@ -73,6 +73,7 @@ class CdcOperationsServiceTest {
     @Mock private BinlogClientFactory clientFactory;
     @Mock private CdcConsumerManager cdcManager;
     @Mock private CdcPositionStore positionStore;
+    @Mock private ExternalBaselineVerificationService baselineVerification;
     @Mock private SyncStateWriter stateWriter;
     @Mock private SyncTaskStore taskStore;
     @Mock private AdminAuditService auditService;
@@ -85,8 +86,8 @@ class CdcOperationsServiceTest {
     void setUp() {
         service = new CdcOperationsService(projectRepository, databaseConfigRepository,
                 dataSourceManager, contextFactory, probe, logMinerProbe, pgProbe, mssqlProbe,
-                yStreamProbe, clientFactory, cdcManager, positionStore, stateWriter, taskStore,
-                auditService, changeLogRepository, lockService);
+                yStreamProbe, clientFactory, cdcManager, positionStore, baselineVerification,
+                stateWriter, taskStore, auditService, changeLogRepository, lockService);
     }
 
     private Project project() {
@@ -613,6 +614,7 @@ class CdcOperationsServiceTest {
         verify(taskStore).markStoppedClearingResult(1L);
         verify(changeLogRepository).save(any(ChangeLog.class));
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), any());
+        verify(baselineVerification).verifyAsync(1L);
     }
 
     @Test

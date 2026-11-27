@@ -135,6 +135,28 @@ public class CdcPosition {
     /** Sentinel stored in {@link #externalBaselineTables} for an all-tables selection. */
     public static final String EXTERNAL_ALL_TABLES = "*";
 
+    public static final String VERIFY_PENDING = "PENDING";
+    public static final String VERIFY_RUNNING = "RUNNING";
+    public static final String VERIFY_OK = "OK";
+    public static final String VERIFY_MISMATCH = "MISMATCH";
+    public static final String VERIFY_ERROR = "ERROR";
+
+    /** PENDING/RUNNING/OK/MISMATCH/ERROR; null for rows that predate verification. */
+    @Column(name = "external_baseline_verify_status", length = 16)
+    private String externalBaselineVerifyStatus;
+
+    @Column(name = "external_baseline_verified_at")
+    private Instant externalBaselineVerifiedAt;
+
+    /** Number of tables with a structural problem; 0 when the check passed. */
+    @Column(name = "external_baseline_verify_issues")
+    private Integer externalBaselineVerifyIssues;
+
+    /** Human-readable issue list, one table per line. */
+    @Lob
+    @Column(name = "external_baseline_verify_details", length = Integer.MAX_VALUE)
+    private String externalBaselineVerifyDetails;
+
     @Column(name = "updated_at")
     private Instant updatedAt = Instant.now();
 
@@ -211,5 +233,9 @@ public class CdcPosition {
     /** Clears the external-dump marker when Jync takes over with a normal baseline/reload. */
     public void clearExternalBaseline() {
         externalBaselineTables = null;
+        externalBaselineVerifyStatus = null;
+        externalBaselineVerifiedAt = null;
+        externalBaselineVerifyIssues = null;
+        externalBaselineVerifyDetails = null;
     }
 }

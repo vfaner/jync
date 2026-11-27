@@ -61,6 +61,7 @@ public class CdcOperationsService {
     private final BinlogClientFactory clientFactory;
     private final CdcConsumerManager cdcManager;
     private final CdcPositionStore positionStore;
+    private final ExternalBaselineVerificationService baselineVerification;
     private final SyncStateWriter stateWriter;
     private final SyncTaskStore taskStore;
     private final AdminAuditService auditService;
@@ -83,6 +84,7 @@ public class CdcOperationsService {
                                 BinlogClientFactory clientFactory,
                                 CdcConsumerManager cdcManager,
                                 CdcPositionStore positionStore,
+                                ExternalBaselineVerificationService baselineVerification,
                                 SyncStateWriter stateWriter,
                                 SyncTaskStore taskStore,
                                 AdminAuditService auditService,
@@ -100,6 +102,7 @@ public class CdcOperationsService {
         this.clientFactory = clientFactory;
         this.cdcManager = cdcManager;
         this.positionStore = positionStore;
+        this.baselineVerification = baselineVerification;
         this.stateWriter = stateWriter;
         this.taskStore = taskStore;
         this.auditService = auditService;
@@ -366,6 +369,7 @@ public class CdcOperationsService {
                         "@adoptExternalBaseline:" + adopted));
         log.info("Project {} adopted an external baseline at {} (strategy {})",
                 projectId, adopted, strategy);
+        baselineVerification.verifyAsync(projectId);
     }
 
     /**
