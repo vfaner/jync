@@ -618,6 +618,27 @@ class CdcOperationsServiceTest {
     }
 
     @Test
+    void backfillsTheScopeOfALegacyExternalBaselineWithoutMovingThePosition() {
+        Project project = project();
+        project.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(List.of("orders")));
+        when(contextFactory.parseConfig(project)).thenReturn(config);
+        CdcPosition position = new CdcPosition();
+        position.setProjectId(1L);
+        position.setBaselineDone(true);
+        when(positionStore.find(1L)).thenReturn(Optional.of(position));
+        when(positionStore.backfillExternalBaselineScope(eq(1L), any())).thenReturn(true);
+
+        service.backfillExternalBaselineScope(1L);
+
+        verify(positionStore).backfillExternalBaselineScope(eq(1L),
+                eq(java.util.Set.of("orders")));
+        verify(baselineVerification).verifyAsync(1L);
+        verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), any());
+    }
+
+    @Test
     void adoptionRefusesAFileTheSourceDoesNotList() throws SQLException {
         Project project = project();
         project.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");

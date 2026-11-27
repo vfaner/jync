@@ -2,6 +2,7 @@ package com.qqmu.jync.service.cdc;
 
 import java.math.BigInteger;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -176,6 +177,30 @@ public class CdcPositionStore {
                                                  Instant verifiedAt) {
         repository.markExternalBaselineVerification(projectId, status, issues, details,
                 verifiedAt);
+    }
+
+    /**
+     * Records the table scope of an external baseline adopted by an older version. Does not
+     * touch the source position or {@code baselineDone}; this is a metadata-only repair.
+     *
+     * @return false when the row is missing, not baseline-done, or already has a scope
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean backfillExternalBaselineScope(Long projectId, Collection<String> tables) {
+        return repository.findByProjectId(projectId).map(position -> {
+            if (!Boolean.TRUE.equals(position.isBaselineDone())
+                    || position.hasExternalBaseline()) {
+                return false;
+            }
+            position.setExternalBaselineTableNames(tables);
+            position.setExternalBaselineVerifyStatus(
+                    com.qqmu.jync.model.CdcPosition.VERIFY_PENDING);
+            position.setExternalBaselineVerifiedAt(null);
+            position.setExternalBaselineVerifyIssues(null);
+            position.setExternalBaselineVerifyDetails(null);
+            repository.save(position);
+            return true;
+        }).orElse(false);
     }
 
     /** Upsert the start-of-baseline position; baselineDone resets to false. */

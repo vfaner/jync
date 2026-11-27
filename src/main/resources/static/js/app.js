@@ -2990,6 +2990,34 @@
     return div;
   }
 
+  /**
+   * 「补记外部基线范围」按钮位于会每 5 秒重绘的 CDC 卡片里，所以用文档级事件委托，
+   * 卡片刷新后仍然有效。动作只写元数据，不移动位点。
+   */
+  function bindExternalScopeBackfill() {
+    document.addEventListener('click', function (e) {
+      var target = e.target && e.target.closest
+          ? e.target.closest('[data-role="external-scope-backfill"]') : null;
+      if (!target || target.disabled) { return; }
+      e.preventDefault();
+      JyncDialog.confirm(target.dataset.confirm, function () {
+        target.disabled = true;
+        postJson(target.dataset.action, null, false).then(function (payload) {
+          if (!payload.success) {
+            toast(t(payload.message || 'error.unexpected'), 'danger');
+            target.disabled = false;
+            return;
+          }
+          toast(t(payload.message || 'msg.cdc.external.backfill.done'), 'ok');
+          setTimeout(function () { window.location.reload(); }, 850);
+        }).catch(function () {
+          toast(t('error.unexpected'), 'danger');
+          target.disabled = false;
+        });
+      });
+    });
+  }
+
   /* ─── 赞赏弹窗 ──────────────────────────────────────────── */
 
   /**
@@ -6128,6 +6156,7 @@
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
+    bindExternalScopeBackfill();
     bindFullLoadRefresh();
     bindFanoutStatusRefresh();
     bindResourceRefresh();

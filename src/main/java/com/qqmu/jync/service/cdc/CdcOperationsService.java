@@ -16,6 +16,7 @@ import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.service.audit.AuditDetail;
+import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.DatabaseConfig;
@@ -369,6 +370,46 @@ public class CdcOperationsService {
                         "@adoptExternalBaseline:" + adopted));
         log.info("Project {} adopted an external baseline at {} (strategy {})",
                 projectId, adopted, strategy);
+        baselineVerification.verifyAsync(projectId);
+    }
+
+    /**
+     * Repairs the table scope of a baseline adopted by an older version, which marked
+     * {@code baselineDone} but did not record which tables the dump covered. This is
+     * metadata-only: the source position stays exactly where it is, and a project that
+     * already has a scope is refused.
+     */
+    public void backfillExternalBaselineScope(Long projectId) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        CaptureStrategy strategy = CaptureStrategyParser.parse(project.getSyncConfig());
+        if (!strategy.isLogCdc()) {
+            throw new IllegalArgumentException("error.cdc.external.notCdc");
+        }
+        if (project.getTargetKindOrDefault() != com.qqmu.jync.model.SyncTargetKind.JDBC) {
+            throw new IllegalArgumentException("error.cdc.external.jdbcOnly");
+        }
+        CdcPosition position = positionStore.find(projectId).orElse(null);
+        if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {
+            throw new IllegalStateException("error.cdc.external.scopeNotEligible");
+        }
+        if (position.hasExternalBaseline()) {
+            throw new IllegalStateException("error.cdc.external.scopeAlreadySet");
+        }
+        SyncConfig config = contextFactory.parseConfig(project);
+        Set<String> tables = resolveExternalTableScope(project, config);
+        if (tables.isEmpty()) {
+            throw new IllegalStateException("error.cdc.external.scopeEmpty");
+        }
+        if (!positionStore.backfillExternalBaselineScope(projectId, tables)) {
+            throw new IllegalStateException("error.cdc.external.scopeAlreadySet");
+        }
+        changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
+                project.getName(), ChangeType.INFO,
+                "external baseline table scope backfilled: " + tables.size() + " table(s)"));
+        auditService.record(AuditAction.PROJECT_CDC_REBASELINE,
+                AuditDetail.of("audit.detail.cdcRebaseline", String.valueOf(projectId),
+                        "@externalScopeBackfill:" + tables.size()));
         baselineVerification.verifyAsync(projectId);
     }
 
