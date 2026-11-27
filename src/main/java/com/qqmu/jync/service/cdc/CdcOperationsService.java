@@ -24,6 +24,7 @@ import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.repository.AuditEventRepository;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.DatabaseConfigRepository;
 import com.qqmu.jync.repository.ProjectRepository;
@@ -72,6 +73,16 @@ public class CdcOperationsService {
     /** Optional so hand-built service tests keep their constructor; production injects it. */
     @Autowired(required = false)
     private SyncProperties properties;
+    /** Optional for the same reason; production injects it. */
+    @Autowired(required = false)
+    private AuditEventRepository auditEvents;
+
+    /** Adoption evidence is permanent, but the card polls every 5 seconds; cache briefly. */
+    private final java.util.Map<Long, CachedAdoptionEvidence> adoptionEvidence =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private record CachedAdoptionEvidence(boolean eligible, long checkedAt) {
+    }
+    private static final long ADOPTION_EVIDENCE_TTL_MS = 5 * 60_000L;
 
     public CdcOperationsService(ProjectRepository projectRepository,
                                 DatabaseConfigRepository databaseConfigRepository,
@@ -373,6 +384,35 @@ public class CdcOperationsService {
         baselineVerification.verifyAsync(projectId);
     }
 
+    /**
+     * Whether this project has an audit trail of adopting an external baseline and no later
+     * baseline reset. The backfill button must not be offered to every ordinary CDC project:
+     * clicking it would relabel a normal Jync baseline as externally seeded.
+     */
+    public boolean hasLegacyExternalBaselineEvidence(Long projectId) {
+        if (auditEvents == null || projectId == null) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        CachedAdoptionEvidence cached = adoptionEvidence.get(projectId);
+        if (cached != null && now - cached.checkedAt() < ADOPTION_EVIDENCE_TTL_MS) {
+            return cached.eligible();
+        }
+        try {
+            boolean eligible = auditEvents
+                    .findFirstByActionAndDetailContainingOrderByOccurredAtDesc(
+                            AuditAction.PROJECT_CDC_REBASELINE, "|" + projectId + "|")
+                    .map(event -> event.getDetail() != null
+                            && event.getDetail().contains("@adoptExternalBaseline:"))
+                    .orElse(false);
+            adoptionEvidence.put(projectId, new CachedAdoptionEvidence(eligible, now));
+            return eligible;
+        } catch (RuntimeException e) {
+            log.debug("Cannot inspect adoption audit for project {}: {}", projectId, e.toString());
+            return false;
+        }
+    }
+
     /** Re-runs the structural check of an already-adopted external baseline. */
     public void reverifyExternalBaseline(Long projectId) {
         projectRepository.findById(projectId)
@@ -399,6 +439,9 @@ public class CdcOperationsService {
         }
         if (project.getTargetKindOrDefault() != com.qqmu.jync.model.SyncTargetKind.JDBC) {
             throw new IllegalArgumentException("error.cdc.external.jdbcOnly");
+        }
+        if (Boolean.TRUE.equals(project.getEnabled())) {
+            throw new IllegalArgumentException("error.cdc.external.stopFirst");
         }
         CdcPosition position = positionStore.find(projectId).orElse(null);
         if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {

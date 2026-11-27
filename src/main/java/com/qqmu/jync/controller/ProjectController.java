@@ -782,6 +782,8 @@ public class ProjectController {
         model.addAttribute("cdcStats", cdcStats);
         model.addAttribute("cdcBaselinePending", cdcActive
                 && (cdcPosition == null || !Boolean.TRUE.equals(cdcPosition.isBaselineDone())));
+        model.addAttribute("externalScopeBackfillEligible",
+                externalScopeBackfillEligible(project, cdcPosition));
 
         if (!liveSourceAllowed) {
             // Not a fault: this account may not edit the project, so the page never dials
@@ -1070,6 +1072,13 @@ public class ProjectController {
         }
     }
 
+    private boolean externalScopeBackfillEligible(Project project, CdcPosition position) {
+        return project != null && !Boolean.TRUE.equals(project.getEnabled())
+                && position != null && Boolean.TRUE.equals(position.isBaselineDone())
+                && !position.hasExternalBaseline()
+                && cdcOperationsService.hasLegacyExternalBaselineEvidence(project.getId());
+    }
+
     @GetMapping("/{id}/cdc-card")
     public String cdcCardFragment(@PathVariable Long id, Model model) {
         boolean cdcActive = false;
@@ -1094,6 +1103,8 @@ public class ProjectController {
         model.addAttribute("cdcStats", cdcStats);
         model.addAttribute("cdcBaselinePending", cdcActive
                 && (cdcPosition == null || !Boolean.TRUE.equals(cdcPosition.isBaselineDone())));
+        model.addAttribute("externalScopeBackfillEligible",
+                externalScopeBackfillEligible(maybeProject.orElse(null), cdcPosition));
         return "project-detail/cdc-status :: cdc-card";
     }
 

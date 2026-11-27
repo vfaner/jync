@@ -64,8 +64,7 @@
                     th:text="#{cdc.verify.retry}">Re-check</button>
             <button type="button" class="btn btn-ghost btn-xs"
                     data-role="external-scope-backfill"
-                    th:if="${cdcPosition != null and cdcPosition.baselineDone
-                             and !cdcPosition.hasExternalBaseline()
+                    th:if="${externalScopeBackfillEligible
                              and access.canEdit(project.ownerUsername)}"
                     th:attr="data-action=@{/api/projects/{id}/cdc/backfill-external-scope(id=${project.id})},
                              data-confirm=#{cdc.external.backfillConfirm},

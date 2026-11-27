@@ -25,6 +25,10 @@ public interface AuditEventRepository extends Repository<AuditEvent, Long> {
 
     AuditEvent save(AuditEvent event);
 
+    /** Latest audit row for one project (the detail starts with the project id argument). */
+    java.util.Optional<AuditEvent> findFirstByActionAndDetailContainingOrderByOccurredAtDesc(
+            com.qqmu.jync.model.AuditAction action, String detail);
+
     Page<AuditEvent> findAll(Pageable pageable);
 
     long count();
