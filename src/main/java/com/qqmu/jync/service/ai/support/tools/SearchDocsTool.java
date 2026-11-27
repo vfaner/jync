@@ -29,7 +29,8 @@ public class SearchDocsTool implements SupportTool {
 
     public String description() {
         return "Search the bundled Jync documentation for how-to, parameters, prerequisites and "
-                + "limits. Answer only from the returned excerpts.";
+                + "limits. Prefer these excerpts; when they do not cover the question, use "
+                + "search_logs and general database/Java experience, labeling what is inference.";
     }
 
     public Map<String, Object> parameters() {

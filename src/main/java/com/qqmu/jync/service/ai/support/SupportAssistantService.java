@@ -69,7 +69,7 @@ public class SupportAssistantService {
      */
     static final String SYNTHESIS_ZH =
             "本轮请直接给出最终回答：基于上面已经取到的结果，第一句就是结论；"
-                    + "不要再调用工具，也不要说明查询过程、轮次或预算。信息不足就明确说缺什么。";
+                    + "不要再调用工具，也不要说明查询过程、轮次或预算。证据不足时，先给最可能的原因与可执行验证步骤，再说明还缺什么。";
     static final String SYNTHESIS_EN =
             "Give the final answer now: start with the conclusion, using the results already "
                     + "gathered. Do not call tools or talk about the lookup process, rounds or "
@@ -80,6 +80,8 @@ public class SupportAssistantService {
      * 长度就边生成边发，长回答不必等整段生成完。
      */
     static final int STREAM_RELEASE_CHARS = 160;
+    /** Final answers get more room than a tool-call round; a reasoning model can spend 1k silently. */
+    static final int SYNTHESIS_TOKENS = 4_096;
 
     static final String SYSTEM_PROMPT = """
             你是 Jync（捷同，数据库实时同步工具）的运维助手，面向管理员与运维人员。
@@ -122,7 +124,8 @@ public class SupportAssistantService {
                  大小写），state 可按状态过滤；默认最多返回 20 行，truncated=true 时
                  先报 matched 总数，再列返回的部分，不要把它当成全部
                - 变更日志（CDC）断流、位点、最近错误、跳过 DDL → cdc_status；某个任务还有哪些
-                 未执行/待回放的 DDL 待办 → project_ddl_tasks（只读，最多 20 条）
+                 未执行/待回放的 DDL 待办 → project_ddl_tasks（只读，最多 20 条）；
+                 日志/异常栈 → search_logs（只读，默认当前 jync.log，可按级别/关键词/滚动文件）
                - 变更日志前提不明或怀疑源库日志与权限有问题 → cdc_probe 自检（会连源库，
                  很贵，一次对话最多 2 次；只能查自己有编辑权的任务）
                - ETL 任务失败与最近结果 → etl_status
@@ -153,8 +156,10 @@ public class SupportAssistantService {
                  推断。selectionKnown=false 表示旧配置没有明确的表清单，摘要只基于已有进度
                  行，无法列出未开始表，回答时要说明这一限制。外部基线接入后表进度不回填，
                  project_table_status 显示 NOT_STARTED 属正常，不代表没有同步。
-               - 产品用法、参数、前提、限制 → search_docs，只依据返回片段回答；片段没有
-                 就说没查到，不要补充片段以外的细节
+               - 产品用法、参数、前提、限制 → 先 search_docs；文档没有覆盖、或用户贴了报错
+                 时，再用 search_logs 查本实例日志。两者都不够时，基于工具证据与通用数据库/Java
+                 经验给出可执行的判断和验证步骤，并标明哪些是经验推断；不要只回「没查到」，
+                 也不要编造具体配置值或版本行为。
                - CDC DDL：默认只登记待办，不自动改目标表；单目标项目可开启「CDC 自动补齐新增可空列」，
                  只自动执行仅含 ADD COLUMN 且所有新列可空、无主键/唯一/自增/生成/引用约束的 ALTER；
                  自动执行后任务仍会保留「补齐缺失数据」待办，等待管理员回放；缺口回放要求任务先停止。
@@ -564,9 +569,46 @@ public class SupportAssistantService {
                         continue;
                     }
                     if (blank) {
-                        // 纠偏也只回了空内容：明确告知，不要让一次提问静默结束。
-                        sink.error("error.support.noAnswer");
-                        return;
+                        // 纠偏也只回了空内容：再给一次不带工具的收束机会（有的推理模型在
+                        // 工具历史后需要明确的 user 指令才会输出正文），不要直接报空气泡。
+                        if (cancelled.getAsBoolean()) {
+                            sink.error("error.support.cancelled");
+                            return;
+                        }
+                        if (System.currentTimeMillis() - started > TOTAL_BUDGET_MS) {
+                            sink.error("error.support.timeout");
+                            return;
+                        }
+                        String instruction = synthesisInstruction(language);
+                        turns.add(AiChatClient.Turn.user(instruction));
+                        boolean[] finalStreamed = new boolean[1];
+                        AiChatClient.ToolChatResult summary = chat.converseStream(provider,
+                                providers.decryptKey(provider),
+                                SYSTEM_PROMPT + "\n" + instruction,
+                                turns, List.of(), SYNTHESIS_TOKENS, text -> {
+                                    finalStreamed[0] = true;
+                                    sink.delta(text);
+                                },
+                                Math.max(1_000L, TOTAL_BUDGET_MS
+                                        - (System.currentTimeMillis() - started)));
+                        if (!summary.success()) {
+                            log.warn("Support AI fallback synthesis failed: {}",
+                                    summary.message());
+                            sink.error("error.ai.requestFailed", summary.message());
+                            return;
+                        }
+                        if (!finalStreamed[0]) {
+                            if (summary.text() == null || summary.text().isBlank()) {
+                                sink.error("error.support.noAnswer");
+                                return;
+                            }
+                            sink.delta(summary.text());
+                        }
+                        if (summary.truncated()) {
+                            sink.delta(truncationSuffix(language));
+                        }
+                        ok = true;
+                        break;
                     }
                     // 这是给用户看的回答：整轮攒下的正文在这里一次下发（长正文已提前下发）。
                     answer.release();
@@ -645,11 +687,12 @@ public class SupportAssistantService {
                         sink.error("error.support.timeout");
                         return;
                     }
+                    turns.add(AiChatClient.Turn.user(synthesisInstruction(language)));
                     boolean[] finalStreamed = new boolean[1];
                     AiChatClient.ToolChatResult summary = chat.converseStream(provider,
                             providers.decryptKey(provider),
                             SYSTEM_PROMPT + "\n" + synthesisInstruction(language),
-                            turns, List.of(), 1_024, text -> {
+                            turns, List.of(), SYNTHESIS_TOKENS, text -> {
                                 finalStreamed[0] = true;
                                 sink.delta(text);
                             },

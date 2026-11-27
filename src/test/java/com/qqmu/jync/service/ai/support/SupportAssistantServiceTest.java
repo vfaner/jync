@@ -526,21 +526,37 @@ class SupportAssistantServiceTest {
     }
 
     /**
-     * 模型偶尔返回空正文：旧逻辑直接当成成功结束，用户拿到一个空气泡。现在先纠偏一次；
-     * 仍然为空就明确告知，而不是静默。
+     * 模型偶尔返回空正文：旧逻辑直接当成成功结束，用户拿到一个空气泡。现在先纠偏一次，
+     * 再给一次不带工具的收束机会；仍然为空才明确告知，而不是静默。
      */
     @Test
-    void anEmptyReplyIsNudgedOnceAndThenReported() {
+    void anEmptyReplyIsNudgedAndThenReportedAfterTheSynthesisRetry() {
         AiChatClient.ToolChatResult blank = new AiChatClient.ToolChatResult(
                 true, "OK", "", List.of(), "", 1, false);
         when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
-                .thenReturn(blank, blank);
+                .thenReturn(blank, blank, blank);
 
         Recorder sink = new Recorder();
         service().ask(actor, "zh", ask("hi"), sink);
 
-        verify(chat, times(2)).converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong());
+        verify(chat, times(3)).converseStream(any(), any(), any(), any(), any(),
+                anyInt(), any(), anyLong());
         assertThat(sink.events).contains("error:error.support.noAnswer");
+    }
+
+    @Test
+    void anEmptyReplyCanBeRescuedByTheNoToolsSynthesis() {
+        AiChatClient.ToolChatResult blank = new AiChatClient.ToolChatResult(
+                true, "OK", "", List.of(), "", 1, false);
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
+                .thenReturn(blank, blank, new AiChatClient.ToolChatResult(
+                        true, "OK", "结论：当前没有异常。", List.of(), "", 1, false));
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("hi"), sink);
+
+        assertThat(sink.events).contains("delta:结论：当前没有异常。");
+        assertThat(sink.events).noneMatch(e -> e.startsWith("error:"));
     }
 
     @Test

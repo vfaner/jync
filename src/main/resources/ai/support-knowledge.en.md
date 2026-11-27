@@ -854,6 +854,8 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   rebuild-relevant switches (captureStrategy, syncDeletes, truncateBeforeInitialLoad,
   fullCompareMaxRows, deleteCompareMaxRows) and the newest change / newest successful write times —
   separating "never saw a change" (read side) from "saw it and the write failed" (write side).
+- It searches this installation's own application log (`search_logs`) by keyword, level and
+  rolled file — use it to explain an error stack or a failure.
 - It reads the open CDC DDL tasks of one project (`project_ddl_tasks`, up to 20): task id,
   table, status (PENDING/FAILED), executed/replayed flags, target SQL, error and affected tables —
   use it when the target is missing a column or a replay is still outstanding.
