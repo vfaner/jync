@@ -520,10 +520,18 @@ public class DataSyncService {
         } else {
             log.info("Full load of {} -> {}", table.getName(), targetTable);
         }
-        WriteStats stats = copyRows(sourceConn, targetConn, selectSql,
-                watermark != null ? List.of(upperBound) : List.of(),
-                table, targetTable, ctx, null, null,
-                fullLoadBatchSize(ctx), fullLoadFetchSize(ctx), insertFirst);
+        // One streamed SELECT (keyless tables, or chunking disabled) still gets the same
+        // connection-loss retry as a chunked load when a provider can open fresh connections.
+        // The retry rolls back the caller's target transaction first, so uncommitted rows from
+        // the failed attempt cannot hold locks against the fresh connection. A hand-built
+        // context without a provider keeps the old single attempt (and its original error).
+        List<Object> loadParams = watermark != null ? List.of(upperBound) : List.of();
+        WriteStats stats = ctx.getConnectionProvider() == null
+                ? copyRows(sourceConn, targetConn, selectSql, loadParams, table, targetTable,
+                        ctx, null, null, fullLoadBatchSize(ctx), fullLoadFetchSize(ctx),
+                        insertFirst)
+                : copyFullLoadChunk(sourceConn, targetConn, selectSql, loadParams,
+                        table, targetTable, ctx, null, insertFirst).stats();
 
         result.rowsWritten = stats.read;
         applyStats(result, stats);
@@ -1752,7 +1760,9 @@ public class DataSyncService {
                                         String sql, List<Object> params, TableMeta table,
                                         String targetTable, SyncContext ctx, List<String> pkColumns,
                                         boolean insertFirst) throws SQLException {
-        int maxAttempts = 3;
+        // A keyless single-statement load has no checkpoint: one retry is worth a transient
+        // source/proxy reset, but three full scans of a huge table are not.
+        int maxAttempts = pkColumns == null ? 2 : 3;
         for (int attempt = 0; attempt < maxAttempts; attempt++) {
             PkCursor sink = pkColumns == null ? null : new PkCursor();
             Connection src = sourceConn;
@@ -1760,6 +1770,13 @@ public class DataSyncService {
             boolean borrowed = false;
             boolean constraintsToggled = false;
             try {
+                if (attempt > 0) {
+                    // The failed attempt may have left an open transaction on the caller's
+                    // target connection. Roll it back before a fresh connection tries to
+                    // insert the same key range; otherwise it waits on the old locks.
+                    rollbackQuietly(sourceConn);
+                    rollbackQuietly(targetConn);
+                }
                 if (attempt > 0 || src == null || tgt == null) {
                     if (ctx.getConnectionProvider() == null) {
                         throw new SQLException("no connection provider available for a retry");
@@ -1894,6 +1911,19 @@ public class DataSyncService {
             current = current.getCause();
         }
         return false;
+    }
+
+    private static void rollbackQuietly(Connection connection) {
+        if (connection == null) {
+            return;
+        }
+        try {
+            if (!connection.getAutoCommit()) {
+                connection.rollback();
+            }
+        } catch (SQLException | RuntimeException ignored) {
+            // The connection is already broken; the retry borrows a fresh one.
+        }
     }
 
     private static void closeQuietly(Connection connection) {

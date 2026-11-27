@@ -922,7 +922,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
             return null;
         }
         try {
-            return OracleLogMinerDialect.INSTANCE.oldestMineableScn(conn);
+            return MiningDialects.detect(conn).oldestMineableScn(conn);
         } catch (SQLException | RuntimeException e) {
             log.debug("Could not read the source's oldest mineable SCN for the PURGED"
                     + " detail: {}", e.getMessage());

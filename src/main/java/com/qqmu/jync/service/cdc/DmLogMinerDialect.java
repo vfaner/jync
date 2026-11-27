@@ -47,8 +47,14 @@ public final class DmLogMinerDialect implements MiningDialect {
      * would match nothing, forever.
      */
     static final String Q_ARCHIVED_LOGS_SINCE =
+            // DELETED/STATUS matter exactly as they do on Oracle: V$ARCHIVED_LOG keeps a row
+            // after the archive file itself was removed, and ADD_LOGFILE on that path raises
+            // ORA-01291. DM leaves DEST_ID null, so the local copy is selected by these
+            // predicates rather than by destination id.
             "SELECT NAME, THREAD#, SEQUENCE# FROM V$ARCHIVED_LOG"
-                    + " WHERE NEXT_CHANGE# > ? AND NAME IS NOT NULL ORDER BY FIRST_CHANGE#";
+                    + " WHERE NEXT_CHANGE# > ? AND NAME IS NOT NULL"
+                    + " AND NVL(DELETED, 'NO') = 'NO' AND NVL(STATUS, 'A') = 'A'"
+                    + " ORDER BY FIRST_CHANGE#";
 
     /** {@code MAX(NEXT_CHANGE#)} is NULL — nothing is archived, so there is no ceiling yet. */
     static final long NO_HIGH_WATER = -1L;
@@ -119,17 +125,38 @@ public final class DmLogMinerDialect implements MiningDialect {
         }
         try (Statement st = source.createStatement()) {
             for (String path : logfiles) {
-                st.execute("CALL DBMS_LOGMNR.ADD_LOGFILE('" + path.replace("'", "''") + "', "
-                        + OPTION_ADD_LOGFILE + ")");
+                try {
+                    st.execute("CALL DBMS_LOGMNR.ADD_LOGFILE('" + path.replace("'", "''")
+                            + "', " + OPTION_ADD_LOGFILE + ")");
+                } catch (SQLException e) {
+                    // A V$ARCHIVED_LOG row can outlive the file on disk (manual delete,
+                    // archive destination cleanup, or a gap). Name the exact path the
+                    // source refused; the classifier treats this as PURGED, not transient.
+                    throw new SQLException("LogMiner cannot add archive file '" + path
+                            + "' (missing, deleted or not locally accessible on the DM source;"
+                            + " check V$ARCHIVED_LOG/NAME and the archive destination): "
+                            + e.getMessage(), e);
+                }
             }
             // Named arguments are supported on DM8 (measured). Both flags are load-bearing:
             // without DICT_FROM_ONLINE_CATALOG the redo columns come out as "COL 1"…
             // (measured), and without COMMITTED_DATA_ONLY the view carries uncommitted and
             // rolled-back changes.
-            st.execute("CALL DBMS_LOGMNR.START_LOGMNR(startScn => " + startScn
-                    + ", endScn => " + highWaterScn
-                    + ", options => DBMS_LOGMNR.DICT_FROM_ONLINE_CATALOG"
-                    + " + DBMS_LOGMNR.COMMITTED_DATA_ONLY)");
+            try {
+                st.execute("CALL DBMS_LOGMNR.START_LOGMNR(startScn => " + startScn
+                        + ", endScn => " + highWaterScn
+                        + ", options => DBMS_LOGMNR.DICT_FROM_ONLINE_CATALOG"
+                        + " + DBMS_LOGMNR.COMMITTED_DATA_ONLY)");
+            } catch (SQLException e) {
+                // ORA-01291/ORA-01284 here means the SCN chain between the resume point and
+                // the high-water mark is not fully present, even though the files listed by
+                // V$ARCHIVED_LOG were accepted by ADD_LOGFILE. This is source retention or a
+                // gap, not a decode bug; rebuilding without fixing the chain repeats it.
+                throw new SQLException("DM LogMiner cannot start mining at SCN " + startScn
+                        + " (archive chain gap between the resume point and SCN "
+                        + highWaterScn + "; check V$ARCHIVED_LOG continuity, thread and"
+                        + " archive destination): " + e.getMessage(), e);
+            }
         }
     }
 
@@ -157,7 +184,10 @@ public final class DmLogMinerDialect implements MiningDialect {
         return true;
     }
 
-    private static final String Q_OLDEST_MINEABLE_SCN = "SELECT MIN(FIRST_CHANGE#) FROM V$ARCHIVED_LOG";
+    private static final String Q_OLDEST_MINEABLE_SCN =
+            "SELECT MIN(FIRST_CHANGE#) FROM V$ARCHIVED_LOG"
+                    + " WHERE NAME IS NOT NULL AND NVL(DELETED, 'NO') = 'NO'"
+                    + " AND NVL(STATUS, 'A') = 'A'";
 
     /**
      * The lowest SCN that the DM log miner can still mine from — the minimum FIRST_CHANGE#
