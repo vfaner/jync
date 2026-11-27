@@ -438,6 +438,28 @@ public class SyncStateWriter {
         checkpointRepository.deleteByProjectId(projectId);
     }
 
+    /**
+     * Advances a CDC table's last-applied timestamp and cumulative row count. Called from the
+     * change-window flush (not per row), so a busy stream writes one row per table per flush.
+     * The progress row is the one the baseline created; an external baseline cleared it and
+     * deliberately keeps the table's state in the position marker instead.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordCdcTableProgress(Long projectId, String table, long rows, Instant at) {
+        if (rows <= 0) {
+            return;
+        }
+        progressRepository
+                .findByProjectIdAndObjectTypeAndObjectName(projectId, ObjectType.TABLE, table)
+                .ifPresent(progress -> {
+                    long total = progress.getRowsSyncedTotal() == null
+                            ? 0L : progress.getRowsSyncedTotal();
+                    progress.setRowsSyncedTotal(total + rows);
+                    progress.setLastSyncTime(at);
+                    progressRepository.save(progress);
+                });
+    }
+
     /** Clears every cursor and snapshot for a project, forcing a full reload next run. */
     @Transactional
     public void resetProject(Long projectId) {

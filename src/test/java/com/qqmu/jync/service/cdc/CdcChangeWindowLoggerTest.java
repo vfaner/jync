@@ -63,6 +63,7 @@ class CdcChangeWindowLoggerTest {
         assertThat(detail.getValue()).contains("123 upserts", "4 deletes",
                 "through SCN 2112284");
         assertThat(rows.getValue()).isEqualTo(127);
+        verify(stateWriter).recordCdcTableProgress(eq(7L), eq("ORDERS"), eq(127L), any());
 
         // 已交接:到龄再刷不重复写
         clock.set(20_000L);

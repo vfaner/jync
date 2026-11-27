@@ -1,5 +1,6 @@
 package com.qqmu.jync.service.cdc;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -137,6 +138,10 @@ public final class CdcChangeWindowLogger implements AutoCloseable {
                 stateWriter.recordLog(projectId, ObjectType.DATA, change.table(),
                         ChangeType.INFO, detail, true, 0L,
                         (int) Math.min(Integer.MAX_VALUE, total));
+                // The change log is the history; progress is the per-table "last applied"
+                // state the detail page and the AI status tool read.
+                stateWriter.recordCdcTableProgress(projectId, change.table(), total,
+                        Instant.ofEpochMilli(clockMillis.getAsLong()));
             } catch (RuntimeException e) {
                 log.warn("Could not write CDC change window for project {} table {}: {}",
                         projectId, change.table(), e.getMessage());
