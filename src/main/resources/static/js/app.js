@@ -534,6 +534,141 @@
   }
 
   /**
+   * 「全量重灌」：后台任务 + 轮询 + 取消。按钮第一次点击启动任务，任务运行时同一个
+   * 按钮变成「取消重灌」；轮询结束前不刷新页面，页面上的全量进度卡片会自己更新。
+   */
+  function bindTableReload(btn) {
+    var original = btn.innerHTML;
+    var jobId = null;
+    var timer = null;
+    var starting = false;
+
+    function spinner(text) {
+      return '<span class="spin"></span> ' + text;
+    }
+
+    function stopPolling() {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    }
+
+    function restore() {
+      stopPolling();
+      jobId = null;
+      starting = false;
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+
+    function showCancel() {
+      btn.disabled = false;
+      btn.innerHTML = '<svg class="ico"><use href="#x-lg"/></svg><span>'
+          + t('tableReload.cancel') + '</span>';
+    }
+
+    function poll() {
+      if (!jobId) { return; }
+      getJson(btn.dataset.action + '/' + encodeURIComponent(jobId)).then(function (payload) {
+        if (!jobId) { return; }
+        if (!payload.success) {
+          toast(t(payload.message || 'error.table.reload.job.unknown'), 'danger');
+          restore();
+          return;
+        }
+        var job = payload.job || {};
+        if (job.status === 'RUNNING') {
+          showCancel();
+          return;
+        }
+        if (job.status === 'CANCELLING') {
+          btn.disabled = true;
+          btn.innerHTML = spinner(btn.dataset.cancellingText || t('tableReload.cancelling'));
+          return;
+        }
+        stopPolling();
+        jobId = null;
+        if (job.status === 'DONE') {
+          var summary = job.summary ? ' — ' + job.summary : '';
+          toast(t('msg.table.reload.done') + summary, 'ok');
+          setTimeout(function () { window.location.reload(); }, 850);
+          return;
+        }
+        if (job.status === 'CANCELLED') {
+          toast(t('msg.table.reload.cancelled'), 'warn');
+          restore();
+          return;
+        }
+        toast(t(job.message || 'error.table.reload.failed'), 'danger');
+        restore();
+      }).catch(function () {
+        if (!jobId) { return; }
+        toast(t('error.unexpected'), 'danger');
+        restore();
+      });
+    }
+
+    function start() {
+      starting = true;
+      btn.disabled = true;
+      btn.innerHTML = spinner(btn.dataset.runningText || t('tableReload.running'));
+      var url = btn.dataset.action + '?table=' + encodeURIComponent(btn.dataset.table || '');
+      postJson(url, null, false).then(function (payload) {
+        if (!payload.success) {
+          toast(t(payload.message || 'error.table.reload.failed'), 'danger');
+          restore();
+          return;
+        }
+        jobId = payload.jobId;
+        starting = false;
+        toast(t('msg.table.reload.started'), 'ok');
+        showCancel();
+        timer = setInterval(poll, 1000);
+        poll();
+      }).catch(function () {
+        toast(t('error.unexpected'), 'danger');
+        restore();
+      });
+    }
+
+    function cancel() {
+      if (!jobId) { return; }
+      stopPolling();
+      btn.disabled = true;
+      btn.innerHTML = spinner(btn.dataset.cancellingText || t('tableReload.cancelling'));
+      postJson(btn.dataset.action + '/' + encodeURIComponent(jobId) + '/cancel', null, false)
+          .then(function (payload) {
+            if (!payload.success) {
+              toast(t(payload.message || 'error.table.reload.cancelFailed'), 'danger');
+              restore();
+              return;
+            }
+            toast(t('msg.table.reload.cancelling'), 'warn');
+            timer = setInterval(poll, 1000);
+            poll();
+          }).catch(function () {
+            toast(t('error.unexpected'), 'danger');
+            restore();
+          });
+    }
+
+    btn.addEventListener('click', function () {
+      if (starting) { return; }
+      if (jobId) {
+        JyncDialog.confirm(btn.dataset.confirmCancel, cancel);
+        return;
+      }
+      var proceed = function () { JyncDialog.confirm(btn.dataset.confirm, start); };
+      if (configActionBlocked(btn)) {
+        showDirtyChoice(proceed);
+      } else {
+        proceed();
+      }
+    });
+  }
+
+  /**
    * Redis 缓存重建按钮。
    *
    * 与 api-btn 的唯一差别是 sweep 参数：是否先清空本项目前缀下的键，由页面上的
@@ -639,7 +774,7 @@
   }
 
   /** 受未保存配置影响的动作：URL 命中 start / sync-now / cdc-rebaseline 才拦。 */
-  var CONFIG_RUN_ACTION = /\/(start|sync-now|cdc-rebaseline|table-reload)(\?|$)/;
+  var CONFIG_RUN_ACTION = /\/(start|sync-now|cdc-rebaseline|table-reload(?:-job)?)(\?|$)/;
 
   function configActionBlocked(btn) {
     return !!(configForm && configDirty
@@ -5988,6 +6123,7 @@
     document.querySelectorAll('[data-role="preview"]').forEach(bindTablePreview);
     document.querySelectorAll('[data-role="preview-side"]').forEach(bindPreviewSide);
     document.querySelectorAll('[data-role="preview-check-tab"]').forEach(bindPreviewCheckTab);
+    document.querySelectorAll('[data-role="table-reload"]').forEach(bindTableReload);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);

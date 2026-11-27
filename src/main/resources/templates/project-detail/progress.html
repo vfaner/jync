@@ -129,15 +129,17 @@
                         <!--/* 单表全量只在项目停止时出现：运行中重灌会与轮询/CDC 回放
                                双写同一张表。CDC 位点不动，重灌完成后再启动项目即可继续回放。 */-->
                         <button type="button" class="btn btn-ghost btn-xs"
-                                data-role="api-btn"
+                                data-role="table-reload"
                                 th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget
                                          and !project.enabled and !lockHeld and config.syncData
                                          and (config.fanoutTargetDbIds == null
                                               or #lists.isEmpty(config.fanoutTargetDbIds))}"
-                                data-reload="true"
-                                th:attr="data-action=@{/api/projects/{id}/table-reload(id=${project.id},table=${s.name})},
+                                th:attr="data-action=@{/api/projects/{id}/table-reload-job(id=${project.id})},
+                                         data-table=${s.name},
                                          data-confirm=#{tableReload.confirm(${s.name})},
-                                         data-busy-text=#{tableReload.running},
+                                         data-confirm-cancel=#{tableReload.confirmCancel},
+                                         data-running-text=#{tableReload.running},
+                                         data-cancelling-text=#{tableReload.cancelling},
                                          title=#{tableReload.hint}">
                             <svg class="ico"><use href="#arrow-repeat"/></svg>
                             <span th:text="#{tableReload.open}">Reload table</span>

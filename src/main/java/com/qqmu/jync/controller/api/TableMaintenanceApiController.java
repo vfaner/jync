@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.TableMaintenanceService;
+import com.qqmu.jync.service.TableReloadJobService;
 import com.qqmu.jync.service.auth.AccessGuard;
 import com.qqmu.jync.service.task.SyncTaskRunner;
 
@@ -26,11 +28,14 @@ import com.qqmu.jync.service.task.SyncTaskRunner;
 public class TableMaintenanceApiController {
 
     private final TableMaintenanceService tableMaintenanceService;
+    private final TableReloadJobService tableReloadJobService;
     private final ProjectService projectService;
 
     public TableMaintenanceApiController(TableMaintenanceService tableMaintenanceService,
+                                         TableReloadJobService tableReloadJobService,
                                          ProjectService projectService) {
         this.tableMaintenanceService = tableMaintenanceService;
+        this.tableReloadJobService = tableReloadJobService;
         this.projectService = projectService;
     }
 
@@ -75,6 +80,46 @@ public class TableMaintenanceApiController {
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.ok(failure(e.getMessage()));
         }
+    }
+
+    /** Starts a background reload so a large table cannot hold the browser request open. */
+    @PostMapping("/{id}/table-reload-job")
+    public ResponseEntity<Map<String, Object>> startReloadJob(@PathVariable Long id,
+                                                              @RequestParam String table) {
+        projectService.requireEditable(id, AccessGuard.current());
+        String jobId = tableReloadJobService.submit(id, table);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("jobId", jobId);
+        body.put("message", "msg.table.reload.started");
+        return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/{id}/table-reload-job/{jobId}")
+    public ResponseEntity<Map<String, Object>> reloadJob(@PathVariable Long id,
+                                                         @PathVariable String jobId) {
+        projectService.requireEditable(id, AccessGuard.current());
+        return tableReloadJobService.find(id, jobId)
+                .<ResponseEntity<Map<String, Object>>>map(job -> {
+                    Map<String, Object> body = new LinkedHashMap<>();
+                    body.put("success", true);
+                    body.put("job", job);
+                    return ResponseEntity.ok(body);
+                })
+                .orElseGet(() -> ResponseEntity.ok(failure("error.table.reload.job.unknown")));
+    }
+
+    @PostMapping("/{id}/table-reload-job/{jobId}/cancel")
+    public ResponseEntity<Map<String, Object>> cancelReloadJob(@PathVariable Long id,
+                                                               @PathVariable String jobId) {
+        projectService.requireEditable(id, AccessGuard.current());
+        if (!tableReloadJobService.cancel(id, jobId)) {
+            return ResponseEntity.ok(failure("error.table.reload.job.unknown"));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("message", "msg.table.reload.cancelling");
+        return ResponseEntity.ok(body);
     }
 
     private static Map<String, Object> failure(String message) {
