@@ -2763,6 +2763,12 @@
       if (!previewState) { return; }
       loadPreviewCheck();
     });
+    var rows = document.getElementById('preview-check-rows');
+    if (rows) {
+      rows.addEventListener('change', function () {
+        if (btn.classList.contains('is-active')) { loadPreviewCheck(); }
+      });
+    }
   }
 
   function setPreviewTabActive(role, value) {
@@ -2774,6 +2780,10 @@
                   && button.dataset.side === value;
           button.classList.toggle('is-active', active);
         });
+    var rowsWrap = document.getElementById('preview-check-rows-wrap');
+    if (rowsWrap) {
+      rowsWrap.classList.toggle('is-hidden', role !== 'check');
+    }
   }
 
   function loadPreview(side) {
@@ -2827,8 +2837,10 @@
     setPreviewTabActive('check');
 
     var request = ++previewRequest;
-    postJson(previewState.checkAction + '?table=' + encodeURIComponent(previewState.table),
-        null, false).then(function (payload) {
+    var rowsSelect = document.getElementById('preview-check-rows');
+    var rows = rowsSelect ? rowsSelect.value : '50';
+    postJson(previewState.checkAction + '?table=' + encodeURIComponent(previewState.table)
+        + '&rows=' + encodeURIComponent(rows), null, false).then(function (payload) {
       if (request !== previewRequest) { return; }
       if (!payload.success) {
         body.innerHTML = '';
@@ -3141,8 +3153,11 @@
       }
       var row = rows[index++];
       summary.textContent = format(t('batchCheck.progress'), index, rows.length);
+      var rowsSelect = document.getElementById('batch-check-rows');
+      var rowLimit = rowsSelect ? rowsSelect.value : '50';
       var url = modal.dataset.action + '?table='
-          + encodeURIComponent(row.getAttribute('data-table') || '');
+          + encodeURIComponent(row.getAttribute('data-table') || '')
+          + '&rows=' + encodeURIComponent(rowLimit);
       postJson(url, null, false).then(function (payload) {
         if (!running) { return; }
         if (!payload.success) {

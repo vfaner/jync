@@ -229,6 +229,15 @@
                         th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget}"
                         data-role="preview-check-tab"
                         th:text="#{previewCheck.title}">Content check</button>
+                <label id="preview-check-rows-wrap" class="small muted is-hidden"
+                       style="display:inline-flex;align-items:center;gap:6px;margin-left:12px">
+                    <span th:text="#{previewCheck.rows}">Rows</span>
+                    <select id="preview-check-rows" class="input" style="width:auto;padding:3px 8px">
+                        <option value="10">10</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                    </select>
+                </label>
             </div>
         </div>
         <!-- 带参数的文案不进全局字典，随控件走 data-template（同 project.selectedCount）。 -->
@@ -367,6 +376,14 @@
             </table>
         </div>
         <div class="modal-actions">
+            <label class="small muted" style="display:flex;align-items:center;gap:6px;margin-right:auto">
+                <span th:text="#{previewCheck.rows}">Rows</span>
+                <select id="batch-check-rows" class="input" style="width:auto;padding:3px 8px">
+                    <option value="10">10</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                </select>
+            </label>
             <button type="button" class="btn btn-primary btn-sm" id="batch-check-start"
                     th:text="#{batchCheck.start}">Start</button>
             <button type="button" class="btn btn-ghost btn-sm is-hidden" id="batch-check-stop"

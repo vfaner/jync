@@ -185,6 +185,16 @@ class TablePreviewServiceTest {
     }
 
     @Test
+    void previewCheckHonoursTheSelectedRowBudget() throws SQLException {
+        createOrders(5);
+
+        TablePreviewCheck check = service.checkPreview(1L, "orders", 2);
+
+        assertThat(check.sampledRows()).isEqualTo(2);
+        assertThat(check.matchedRows()).isEqualTo(2);
+    }
+
+    @Test
     void previewCheckReportsExtraTargetRowsAsDifferencesNotMissingRows() throws SQLException {
         createOrders(2);
         try (Connection targetDb = DriverManager.getConnection(

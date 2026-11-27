@@ -54,9 +54,11 @@ public class PreviewApiController {
     /** First-ten-rows / column-count check behind the preview modal's third tab. */
     @PostMapping("/{id}/preview-check")
     public ResponseEntity<Map<String, Object>> check(@PathVariable Long id,
-                                                     @RequestParam String table) {
+                                                     @RequestParam String table,
+                                                     @RequestParam(defaultValue = "50")
+                                                     int rows) {
         projectService.requireEditable(id, AccessGuard.current());
-        TablePreviewCheck check = tablePreviewService.checkPreview(id, table);
+        TablePreviewCheck check = tablePreviewService.checkPreview(id, table, rows);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("previewCheck", check);

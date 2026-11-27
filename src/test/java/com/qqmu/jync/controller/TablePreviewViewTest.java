@@ -163,6 +163,7 @@ class TablePreviewViewTest {
         assertThat(html).contains("id=\"batch-check-modal\"");
         assertThat(html).contains("data-role=\"batch-check-row\"");
         assertThat(html).contains("data-action=\"/api/projects/1/preview-check\"");
+        assertThat(html).contains("id=\"batch-check-rows\"");
         assertThat(html).contains(">Batch check</span>");
     }
 
@@ -172,6 +173,7 @@ class TablePreviewViewTest {
 
         assertThat(html).contains("data-role=\"preview-check-tab\"");
         assertThat(html).contains("data-check-action=\"/api/projects/1/preview-check\"");
+        assertThat(html).contains("id=\"preview-check-rows\"");
         assertThat(html).contains(">Content check</button>");
         assertThat(html).doesNotContain("data-role=\"content-audit\"");
         assertThat(html).doesNotContain("id=\"content-audit-modal\"");

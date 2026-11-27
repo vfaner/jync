@@ -124,8 +124,14 @@ public class TablePreviewService {
      * matches exactly what the operator sees and never opens a second query shape.
      */
     public TablePreviewCheck checkPreview(Long projectId, String tableName) {
+        return checkPreview(projectId, tableName, PREVIEW_CHECK_ROWS);
+    }
+
+    /** Same check with a caller-selected row budget, clamped to the preview page size. */
+    public TablePreviewCheck checkPreview(Long projectId, String tableName, int rows) {
         long started = System.currentTimeMillis();
         String table = tableName == null ? "?" : tableName.trim();
+        int rowBudget = Math.max(1, Math.min(ROW_LIMIT, rows));
         try {
             TablePreview source = preview(projectId, table, Side.SOURCE);
             TablePreview target = preview(projectId, table, Side.TARGET);
@@ -142,7 +148,7 @@ public class TablePreviewService {
                         columnCountMatch ? "unordered" : "column-count",
                         System.currentTimeMillis() - started);
             }
-            return comparePreviews(table, source, target, started);
+            return comparePreviews(table, source, target, rowBudget, started);
         } catch (RuntimeException e) {
             log.debug("Preview check failed for '{}' of project {}: {}",
                     table, projectId, e.toString());
@@ -159,13 +165,14 @@ public class TablePreviewService {
     private static final int PREVIEW_CHECK_ROWS = 50;
 
     private TablePreviewCheck comparePreviews(String table, TablePreview source,
-                                               TablePreview target, long started) {
+                                               TablePreview target, int rowBudget,
+                                               long started) {
         int sourceColumns = source.columns().size();
         int targetColumns = target.columns().size();
         boolean columnCountMatch = sourceColumns == targetColumns;
         List<List<String>> sourceRows = source.rows();
         List<List<String>> targetRows = target.rows();
-        int rowsToCompare = Math.min(PREVIEW_CHECK_ROWS,
+        int rowsToCompare = Math.min(rowBudget,
                 Math.max(sourceRows.size(), targetRows.size()));
         // Match by column name, not position: a target created by an earlier version may
         // have the same columns in a different order, which is not a content difference.

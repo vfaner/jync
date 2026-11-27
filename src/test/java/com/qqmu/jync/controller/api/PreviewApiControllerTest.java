@@ -73,7 +73,7 @@ class PreviewApiControllerTest {
 
     @Test
     void returnsTheFirstTenRowsCheckPayload() throws Exception {
-        when(tablePreviewService.checkPreview(1L, "orders")).thenReturn(
+        when(tablePreviewService.checkPreview(1L, "orders", 50)).thenReturn(
                 new TablePreviewCheck("orders", TablePreviewCheck.Status.MISMATCH,
                         2, 3, false, 2, 1, 1, 0, List.of("NAME"), "column-count", 9L));
 
