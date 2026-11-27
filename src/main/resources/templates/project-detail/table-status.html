@@ -84,14 +84,9 @@
     <span class="badge badge-info" th:if="${s.fullLoadPercent != null}"
           th:title="#{tablesync.percentHint}"
           th:text="${'~' + s.fullLoadPercent + '%'}">~0%</span>
-    <th:block th:if="${s.rowsCopied != null}">
-        <span th:text="#{tablesync.copied(${s.rowsCopied ?: 0})}">rows</span>
-        <span class="small muted" th:if="${s.lastUpdatedAt != null}"
-              th:text="${#temporals.format(s.lastUpdatedAt, 'MM-dd HH:mm:ss')}">time</span>
-    </th:block>
-    <span th:if="${s.rowsCopied == null and s.state.name() == 'IN_PROGRESS'}"
+    <span th:if="${s.fullLoadPercent == null and s.state.name() == 'IN_PROGRESS'}"
           class="small muted" th:text="#{tablesync.loading}">Loading…</span>
-    <span th:if="${s.rowsCopied == null and s.state.name() != 'IN_PROGRESS'}"
+    <span th:if="${s.fullLoadPercent == null and s.state.name() != 'IN_PROGRESS'}"
           class="muted" th:text="#{tablesync.noActive}">—</span>
 </td>
 </body>
