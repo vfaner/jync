@@ -7,7 +7,13 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.stereotype.Service;
@@ -15,7 +21,9 @@ import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.dto.TablePreviewCheck;
 import com.qqmu.jync.dto.TableRowCount;
+import com.qqmu.jync.dto.meta.TableMeta;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
@@ -99,14 +107,151 @@ public class TablePreviewService {
             String requested = side == Side.TARGET
                     ? parseConfig(project).targetTableName(table) : table;
             String actualTable = resolveTableName(conn, reader, schema, requested);
-            return read(conn, dialect, schema, actualTable, config.getName(), side, started,
-                    config.effectiveType());
+            List<String> primaryKeys = primaryKeys(conn, reader, schema, actualTable);
+            return read(conn, dialect, schema, actualTable, primaryKeys, config.getName(),
+                    side, started, config.effectiveType());
         } catch (SQLException e) {
             // Keep driver detail server-side; the browser only resolves the key.
             log.debug("Cannot preview '{}' on the {} side of project '{}': {}",
                     table, side, project.getName(), e.toString());
             throw new IllegalStateException("error.preview.read.failed", e);
         }
+    }
+
+    /**
+     * Quick content check for the preview modal: compare the first ten displayed rows and
+     * the two column counts. It deliberately reuses the preview path, so the comparison
+     * matches exactly what the operator sees and never opens a second query shape.
+     */
+    public TablePreviewCheck checkPreview(Long projectId, String tableName) {
+        long started = System.currentTimeMillis();
+        String table = tableName == null ? "?" : tableName.trim();
+        try {
+            TablePreview source = preview(projectId, table, Side.SOURCE);
+            TablePreview target = preview(projectId, table, Side.TARGET);
+            boolean columnCountMatch = source.columns().size() == target.columns().size();
+            if (!source.orderedByPrimaryKey() || !target.orderedByPrimaryKey()) {
+                // Without a primary key the two databases may return the same rows in
+                // different physical order. Comparing by position would then invent drift;
+                // the column counts are still meaningful.
+                return new TablePreviewCheck(table, columnCountMatch
+                        ? TablePreviewCheck.Status.SKIPPED
+                        : TablePreviewCheck.Status.MISMATCH,
+                        source.columns().size(), target.columns().size(), columnCountMatch,
+                        0, 0, 0, 0, List.of(),
+                        columnCountMatch ? "unordered" : "column-count",
+                        System.currentTimeMillis() - started);
+            }
+            return comparePreviews(table, source, target, started);
+        } catch (RuntimeException e) {
+            log.debug("Preview check failed for '{}' of project {}: {}",
+                    table, projectId, e.toString());
+            String message = e.getMessage();
+            // Known refusals are i18n keys the browser can resolve; a driver/config message
+            // is server-side detail and must not be shown in the modal.
+            String detail = message != null && message.startsWith("error.")
+                    ? message : "error.preview.check.failed";
+            return TablePreviewCheck.error(table, detail, System.currentTimeMillis() - started);
+        }
+    }
+
+    /** Rows compared by the quick check; matches the preview's first page, not the full audit. */
+    private static final int PREVIEW_CHECK_ROWS = 50;
+
+    private TablePreviewCheck comparePreviews(String table, TablePreview source,
+                                               TablePreview target, long started) {
+        int sourceColumns = source.columns().size();
+        int targetColumns = target.columns().size();
+        boolean columnCountMatch = sourceColumns == targetColumns;
+        List<List<String>> sourceRows = source.rows();
+        List<List<String>> targetRows = target.rows();
+        int rowsToCompare = Math.min(PREVIEW_CHECK_ROWS,
+                Math.max(sourceRows.size(), targetRows.size()));
+        // Match by column name, not position: a target created by an earlier version may
+        // have the same columns in a different order, which is not a content difference.
+        Map<String, Integer> targetIndexes = new HashMap<>();
+        for (int i = 0; i < target.columns().size(); i++) {
+            targetIndexes.put(target.columns().get(i).toUpperCase(Locale.ROOT), i);
+        }
+        int compared = 0;
+        int matched = 0;
+        int mismatched = 0;
+        int missing = 0;
+        Set<String> mismatchColumns = new LinkedHashSet<>();
+        for (int row = 0; row < rowsToCompare; row++) {
+            if (row >= sourceRows.size()) {
+                // Extra target rows are a difference, not "the target is missing rows".
+                mismatched++;
+                continue;
+            }
+            if (row >= targetRows.size()) {
+                missing++;
+                mismatched++;
+                continue;
+            }
+            compared++;
+            List<String> left = sourceRows.get(row);
+            List<String> right = targetRows.get(row);
+            boolean differs = false;
+            for (int column = 0; column < sourceColumns; column++) {
+                Integer targetColumn = targetIndexes.get(
+                        source.columns().get(column).toUpperCase(Locale.ROOT));
+                if (targetColumn == null) {
+                    continue;                           // covered by the column-count verdict
+                }
+                if (!Objects.equals(comparablePreviewValue(left.get(column)),
+                        comparablePreviewValue(right.get(targetColumn)))) {
+                    differs = true;
+                    mismatchColumns.add(source.columns().get(column));
+                }
+            }
+            if (differs) {
+                mismatched++;
+            } else {
+                matched++;
+            }
+        }
+        TablePreviewCheck.Status status;
+        String detail = null;
+        if (rowsToCompare == 0) {
+            status = TablePreviewCheck.Status.SKIPPED;
+            detail = "no-rows";
+        } else if (!columnCountMatch) {
+            status = TablePreviewCheck.Status.MISMATCH;
+            detail = "column-count";
+        } else if (mismatched > 0 || missing > 0) {
+            status = TablePreviewCheck.Status.MISMATCH;
+            detail = missing > 0 ? "missing-rows" : null;
+        } else {
+            status = TablePreviewCheck.Status.OK;
+        }
+        return new TablePreviewCheck(table, status, sourceColumns, targetColumns,
+                columnCountMatch, rowsToCompare, matched, mismatched, missing,
+                List.copyOf(mismatchColumns), detail, System.currentTimeMillis() - started);
+    }
+
+    /**
+     * The two drivers spell the same value differently: Oracle renders TIMESTAMP fractions
+     * as ".0" where MySQL omits them, and a DATE can come back as midnight. A quick check
+     * should compare the value, not the driver's formatting.
+     */
+    private static String comparablePreviewValue(String value) {
+        if (value == null) {
+            return null;
+        }
+        String normalized = value.stripTrailing();
+        // Only normalise values that actually look numeric or temporal. Applying the
+        // ".0"/midnight rewrite to arbitrary text would hide a real difference such as
+        // "release-1.0" vs "release-1".
+        if (normalized.matches("[-+]?\\d+(\\.\\d+)?")) {
+            return normalized.replaceFirst("\\.0+$", "");
+        }
+        if (normalized.matches("\\d{4}-\\d{2}-\\d{2}"
+                + "([ T]\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?)?")) {
+            normalized = normalized.replaceFirst("\\.0+$", "");
+            normalized = normalized.replaceFirst(" 00:00:00$", "");
+        }
+        return normalized;
     }
 
     /**
@@ -192,7 +337,7 @@ public class TablePreviewService {
                 return failed(TableRowCount.Status.TIMEOUT, started);
             }
             String sql = "SELECT COUNT(*) FROM " + dialect.qualify(schema, actualTable);
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
                 control.register(ps);
                 try {
                     if (control.isCancelled()) {
@@ -246,11 +391,25 @@ public class TablePreviewService {
     }
 
     private TablePreview read(Connection conn, SqlDialect dialect, String schema, String table,
-                              String connectionName, Side side, long started,
-                              DatabaseType sourceType)
+                              List<String> primaryKeys, String connectionName, Side side,
+                              long started, DatabaseType sourceType)
             throws SQLException {
-        String sql = "SELECT * FROM " + dialect.qualify(schema, table);
-        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+        // Both sides must show the same rows in the same order. Without an explicit ORDER BY,
+        // MySQL often returns primary-key order through its clustered index while Oracle
+        // returns whatever the scan finds, so the two previews look unrelated even when the
+        // data matches. Ordering by the primary key is portable and index-backed.
+        StringBuilder sql = new StringBuilder("SELECT * FROM ")
+                .append(dialect.qualify(schema, table));
+        if (primaryKeys != null && !primaryKeys.isEmpty()) {
+            sql.append(" ORDER BY ");
+            for (int i = 0; i < primaryKeys.size(); i++) {
+                if (i > 0) {
+                    sql.append(", ");
+                }
+                sql.append(dialect.quoteIdentifier(primaryKeys.get(i)));
+            }
+        }
+        try (PreparedStatement ps = conn.prepareStatement(sql.toString())) {
             // LIMIT is not portable across every supported product; setMaxRows is.
             ps.setMaxRows(ROW_LIMIT + 1);
             JdbcUtil.applyQueryTimeout(ps, PREVIEW_TIMEOUT_SECONDS);
@@ -274,8 +433,25 @@ public class TablePreviewService {
                 // the preview took, and computing it before the SELECT reported ~0 ms.
                 return new TablePreview(side.name().toLowerCase(java.util.Locale.ROOT),
                         connectionName, schema, table, columns, rows, truncated,
-                        System.currentTimeMillis() - started);
+                        System.currentTimeMillis() - started,
+                        primaryKeys != null && !primaryKeys.isEmpty());
             }
+        }
+    }
+
+    /**
+     * Primary-key columns used to order both previews. A view has none, and a reader that
+     * cannot answer falls back to the database's natural order instead of failing the preview.
+     */
+    private List<String> primaryKeys(Connection conn, MetadataReader reader, String schema,
+                                     String table) {
+        try {
+            TableMeta meta = reader.readTable(conn, schema, table);
+            return meta == null || meta.getPrimaryKeys() == null
+                    ? List.of() : meta.getPrimaryKeys();
+        } catch (SQLException | RuntimeException e) {
+            log.debug("Cannot read primary key for preview of '{}': {}", table, e.toString());
+            return List.of();
         }
     }
 

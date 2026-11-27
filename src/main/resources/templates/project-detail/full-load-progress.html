@@ -2,8 +2,8 @@
 <html xmlns:th="http://www.thymeleaf.org">
 <body>
 <!--/* Hidden polling carrier for the merged progress card. The 2-second endpoint returns
-       this fragment; app.js copies the two summary panels and the five read-only status
-       cells (strategy/cursor plus the four states) into the visible row, leaving cursor
+       this fragment; app.js copies the two summary panels and the six read-only status
+       cells (strategy/cursor, the four states and rows synced) into the visible row, leaving cursor
        inputs and action buttons untouched. */-->
 <div th:fragment="missing"></div>
 
@@ -26,6 +26,7 @@
                 <th:block th:replace="~{project-detail/table-status :: fullState(${s})}"/>
                 <th:block th:replace="~{project-detail/table-status :: incState(${s})}"/>
                 <th:block th:replace="~{project-detail/table-status :: lastSync(${s})}"/>
+                <th:block th:replace="~{project-detail/table-status :: rowsSynced(${s})}"/>
                 <th:block th:replace="~{project-detail/table-status :: fullProgress(${s})}"/>
             </tr>
         </th:block>

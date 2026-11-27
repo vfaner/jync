@@ -147,13 +147,51 @@ public class SyncTaskRunner {
                 selfServeQueuedRerun(projectId);
                 return Outcome.queued();
             }
-            result = execute(project, lock);
+            result = execute(project, lock, null);
         }
         // 队列检查必须排在锁释放之后。持锁时检查的话，"检查为空 → 释放锁"这个窗口里到达的
         // 请求 tryAcquire 失败、入队，却再没有持锁者来消费它——条目会一直残留到该项目
         // 下一次运行时被幽灵触发（对手动项目可能是很久以后）。
         startQueuedRerun(projectId);
         return Outcome.executed(result);
+    }
+
+    /**
+     * Runs one cycle restricted to a single selected table, resetting only that table's
+     * progress so it is loaded from scratch. The project must still be stopped when the lock
+     * is taken: a start racing the click must win, because a live consumer would write the
+     * same rows while this cycle reloads them.
+     *
+     * <p>Unlike {@link #runOnce(Long)}, a busy lock is reported rather than queued. The
+     * operator asked for one specific table and will restart the project afterwards; silently
+     * folding the click into a scheduled full cycle would do much more work than requested.
+     */
+    public Outcome runTableReload(Long projectId, String tableName) {
+        if (tableName == null || tableName.isBlank()) {
+            throw new IllegalArgumentException("error.table.reload.tableRequired");
+        }
+        Optional<Project> maybeProject = projectRepository.findById(projectId);
+        if (maybeProject.isEmpty()) {
+            log.warn("Table reload requested for project {}, which no longer exists", projectId);
+            return Outcome.noProject();
+        }
+        taskStore.ensureTask(maybeProject.get());
+        try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
+            if (lock == null) {
+                return Outcome.busy();
+            }
+            // Re-read under the lock: the project may have been started after the caller's
+            // first check. The durable enabled flag is the same one every node consults.
+            Project current = projectRepository.findById(projectId).orElse(null);
+            if (current == null) {
+                return Outcome.noProject();
+            }
+            if (Boolean.TRUE.equals(current.getEnabled())) {
+                throw new IllegalStateException("error.table.reload.stopFirst");
+            }
+            SyncResult result = execute(current, lock, Set.of(tableName));
+            return Outcome.executed(result);
+        }
     }
 
     /**
@@ -260,7 +298,7 @@ public class SyncTaskRunner {
                 selfServeQueuedRerun(projectId);
                 return;
             }
-            execute(project, lock);
+            execute(project, lock, null);
             rerunAttempts.remove(projectId);
         }
         // A rerun is a holder too: a click that arrived while ITS cycle ran was coalesced
@@ -326,7 +364,8 @@ public class SyncTaskRunner {
         rerunExecutor.shutdown();
     }
 
-    private SyncResult execute(Project project, SyncLockService.LockHandle lock) {
+    private SyncResult execute(Project project, SyncLockService.LockHandle lock,
+                               Set<String> repairTables) {
         if (!poolActivity.tryEnter(project.getSourceDbId(), project.getTargetDbId())) {
             // The configuration already seats as many cycles as its pool can hold. Refusing
             // here costs nothing — no connection, no task row — and the next fire tries
@@ -338,13 +377,14 @@ public class SyncTaskRunner {
             return deferred;
         }
         try {
-            return runAdmittedCycle(project, lock);
+            return runAdmittedCycle(project, lock, repairTables);
         } finally {
             poolActivity.leave(project.getSourceDbId(), project.getTargetDbId());
         }
     }
 
-    private SyncResult runAdmittedCycle(Project project, SyncLockService.LockHandle lock) {
+    private SyncResult runAdmittedCycle(Project project, SyncLockService.LockHandle lock,
+                                        Set<String> repairTables) {
         long start = System.currentTimeMillis();
         // Snapshot BEFORE the cycle does any work: a stop that lands after this point aborts
         // this run, while one that landed before it belongs to whatever ran previously.
@@ -371,6 +411,17 @@ public class SyncTaskRunner {
             // The stop signal rides along too, checked at those same safe points.
             ctx = contextFactory.build(project, lock.owner(), lock::renew,
                     () -> stopEpoch(project.getId()) != stopEpoch);
+            if (repairTables != null) {
+                // The engine's targeted-repair mode is exactly a one-table reload: only the
+                // named table is read, its progress/cursor is reset, and structure diffs,
+                // deletion scans and snapshots are left for a normal cycle. A CDC position is
+                // owned by the consumer and is untouched here.
+                ctx = ctx.toBuilder()
+                        .repairTables(repairTables)
+                        .cdcRepairRun(true)
+                        .forceTruncateBeforeLoad(true)
+                        .build();
+            }
             result = syncEngine.runCycle(ctx);
         } catch (IllegalStateException e) {
             // Configuration problems — missing endpoint, unreachable database — land here.

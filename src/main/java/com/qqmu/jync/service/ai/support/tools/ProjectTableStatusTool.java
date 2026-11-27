@@ -54,8 +54,9 @@ public class ProjectTableStatusTool implements SupportTool {
                 + "IN_PROGRESS (full load has checkpoints, loading or resumable), INCOMPLETE "
                 + "(progress exists but the initial load never finished), NOT_STARTED (selected "
                 + "but no progress yet), incrementalState (RUNNING/PAUSED/ERROR/LIMITED/"
-                + "WAITING), plus rows changed, last sync time and the current "
-                + "full-load rows copied. Optional table (case-insensitive substring) and state "
+                + "WAITING), plus rows changed, last sync time, the current full-load rows "
+                + "copied, and externalBaseline (the table was seeded by an adopted external "
+                + "dump, not a Jync full load). Optional table (case-insensitive substring) and state "
                 + "filters. Cheap metadata read. projectId comes from list_projects.";
     }
 
@@ -185,6 +186,7 @@ public class ProjectTableStatusTool implements SupportTool {
         out.put("lastSyncTime", row.lastSyncTime() == null
                 ? null : row.lastSyncTime().toString());
         out.put("fullLoadRowsCopied", row.rowsCopied());
+        out.put("externalBaseline", row.externalBaseline());
         out.put("fullLoadUpdatedAt", row.lastUpdatedAt() == null
                 ? null : row.lastUpdatedAt().toString());
         if (row.targetsTotal() != null) {

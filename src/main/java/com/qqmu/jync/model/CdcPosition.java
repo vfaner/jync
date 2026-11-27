@@ -1,6 +1,10 @@
 package com.qqmu.jync.model;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -114,6 +118,23 @@ public class CdcPosition {
     @Column(name = "baseline_done", nullable = false)
     private Boolean baselineDone = false;
 
+    /**
+     * Source tables covered by an external consistent dump, one name per line; {@code *} means
+     * every table the project selected when the dump was adopted. Null for a baseline Jync
+     * loaded itself and for rows written before this column existed.
+     *
+     * <p>The table list, not only {@code baselineDone}, is what lets the detail page tell an
+     * externally seeded table apart from one Jync streamed. A table added after the dump was
+     * taken is not in the list and keeps the ordinary "not started / loading" state until
+     * Jync actually loads it.
+     */
+    @Lob
+    @Column(name = "external_baseline_tables", length = Integer.MAX_VALUE)
+    private String externalBaselineTables;
+
+    /** Sentinel stored in {@link #externalBaselineTables} for an all-tables selection. */
+    public static final String EXTERNAL_ALL_TABLES = "*";
+
     @Column(name = "updated_at")
     private Instant updatedAt = Instant.now();
 
@@ -128,5 +149,67 @@ public class CdcPosition {
      */
     public Boolean isBaselineDone() {
         return baselineDone;
+    }
+
+    /** Replaces the external-dump table scope; null/empty clears the marker. */
+    public void setExternalBaselineTableNames(Collection<String> tableNames) {
+        if (tableNames == null || tableNames.isEmpty()) {
+            externalBaselineTables = null;
+            return;
+        }
+        Set<String> unique = new LinkedHashSet<>();
+        for (String name : tableNames) {
+            if (name != null && !name.isBlank()) {
+                unique.add(name.trim());
+            }
+        }
+        externalBaselineTables = unique.isEmpty() ? null : String.join("\n", unique);
+    }
+
+    /** True when this position records an externally seeded baseline. */
+    public boolean hasExternalBaseline() {
+        return externalBaselineTables != null && !externalBaselineTables.isBlank();
+    }
+
+    /** True when the dump covered every table selected at adoption time. */
+    public boolean externalBaselineIsAllTables() {
+        return hasExternalBaseline()
+                && EXTERNAL_ALL_TABLES.equals(externalBaselineTables.trim());
+    }
+
+    /** Explicit table names covered by the dump; empty for the all-tables sentinel. */
+    public Set<String> externalBaselineTableNames() {
+        if (!hasExternalBaseline() || externalBaselineIsAllTables()) {
+            return Set.of();
+        }
+        Set<String> names = new LinkedHashSet<>();
+        for (String name : externalBaselineTables.split("\\R")) {
+            if (!name.isBlank()) {
+                names.add(name.trim());
+            }
+        }
+        return names;
+    }
+
+    /** Whether the external dump covered this source table (case-insensitive). */
+    public boolean externalBaselineCovers(String tableName) {
+        if (!hasExternalBaseline() || tableName == null) {
+            return false;
+        }
+        if (externalBaselineIsAllTables()) {
+            return true;
+        }
+        String wanted = tableName.trim().toUpperCase(Locale.ROOT);
+        for (String name : externalBaselineTables.split("\\R")) {
+            if (name.trim().toUpperCase(Locale.ROOT).equals(wanted)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Clears the external-dump marker when Jync takes over with a normal baseline/reload. */
+    public void clearExternalBaseline() {
+        externalBaselineTables = null;
     }
 }

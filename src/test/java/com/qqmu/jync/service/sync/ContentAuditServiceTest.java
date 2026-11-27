@@ -135,6 +135,24 @@ class ContentAuditServiceTest {
     }
 
     @Test
+    void anEmptyTableIsSkippedInsteadOfReportedConsistent() throws SQLException {
+        TableContentAudit result = auditNow("1");
+
+        assertThat(result.status()).isEqualTo(Status.SKIPPED);
+        assertThat(result.detail()).isEqualTo("no-samples");
+    }
+
+    @Test
+    void aCursorRangeWithNoRowsIsSkippedInsteadOfReportedConsistent() throws SQLException {
+        insert(source, 5, "above-bound", true);
+
+        TableContentAudit result = auditNow("1");
+
+        assertThat(result.status()).isEqualTo(Status.SKIPPED);
+        assertThat(result.detail()).isEqualTo("no-samples");
+    }
+
+    @Test
     void missingTargetSampledRowCountsAsMismatch() throws SQLException {
         insert(source, 1, "a", true);
         insert(source, 2, "b", true);

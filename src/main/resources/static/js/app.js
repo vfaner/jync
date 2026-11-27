@@ -639,7 +639,7 @@
   }
 
   /** 受未保存配置影响的动作：URL 命中 start / sync-now / cdc-rebaseline 才拦。 */
-  var CONFIG_RUN_ACTION = /\/(start|sync-now|cdc-rebaseline)(\?|$)/;
+  var CONFIG_RUN_ACTION = /\/(start|sync-now|cdc-rebaseline|table-reload)(\?|$)/;
 
   function configActionBlocked(btn) {
     return !!(configForm && configDirty
@@ -2483,117 +2483,6 @@
     });
   }
 
-  /* ─── 内容校验 ──────────────────────────────────────────── */
-
-  /**
-   * 「内容校验」：按主键抽样比对源/目标的行值，只报告差异，不修复目标表。
-   *
-   * 每次只校验按钮所在行的一张表；接口是 POST（会读两侧数据库的行值），走 postJson
-   * 自动带 CSRF。表名、列名、原因全部经 textContent 写入。
-   */
-  function bindContentAudit(btn) {
-    var modal = document.getElementById('content-audit-modal');
-    var body = document.getElementById('content-audit-body');
-    var summary = document.getElementById('content-audit-summary');
-    var subject = document.getElementById('content-audit-subject');
-    if (!modal || !body || !btn.dataset.action) { return; }
-    var busy = false;
-
-    function reasonText(detail) {
-      if (!detail) { return ''; }
-      var key = 'contentAudit.reason.' + detail;
-      var text = t(key);
-      return text === key ? detail : text;
-    }
-
-    function statusClass(status) {
-      if (status === 'OK') { return 'badge badge-ok'; }
-      if (status === 'MISMATCH') { return 'badge badge-warn'; }
-      if (status === 'ERROR') { return 'badge badge-danger'; }
-      return 'badge badge-mute';
-    }
-
-    function addRow(tbody, label, value) {
-      var tr = document.createElement('tr');
-      var th = document.createElement('th');
-      th.textContent = t(label);
-      var td = document.createElement('td');
-      td.textContent = value == null ? '' : String(value);
-      tr.appendChild(th);
-      tr.appendChild(td);
-      tbody.appendChild(tr);
-    }
-
-    function format(template, values) {
-      var text = template || '';
-      values.forEach(function (value, index) {
-        text = text.replace('{' + index + '}', value == null ? 0 : value);
-      });
-      return text;
-    }
-
-    function render(result, message) {
-      body.innerHTML = '';
-      if (!result) {
-        summary.textContent = message || t('contentAudit.status.ERROR');
-        return;
-      }
-      var table = document.createElement('table');
-      table.className = 'tbl dense';
-      var tbody = document.createElement('tbody');
-
-      var resultRow = document.createElement('tr');
-      var resultTh = document.createElement('th');
-      resultTh.textContent = t('contentAudit.result');
-      var resultTd = document.createElement('td');
-      var badge = document.createElement('span');
-      badge.className = statusClass(result.status);
-      badge.textContent = t('contentAudit.status.' + (result.status || 'ERROR'));
-      resultTd.appendChild(badge);
-      resultRow.appendChild(resultTh);
-      resultRow.appendChild(resultTd);
-      tbody.appendChild(resultRow);
-
-      if (result.status === 'OK' || result.status === 'MISMATCH') {
-        addRow(tbody, 'contentAudit.summary', format(t('contentAudit.summary'), [
-          result.sampled, result.matched, result.mismatched, result.missingOnTarget]));
-        if (result.mismatchColumns && result.mismatchColumns.length) {
-          addRow(tbody, 'contentAudit.columns', result.mismatchColumns.join(', '));
-        }
-        addRow(tbody, 'contentAudit.skippedColumns', result.skippedColumns || 0);
-      } else {
-        addRow(tbody, 'contentAudit.detail', reasonText(result.detail));
-      }
-      table.appendChild(tbody);
-      body.appendChild(table);
-      summary.textContent = t('contentAudit.status.' + (result.status || 'ERROR'))
-          + ' · ' + (result.elapsedMs || 0) + ' ms';
-    }
-
-    btn.addEventListener('click', function () {
-      if (busy) { return; }
-      busy = true;
-      btn.disabled = true;
-      if (subject) { subject.textContent = btn.dataset.table || ''; }
-      body.innerHTML = '';
-      if (summary) { summary.textContent = t('contentAudit.running'); }
-      setModalOpen('content-audit-modal', true);
-      var url = btn.dataset.action + '?table=' + encodeURIComponent(btn.dataset.table || '');
-      postJson(url, null, false).then(function (payload) {
-        if (!payload.success) {
-          render(null, t(payload.message || 'error.unexpected'));
-          return;
-        }
-        render(payload.contentAudit || null, null);
-      }).catch(function () {
-        render(null, t('error.unexpected'));
-      }).then(function () {
-        busy = false;
-        btn.disabled = false;
-      });
-    });
-  }
-
   /**
    * 同步前检查：模态框里的「运行检查」调用只读预检接口，按严重级别分组渲染。
    * 结果里的 detail 来自库表名/错误文本，一律用 textContent 写入，不拼 HTML。
@@ -2707,41 +2596,184 @@
     if (runBtn) { runBtn.addEventListener('click', run); }
   }
 
+  /** Current preview target: one row button opens the modal; tabs reload only its body. */
+  var previewState = null;
+  /** Latest preview request; a slower earlier response must not overwrite a newer tab. */
+  var previewRequest = 0;
+
   function bindTablePreview(btn) {
     btn.addEventListener('click', function () {
-      var side = btn.dataset.side === 'target' ? 'target' : 'source';
       var action = btn.dataset.action;
-      var body = document.getElementById('preview-body');
-      if (!action || !body) { return; }
-
-      var url = action + '?table=' + encodeURIComponent(btn.dataset.table || '')
-              + '&side=' + encodeURIComponent(side);
-      var title = document.getElementById('preview-title');
-      var meta = document.getElementById('preview-meta');
-      if (title) {
-        title.textContent = t('preview.title') + ' · ' + (btn.dataset.table || '');
-      }
-      if (meta) { meta.textContent = ''; }
-      body.innerHTML = '';
-      body.appendChild(textBlock(t('preview.loading')));
+      if (!action) { return; }
+      previewState = {
+        action: action,
+        checkAction: btn.dataset.checkAction || '',
+        table: btn.dataset.table || ''
+      };
+      previewRequest++;
       setModalOpen('preview-modal', true);
-
-      getJson(url).then(function (payload) {
-        if (!payload.success) {
-          body.innerHTML = '';
-          body.appendChild(textBlock(t(payload.message || 'error.unexpected'),
-              'alert alert-danger'));
-          return;
-        }
-        renderPreview(payload.preview);
-      }).catch(function () {
-        // getJson() only normalizes 401 and non-JSON responses; a fetch rejection (the
-        // server went away mid-request) still lands here. Without this the modal stays on
-        // "Loading..." forever.
-        body.innerHTML = '';
-        body.appendChild(textBlock(t('error.unexpected'), 'alert alert-danger'));
-      });
+      loadPreview('source');
     });
+  }
+
+  function bindPreviewSide(btn) {
+    btn.addEventListener('click', function () {
+      if (!previewState) { return; }
+      loadPreview(btn.dataset.side === 'target' ? 'target' : 'source');
+    });
+  }
+
+  function bindPreviewCheckTab(btn) {
+    btn.addEventListener('click', function () {
+      if (!previewState) { return; }
+      loadPreviewCheck();
+    });
+  }
+
+  function setPreviewTabActive(role, value) {
+    document.querySelectorAll('[data-role="preview-side"], [data-role="preview-check-tab"]')
+        .forEach(function (button) {
+          var active = role === 'check'
+              ? button.getAttribute('data-role') === 'preview-check-tab'
+              : button.getAttribute('data-role') === 'preview-side'
+                  && button.dataset.side === value;
+          button.classList.toggle('is-active', active);
+        });
+  }
+
+  function loadPreview(side) {
+    if (!previewState) { return; }
+    var body = document.getElementById('preview-body');
+    if (!body) { return; }
+    var request = ++previewRequest;
+    var url = previewState.action + '?table=' + encodeURIComponent(previewState.table)
+            + '&side=' + encodeURIComponent(side);
+    var title = document.getElementById('preview-title');
+    var meta = document.getElementById('preview-meta');
+    if (title) {
+      title.textContent = t('preview.title') + ' · ' + previewState.table;
+    }
+    if (meta) { meta.textContent = ''; }
+    body.innerHTML = '';
+    body.appendChild(textBlock(t('preview.loading')));
+    setPreviewTabActive('side', side);
+
+    getJson(url).then(function (payload) {
+      if (request !== previewRequest) { return; }
+      if (!payload.success) {
+        body.innerHTML = '';
+        body.appendChild(textBlock(t(payload.message || 'error.unexpected'),
+            'alert alert-danger'));
+        return;
+      }
+      renderPreview(payload.preview);
+    }).catch(function () {
+      if (request !== previewRequest) { return; }
+      // getJson() only normalizes 401 and non-JSON responses; a fetch rejection (the
+      // server went away mid-request) still lands here. Without this the modal stays on
+      // "Loading..." forever.
+      body.innerHTML = '';
+      body.appendChild(textBlock(t('error.unexpected'), 'alert alert-danger'));
+    });
+  }
+
+  function loadPreviewCheck() {
+    if (!previewState || !previewState.checkAction) { return; }
+    var body = document.getElementById('preview-body');
+    if (!body) { return; }
+    var title = document.getElementById('preview-title');
+    var meta = document.getElementById('preview-meta');
+    if (title) {
+      title.textContent = t('previewCheck.title') + ' · ' + previewState.table;
+    }
+    if (meta) { meta.textContent = ''; }
+    body.innerHTML = '';
+    body.appendChild(textBlock(t('previewCheck.running')));
+    setPreviewTabActive('check');
+
+    var request = ++previewRequest;
+    postJson(previewState.checkAction + '?table=' + encodeURIComponent(previewState.table),
+        null, false).then(function (payload) {
+      if (request !== previewRequest) { return; }
+      if (!payload.success) {
+        body.innerHTML = '';
+        body.appendChild(textBlock(t(payload.message || 'error.unexpected'),
+            'alert alert-danger'));
+        return;
+      }
+      renderPreviewCheck(payload.previewCheck || null);
+    }).catch(function () {
+      if (request !== previewRequest) { return; }
+      body.innerHTML = '';
+      body.appendChild(textBlock(t('error.unexpected'), 'alert alert-danger'));
+    });
+  }
+
+  function renderPreviewCheck(check) {
+    var body = document.getElementById('preview-body');
+    var meta = document.getElementById('preview-meta');
+    if (!body) { return; }
+    body.innerHTML = '';
+    if (!check) {
+      body.appendChild(textBlock(t('error.unexpected'), 'alert alert-danger'));
+      return;
+    }
+    if (meta) { meta.textContent = t('previewCheck.hint'); }
+
+    var wrap = document.createElement('div');
+    var table = document.createElement('table');
+    table.className = 'tbl dense';
+    var tbody = document.createElement('tbody');
+
+    function addRow(label, value) {
+      var tr = document.createElement('tr');
+      var th = document.createElement('th');
+      th.textContent = t(label);
+      var td = document.createElement('td');
+      td.textContent = value == null ? '—' : String(value);
+      tr.appendChild(th);
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+    }
+
+    var resultRow = document.createElement('tr');
+    var resultTh = document.createElement('th');
+    resultTh.textContent = t('previewCheck.title');
+    var resultTd = document.createElement('td');
+    var badge = document.createElement('span');
+    badge.className = 'badge '
+        + (check.status === 'OK' ? 'badge-ok'
+            : check.status === 'MISMATCH' ? 'badge-warn'
+            : check.status === 'SKIPPED' ? 'badge-mute' : 'badge-danger');
+    badge.textContent = t('previewCheck.status.' + (check.status || 'ERROR'));
+    resultTd.appendChild(badge);
+    resultRow.appendChild(resultTh);
+    resultRow.appendChild(resultTd);
+    tbody.appendChild(resultRow);
+
+    if (check.status !== 'ERROR') {
+      addRow('previewCheck.columns', (check.sourceColumns || 0) + ' / '
+          + (check.targetColumns || 0));
+      addRow('previewCheck.result', t('previewCheck.summary')
+          .replace('{0}', check.sampledRows || 0)
+          .replace('{1}', check.matchedRows || 0)
+          .replace('{2}', check.mismatchedRows || 0)
+          .replace('{3}', check.missingRows || 0));
+      if (check.mismatchColumns && check.mismatchColumns.length) {
+        addRow('previewCheck.mismatchColumns', check.mismatchColumns.join(', '));
+      }
+    }
+    if (check.detail) {
+      var detailKey = 'previewCheck.detail.' + check.detail;
+      var detail = t(detailKey);
+      if (detail === detailKey) {
+        detail = t(check.detail);
+      }
+      addRow('previewCheck.detail', detail === check.detail ? check.detail : detail);
+    }
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    body.appendChild(wrap);
   }
 
   function renderPreview(preview) {
@@ -2754,8 +2786,9 @@
       return;
     }
     if (meta) {
-      var sideLabel = t(preview.side === 'target' ? 'preview.target' : 'preview.source');
-      meta.textContent = sideLabel + ' · ' + (preview.connection || '') + ' · '
+      var sideKey = preview.side === 'target' ? 'preview.metaTarget' : 'preview.metaSource';
+      var prefix = t(sideKey).replace('{0}', preview.connection || '');
+      meta.textContent = prefix + ' · '
           + (preview.schema ? preview.schema + '.' : '') + preview.table
           + ' · ' + preview.elapsedMs + ' ms';
     }
@@ -2785,13 +2818,19 @@
       (preview.columns || []).forEach(function (_, i) {
         var cell = row[i];
         var td = document.createElement('td');
+        var span = document.createElement('span');
         if (cell === null || cell === undefined) {
           // SQL NULL 是数据语义，不随界面语言翻译
-          td.className = 'preview-null';
-          td.textContent = 'NULL';
+          span.className = 'preview-null';
+          span.textContent = 'NULL';
         } else {
-          td.textContent = cell;
+          // Long text (addresses, JSON) must not turn one row into a tall multi-line block.
+          // Keep every row on one line; the full value stays available as a hover title.
+          span.className = 'preview-cell';
+          span.textContent = cell;
+          span.title = String(cell);
         }
+        td.appendChild(span);
         tr.appendChild(td);
       });
       tbody.appendChild(tr);
@@ -5945,9 +5984,10 @@
     document.querySelectorAll('[data-role="target-picker"]').forEach(bindTargetPicker);
     document.querySelectorAll('.fanout-card').forEach(bindFanoutTable);
     document.querySelectorAll('[data-role="row-count-open"]').forEach(bindRowCount);
-    document.querySelectorAll('[data-role="content-audit"]').forEach(bindContentAudit);
     document.querySelectorAll('[data-role="precheck-open"]').forEach(bindPrecheck);
     document.querySelectorAll('[data-role="preview"]').forEach(bindTablePreview);
+    document.querySelectorAll('[data-role="preview-side"]').forEach(bindPreviewSide);
+    document.querySelectorAll('[data-role="preview-check-tab"]').forEach(bindPreviewCheckTab);
     document.querySelectorAll('[data-role="dismiss-default-pw"]').forEach(bindDefaultPwDismiss);
     document.querySelectorAll('[data-role="log-refresh"]').forEach(bindLogRefresh);
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);

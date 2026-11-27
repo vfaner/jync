@@ -345,6 +345,8 @@ public class DiagnosticBundleService {
             map.put("lsn", position.getLsn());
             map.put("serverId", position.getServerId());
             map.put("baselineDone", position.isBaselineDone());
+            map.put("externalBaseline", position.hasExternalBaseline());
+            map.put("externalBaselineTables", position.getExternalBaselineTables());
             map.put("updatedAt", position.getUpdatedAt());
             return map;
         });

@@ -106,16 +106,18 @@ class TablePreviewViewTest {
     }
 
     @Test
-    void eachProgressRowOffersBothSidesAndTheModalIsRendered() throws Exception {
+    void eachProgressRowOffersOnePreviewTriggerAndTheModalHasBothSides() throws Exception {
         String html = render();
 
         assertThat(html).contains("data-role=\"preview\"");
+        assertThat(html).contains("data-role=\"preview-side\"");
         assertThat(html).contains("data-side=\"source\"");
         assertThat(html).contains("data-side=\"target\"");
         assertThat(html).contains("data-table=\"ITEMS\"");
         assertThat(html).contains("data-action=\"/api/projects/1/preview\"");
         assertThat(html).contains("id=\"preview-modal\"");
         assertThat(html).contains("id=\"preview-body\"");
+        assertThat(html).contains("data-status-cell=\"rowsSynced\"");
     }
 
     /**
@@ -131,9 +133,9 @@ class TablePreviewViewTest {
     void thePreviewLabelsAreLocalizedInTheEnglishPage() throws Exception {
         String html = render();
 
-        assertThat(html).contains(">Preview</th>");
-        assertThat(html).contains(">Source</span>");
-        assertThat(html).contains(">Target</span>");
+        assertThat(html).contains(">Preview</span>");
+        assertThat(html).contains(">Source</button>");
+        assertThat(html).contains(">Target</button>");
         // The key name itself now legitimately appears in the JS dictionary; unresolved
         // messages still must not leak in the "??key??" form.
         assertThat(html).doesNotContain("??preview");
@@ -154,27 +156,27 @@ class TablePreviewViewTest {
     }
 
     @Test
-    void anAdminSeesTheContentAuditButtonAndItsModal() throws Exception {
+    void thePreviewModalOffersTheFirstTenRowsCheckInsteadOfASeparateAuditModal() throws Exception {
         String html = render();
 
-        assertThat(html).contains("data-role=\"content-audit\"");
-        assertThat(html).contains("data-action=\"/api/projects/1/content-audit\"");
-        assertThat(html).contains("id=\"content-audit-modal\"");
-        assertThat(html).contains("id=\"content-audit-body\"");
-        assertThat(html).contains(">Check content</span>");
-        assertThat(html).doesNotContain("??contentAudit");
+        assertThat(html).contains("data-role=\"preview-check-tab\"");
+        assertThat(html).contains("data-check-action=\"/api/projects/1/preview-check\"");
+        assertThat(html).contains(">Content check</button>");
+        assertThat(html).doesNotContain("data-role=\"content-audit\"");
+        assertThat(html).doesNotContain("id=\"content-audit-modal\"");
+        assertThat(html).doesNotContain("??previewCheck");
     }
 
     /**
-     * The audit reads row values from both configured databases; a viewer must not be
-     * offered a control that would always come back 403.
+     * The check reads rows from both configured databases; a viewer must not be offered a
+     * control that would always come back 403.
      */
     @Test
-    void aViewerGetsNeitherTheContentAuditButtonNorTheModal() throws Exception {
+    void aViewerGetsNoPreviewOrCheckTriggerEvenWhenTheModalShellIsRendered() throws Exception {
         String html = render(asViewer());
 
-        assertThat(html).doesNotContain("data-role=\"content-audit\"");
-        assertThat(html).doesNotContain("id=\"content-audit-modal\"");
+        assertThat(html).doesNotContain("data-role=\"preview\"");
+        assertThat(html).doesNotContain("data-check-action=");
     }
 
     /**
@@ -191,6 +193,9 @@ class TablePreviewViewTest {
                 + "\"This table has no sync record yet; run a sync first\"");
         assertThat(html).contains("'contentAudit.summary': "
                 + "\"{0} sampled, {1} matched, {2} differ, {3} missing on target\"");
+        assertThat(html).contains("'previewCheck.summary': "
+                + "\"{0} row(s) compared: {1} match, {2} differ, {3} missing on target\"");
+        assertThat(html).contains("'preview.metaSource': \"Source: {0}\"");
     }
 
     @Test

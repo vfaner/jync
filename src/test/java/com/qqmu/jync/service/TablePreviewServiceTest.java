@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 
 import tools.jackson.databind.ObjectMapper;
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.dto.TablePreviewCheck;
 import com.qqmu.jync.dto.TableRowCount;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
@@ -133,6 +134,97 @@ class TablePreviewServiceTest {
         assertThat(preview.rows()).hasSize(TablePreviewService.ROW_LIMIT);
         assertThat(preview.rows().get(0)).containsExactly("1", "order-1");
         assertThat(preview.truncated()).isTrue();
+    }
+
+    @Test
+    void ordersBothPreviewsByPrimaryKeyInsteadOfLeavingItToTheStorageEngine() throws SQLException {
+        try (Statement st = connection.createStatement()) {
+            st.execute("CREATE TABLE orders (id BIGINT PRIMARY KEY, name VARCHAR(64))");
+            st.execute("INSERT INTO orders (id, name) VALUES (3, 'third'),"
+                    + " (1, 'first'), (2, 'second')");
+        }
+
+        TablePreview preview = service.preview(1L, "orders", TablePreviewService.Side.SOURCE);
+
+        assertThat(preview.rows()).extracting(row -> row.get(0))
+                .containsExactly("1", "2", "3");
+    }
+
+    @Test
+    void previewCheckComparesTheFirstRowsAndReportsTheColumnCounts() throws SQLException {
+        createOrders(3);
+
+        TablePreviewCheck check = service.checkPreview(1L, "orders");
+
+        assertThat(check.status()).isEqualTo(TablePreviewCheck.Status.OK);
+        assertThat(check.sourceColumns()).isEqualTo(2);
+        assertThat(check.targetColumns()).isEqualTo(2);
+        assertThat(check.sampledRows()).isEqualTo(3);
+        assertThat(check.matchedRows()).isEqualTo(3);
+        assertThat(check.mismatchedRows()).isZero();
+    }
+
+    @Test
+    void previewCheckReportsAValueDifferenceAndAMissingColumn() throws SQLException {
+        createOrders(2);
+        try (Connection targetDb = DriverManager.getConnection(
+                "jdbc:h2:mem:preview_target_mismatch;DB_CLOSE_DELAY=-1", "sa", "");
+             Statement st = targetDb.createStatement()) {
+            st.execute("CREATE TABLE orders (id BIGINT PRIMARY KEY, name VARCHAR(64),"
+                    + " EXTRA VARCHAR(16))");
+            st.execute("INSERT INTO orders (id, name, EXTRA) VALUES (1, 'target-old', 'x'),"
+                    + " (2, 'order-2', 'y')");
+            when(dataSourceManager.getConnection(target)).thenReturn(targetDb);
+
+            TablePreviewCheck check = service.checkPreview(1L, "orders");
+
+            assertThat(check.status()).isEqualTo(TablePreviewCheck.Status.MISMATCH);
+            assertThat(check.columnCountMatch()).isFalse();
+            assertThat(check.mismatchColumns()).containsExactly("NAME");
+        }
+    }
+
+    @Test
+    void previewCheckReportsExtraTargetRowsAsDifferencesNotMissingRows() throws SQLException {
+        createOrders(2);
+        try (Connection targetDb = DriverManager.getConnection(
+                "jdbc:h2:mem:preview_target_extra;DB_CLOSE_DELAY=-1", "sa", "");
+             Statement st = targetDb.createStatement()) {
+            st.execute("CREATE TABLE orders (id BIGINT PRIMARY KEY, name VARCHAR(64))");
+            st.execute("INSERT INTO orders (id, name) VALUES (1, 'order-1'),"
+                    + " (2, 'order-2'), (3, 'extra')");
+            when(dataSourceManager.getConnection(target)).thenReturn(targetDb);
+
+            TablePreviewCheck check = service.checkPreview(1L, "orders");
+
+            assertThat(check.status()).isEqualTo(TablePreviewCheck.Status.MISMATCH);
+            assertThat(check.missingRows()).isZero();
+            assertThat(check.mismatchedRows()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void previewCheckSkipsRowComparisonForAKeylessTable() throws SQLException {
+        try (Statement st = connection.createStatement()) {
+            st.execute("CREATE TABLE nokey (name VARCHAR(64))");
+            st.execute("INSERT INTO nokey (name) VALUES ('a'), ('b')");
+        }
+
+        TablePreviewCheck check = service.checkPreview(1L, "nokey");
+
+        assertThat(check.status()).isEqualTo(TablePreviewCheck.Status.SKIPPED);
+        assertThat(check.detail()).isEqualTo("unordered");
+        assertThat(check.sampledRows()).isZero();
+    }
+
+    @Test
+    void previewCheckSkipsWhenNeitherSideHasRows() throws SQLException {
+        createOrders(0);
+
+        TablePreviewCheck check = service.checkPreview(1L, "orders");
+
+        assertThat(check.status()).isEqualTo(TablePreviewCheck.Status.SKIPPED);
+        assertThat(check.detail()).isEqualTo("no-rows");
     }
 
     @Test
@@ -496,7 +588,6 @@ class TablePreviewServiceTest {
         PreparedStatement ps = mock(PreparedStatement.class);
         ResultSet rs = mock(ResultSet.class);
         ResultSetMetaData md = mock(ResultSetMetaData.class);
-        when(conn.prepareStatement("SELECT * FROM `shop`.`SHOP_ORDER`")).thenReturn(ps);
         when(ps.executeQuery()).thenReturn(rs);
         when(rs.getMetaData()).thenReturn(md);
         when(md.getColumnCount()).thenReturn(1);
@@ -517,6 +608,13 @@ class TablePreviewServiceTest {
         when(dialect.withServerMajorVersion(null)).thenReturn(dialect);
         when(dialect.forProduct(any())).thenReturn(dialect);
         when(dialect.qualify("shop", "SHOP_ORDER")).thenReturn("`shop`.`SHOP_ORDER`");
+        com.qqmu.jync.dto.meta.TableMeta orderMeta =
+                new com.qqmu.jync.dto.meta.TableMeta();
+        orderMeta.setPrimaryKeys(List.of("ID"));
+        when(mysqlReader.readTable(conn, "shop", "SHOP_ORDER")).thenReturn(orderMeta);
+        when(dialect.quoteIdentifier("ID")).thenReturn("`ID`");
+        when(conn.prepareStatement("SELECT * FROM `shop`.`SHOP_ORDER` ORDER BY `ID`"))
+                .thenReturn(ps);
         service = new TablePreviewService(projectRepository, databaseConfigRepository,
                 dataSourceManager, new MetadataReaderFactory(List.of(mysqlReader)),
                 new SqlDialectFactory(List.of(dialect), new GenericSqlDialect()),

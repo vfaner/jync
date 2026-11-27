@@ -255,7 +255,8 @@ public final class ConfigPackageDtos {
                                  String lsn,
                                  String schemaSignatures,
                                  String projectionSignature,
-                                 Boolean baselineDone) {
+                                 Boolean baselineDone,
+                                 String externalBaselineTables) {
     }
 
     public record MetadataSnapshotDto(Long projectId,

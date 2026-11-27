@@ -20,6 +20,7 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -590,7 +591,9 @@ class CdcOperationsServiceTest {
         Project project = project();
         project.setSyncConfig("{\"captureStrategy\":\"BINLOG_CDC\"}");
         source(DatabaseType.MYSQL);
-        when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(List.of("orders")));
+        when(contextFactory.parseConfig(project)).thenReturn(config);
         when(clientFactory.serverIdFor(1L)).thenReturn(612001L);
         Connection conn = org.mockito.Mockito.mock(Connection.class);
         java.sql.Statement st = org.mockito.Mockito.mock(java.sql.Statement.class);
@@ -606,7 +609,7 @@ class CdcOperationsServiceTest {
 
         verify(cdcManager).ensureStopped(1L);
         verify(positionStore).adoptExternalBaseline(1L, "mysql-bin.000123", 2048L, null,
-                612001L, null, null);
+                612001L, null, null, Set.of("orders"));
         verify(taskStore).markStoppedClearingResult(1L);
         verify(changeLogRepository).save(any(ChangeLog.class));
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), any());
@@ -632,6 +635,8 @@ class CdcOperationsServiceTest {
                 .hasMessage("error.cdc.external.fileMissing");
         verify(positionStore, never()).recordBaselineStart(anyLong(), anyString(), anyLong(),
                 anyString(), anyLong());
+        // A rejected position must leave the old resume state untouched.
+        verify(stateWriter, never()).resetProject(1L);
     }
 
     @Test
@@ -644,7 +649,7 @@ class CdcOperationsServiceTest {
         service.adoptExternalBaseline(1L, null, null, null, " 0/16B6C50 ", null);
 
         verify(positionStore).adoptExternalBaseline(1L, null, null, null, null,
-                "0/16B6C50", null);
+                "0/16B6C50", null, Set.of(CdcPosition.EXTERNAL_ALL_TABLES));
     }
 
     @Test
@@ -671,6 +676,6 @@ class CdcOperationsServiceTest {
         service.adoptExternalBaseline(1L, null, null, null, "0000002A43D7E1A50030", null);
 
         verify(positionStore).adoptExternalBaseline(1L, null, null, null, null,
-                "0x0000002a43d7e1a50030", null);
+                "0x0000002a43d7e1a50030", null, Set.of(CdcPosition.EXTERNAL_ALL_TABLES));
     }
 }

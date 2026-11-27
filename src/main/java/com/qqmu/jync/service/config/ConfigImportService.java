@@ -738,6 +738,9 @@ public class ConfigImportService {
             position.setBaselineDone(Boolean.TRUE.equals(dto.baselineDone())
                     && keepsRestoredBaselineFlag(dto.projectId(), projectId,
                             captureStrategyOf(projectSyncConfigs.get(dto.projectId()))));
+            if (Boolean.TRUE.equals(position.isBaselineDone())) {
+                position.setExternalBaselineTables(dto.externalBaselineTables());
+            }
             cdcPositions.save(position);
         }
         for (ConfigPackageDtos.MetadataSnapshotDto dto : state.metadataSnapshots()) {

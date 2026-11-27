@@ -4,6 +4,8 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -17,6 +19,7 @@ import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.web.servlet.MockMvc;
 
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.dto.TablePreviewCheck;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.TablePreviewService;
 import com.qqmu.jync.service.TablePreviewService.Side;
@@ -66,6 +69,21 @@ class PreviewApiControllerTest {
                 .andExpect(status().isOk());
 
         verify(tablePreviewService).preview(1L, "orders", Side.TARGET);
+    }
+
+    @Test
+    void returnsTheFirstTenRowsCheckPayload() throws Exception {
+        when(tablePreviewService.checkPreview(1L, "orders")).thenReturn(
+                new TablePreviewCheck("orders", TablePreviewCheck.Status.MISMATCH,
+                        2, 3, false, 2, 1, 1, 0, List.of("NAME"), "column-count", 9L));
+
+        mvc.perform(post("/api/projects/1/preview-check").param("table", "orders").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.previewCheck.status").value("MISMATCH"))
+                .andExpect(jsonPath("$.previewCheck.sourceColumns").value(2))
+                .andExpect(jsonPath("$.previewCheck.targetColumns").value(3))
+                .andExpect(jsonPath("$.previewCheck.mismatchColumns[0]").value("NAME"));
     }
 
     @Test

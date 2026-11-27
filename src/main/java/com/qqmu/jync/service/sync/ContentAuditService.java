@@ -334,8 +334,12 @@ public class ContentAuditService {
                     elapsed(started));
         }
         if (keys == null || keys.isEmpty()) {
-            return new TableContentAudit(tableName, Status.OK, 0, 0, 0, 0,
-                    excluded.size(), List.of(), null, elapsed(started));
+            // "Nothing was compared" is not "the values agree". An empty table or an empty
+            // cursor range must say so instead of painting a green OK over a check that never
+            // looked at a row.
+            // The row estimate is not reliable enough to tell "empty table" from "no rows
+            // in this cursor range", and both mean the same thing here: nothing was sampled.
+            return TableContentAudit.skipped(tableName, "no-samples", elapsed(started));
         }
 
         List<String> sourceSelect = comparable;
@@ -356,6 +360,7 @@ public class ContentAuditService {
         int matched = 0;
         int mismatched = 0;
         int missing = 0;
+        int compared = 0;
         Set<String> mismatchColumns = new LinkedHashSet<>();
         for (List<Object> key : keys) {
             String normalized = DataSyncService.normalizedKey(key);
@@ -364,6 +369,7 @@ public class ContentAuditService {
                 // Deleted between sampling and reading; the next cycle's cursor decides.
                 continue;
             }
+            compared++;
             Map<String, Object> targetRow = targetRows.get(normalized);
             if (targetRow == null) {
                 missing++;
@@ -386,6 +392,11 @@ public class ContentAuditService {
             }
         }
 
+        if (compared == 0) {
+            // Every sampled key disappeared before it could be read. The audit compared
+            // nothing, so a green OK would be a false claim of consistency.
+            return TableContentAudit.skipped(tableName, "no-samples", elapsed(started));
+        }
         Status status = mismatched == 0 ? Status.OK : Status.MISMATCH;
         return new TableContentAudit(tableName, status, keys.size(), matched, mismatched,
                 missing, excluded.size(), List.copyOf(mismatchColumns), null,

@@ -3,8 +3,10 @@ package com.qqmu.jync.service.cdc;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -289,11 +291,13 @@ public class CdcOperationsService {
             throw new IllegalArgumentException("error.cdc.external.notCdc");
         }
         cdcManager.ensureStopped(projectId);
-        // The target was replaced by the external dump: old chunk checkpoints would make a
-        // later targeted reload skip ranges that belong to the previous target contents.
-        stateWriter.clearFullLoadCheckpoints(projectId);
-        // Validate everything before replacing the existing position: a typo must not
-        // destroy the anchor of a project the operator can still resume.
+        // Resolve the table scope now, while the source is known reachable. An all-tables
+        // config has no stored names; listing them from the source means the detail page can
+        // still show the externally seeded tables after progress is cleared.
+        Set<String> externalTables = resolveExternalTableScope(project, config);
+        // Validate everything before clearing resume state or replacing the existing
+        // position: a typo must not destroy the anchor/state of a project the operator can
+        // still resume.
         switch (strategy) {
             case BINLOG_CDC -> {
                 String file = binlogFile == null ? "" : binlogFile.trim();
@@ -314,37 +318,40 @@ public class CdcOperationsService {
                 if (gtid != null) {
                     assertGtidExecutedOnSource(source, gtid);
                 }
-                positionStore.adoptExternalBaseline(projectId, file, binlogPos,
-                        gtid, clientFactory.serverIdFor(projectId), null, null);
+                String adoptedFile = file;
+                String adoptedGtid = gtid;
+                resetAndAdopt(projectId, () -> positionStore.adoptExternalBaseline(
+                        projectId, adoptedFile, binlogPos, adoptedGtid,
+                        clientFactory.serverIdFor(projectId), null, null, externalTables));
             }
             case PG_LOGICAL_CDC -> {
                 String value = normalizedLsn(strategy, lsn);
                 assertPgSlotCovers(projectId, source, value);
-                positionStore.adoptExternalBaseline(projectId, null, null, null, null, value, null);
+                resetAndAdopt(projectId, () -> positionStore.adoptExternalBaseline(
+                        projectId, null, null, null, null, value, null, externalTables));
             }
             case SQLSERVER_CDC -> {
                 String value = normalizedLsn(strategy, lsn);
                 assertSqlServerCapture(source, config);
                 assertSqlServerLsnNotFuture(source, value);
-                positionStore.adoptExternalBaseline(projectId, null, null, null, null, value, null);
+                resetAndAdopt(projectId, () -> positionStore.adoptExternalBaseline(
+                        projectId, null, null, null, null, value, null, externalTables));
             }
             case LOGMINER_CDC -> {
                 if (scn == null || scn <= 0L) {
                     throw new IllegalArgumentException("error.cdc.external.positionRequired");
                 }
                 assertScnStillMineable(source, scn);
-                positionStore.adoptExternalBaseline(projectId, null, null, null, null, null, scn);
+                resetAndAdopt(projectId, () -> positionStore.adoptExternalBaseline(
+                        projectId, null, null, null, null, null, scn, externalTables));
             }
             case YSTREAM_CDC -> {
                 String packed = yStreamPosition(projectId, source, lsn);
-                positionStore.adoptExternalBaseline(projectId, null, null, null, null, packed, null);
+                resetAndAdopt(projectId, () -> positionStore.adoptExternalBaseline(
+                        projectId, null, null, null, null, packed, null, externalTables));
             }
             default -> throw new IllegalArgumentException("error.cdc.external.notCdc");
         }
-        // The target was replaced by the external dump: old chunk checkpoints would make a
-        // later targeted reload skip ranges that belong to the previous target contents.
-        // Do this BEFORE marking the baseline done: if clearing fails, the project stays
-        // not-done and the next start performs a safe full load instead of trusting them.
         taskStore.markStoppedClearingResult(projectId); // lift an old ERROR hat
         String adopted = switch (strategy) {
             case BINLOG_CDC -> binlogFile.trim() + ":" + binlogPos;
@@ -359,6 +366,56 @@ public class CdcOperationsService {
                         "@adoptExternalBaseline:" + adopted));
         log.info("Project {} adopted an external baseline at {} (strategy {})",
                 projectId, adopted, strategy);
+    }
+
+    /**
+     * The target was replaced by the external dump. Old progress rows and chunk checkpoints
+     * describe the previous target and would either make a later targeted reload skip ranges
+     * or report a stale "last sync"; structure snapshots likewise describe a table Jync no
+     * longer wrote. Clear all of it immediately before recording the new anchor, after every
+     * validation has passed.
+     */
+    private void resetAndAdopt(Long projectId, Runnable adopt) {
+        stateWriter.resetProject(projectId);
+        adopt.run();
+    }
+
+    /**
+     * Tables covered by the external dump. An explicit selection is the scope. For an
+     * all-tables config the names are read from the source catalogue so the detail page can
+     * still list them after progress is cleared; if that listing fails, the sentinel keeps
+     * the adoption usable (it simply cannot attribute individual tables).
+     */
+    private Set<String> resolveExternalTableScope(Project project, SyncConfig config) {
+        if (config == null) {
+            return Set.of(com.qqmu.jync.model.CdcPosition.EXTERNAL_ALL_TABLES);
+        }
+        if (config.getTables() == null || !config.getTables().isEmpty()) {
+            return config.getTables() == null
+                    ? Set.of(com.qqmu.jync.model.CdcPosition.EXTERNAL_ALL_TABLES)
+                    : new LinkedHashSet<>(config.getTables());
+        }
+        if (config.isObjectSelectionExplicit()) {
+            return Set.of();                    // explicit "none selected"
+        }
+        try {
+            var ctx = contextFactory.buildSourceOnly(project, config);
+            try (Connection source = dataSourceManager.getConnection(ctx.getSourceConfig())) {
+                Set<String> names = new LinkedHashSet<>();
+                for (String table : ctx.getSourceReader()
+                        .listTableNames(source, ctx.getSourceSchema())) {
+                    if (config.includesTable(table)) {
+                        names.add(table);
+                    }
+                }
+                return names;
+            }
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Could not resolve the source table list for project {}'s external"
+                    + " baseline; storing the all-tables sentinel: {}", project.getId(),
+                    e.toString());
+            return Set.of(com.qqmu.jync.model.CdcPosition.EXTERNAL_ALL_TABLES);
+        }
     }
 
     private static String blankToNull(String value) {

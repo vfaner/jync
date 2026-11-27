@@ -1715,18 +1715,33 @@ table.tbl a.truncate { display: block; }
 
 /* 只读数据预览：比常规弹窗宽，结果区自己滚动，表头不参与滚动布局 */
 .preview-dialog {
+  width: min(1100px, calc(100vw - 48px));
   max-width: min(1100px, calc(100vw - 48px));
   max-height: calc(100vh - 48px);
   text-align: left;
 }
+/* Switching source/target/check tabs must not collapse the dialog to a loading line and
+   back: that is the "card flashed" effect. Keep the preview body's footprint stable. */
+#preview-body { min-height: 340px; }
 .preview-body {
   max-height: 60vh; overflow: auto;
   border: 1px solid var(--line); border-radius: 10px;
 }
 .preview-body .tbl-wrap { overflow-x: auto; }
 .preview-body table.tbl th { position: sticky; top: 0; z-index: 1; }
-.preview-null { color: var(--ink-mute); font-style: italic; }
+/* One row = one line: long addresses/JSON stay in a bounded cell and scroll horizontally
+   instead of stretching the row to ten lines. The full value is on the cell's title. */
+.preview-body table.tbl td { white-space: nowrap; }
+.preview-cell {
+  display: inline-block; max-width: 360px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;
+}
+.preview-null { color: var(--ink-mute); font-style: italic; white-space: nowrap; }
 .preview-note { margin: 10px 2px 0; }
+.preview-side-switch {
+  display: inline-flex; gap: 3px; margin-top: 10px; padding: 3px;
+  border-radius: 10px; background: var(--bg-tint);
+}
 
 .pay-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
 .pay-tab {

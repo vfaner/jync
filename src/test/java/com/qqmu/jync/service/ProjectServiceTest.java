@@ -17,6 +17,7 @@ import java.sql.Statement;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -1716,6 +1717,73 @@ class ProjectServiceTest {
                         "NONE", null, null, null)));
         assertThat(service.findTableSyncStatuses(1L, polling).get(0).incremental())
                 .isEqualTo(ProjectService.IncrementalState.LIMITED);
+    }
+
+    @Test
+    void anAdoptedExternalBaselineMarksOnlyTheTablesItCoveredComplete() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(false);
+        SyncConfig cdc = new SyncConfig();
+        cdc.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        cdc.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS", "CUSTOMERS")));
+        com.qqmu.jync.model.CdcPosition position = new com.qqmu.jync.model.CdcPosition();
+        position.setProjectId(1L);
+        position.setBaselineDone(true);
+        position.setExternalBaselineTableNames(Set.of("ORDERS"));
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of());
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
+        when(positionStore.find(1L)).thenReturn(Optional.of(position));
+
+        java.util.List<ProjectService.TableSyncStatus> statuses =
+                service.findTableSyncStatuses(1L, cdc);
+
+        ProjectService.TableSyncStatus orders = statuses.stream()
+                .filter(s -> s.name().equals("ORDERS")).findFirst().orElseThrow();
+        ProjectService.TableSyncStatus customers = statuses.stream()
+                .filter(s -> s.name().equals("CUSTOMERS")).findFirst().orElseThrow();
+        assertThat(orders.state()).isEqualTo(ProjectService.SyncState.COMPLETED);
+        assertThat(orders.externalBaseline()).isTrue();
+        assertThat(orders.incremental()).isEqualTo(ProjectService.IncrementalState.PAUSED);
+        assertThat(orders.rowsSyncedTotal()).isNull();
+        assertThat(customers.state()).isEqualTo(ProjectService.SyncState.NOT_STARTED);
+        assertThat(customers.externalBaseline()).isFalse();
+        assertThat(customers.incremental()).isEqualTo(ProjectService.IncrementalState.NOT_STARTED);
+
+        project.setEnabled(true);
+        assertThat(service.findTableSyncStatuses(1L, cdc).stream()
+                .filter(s -> s.name().equals("ORDERS")).findFirst().orElseThrow().incremental())
+                .isEqualTo(ProjectService.IncrementalState.RUNNING);
+    }
+
+    @Test
+    void anAllTablesConfigUsesTheAdoptedExternalScopeForItsTableList() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(false);
+        SyncConfig cdc = new SyncConfig();
+        cdc.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        // Legacy "all tables": no names and no explicit selection; progress was cleared at
+        // adoption, so the recorded external scope is the only table list available.
+        com.qqmu.jync.model.CdcPosition position = new com.qqmu.jync.model.CdcPosition();
+        position.setProjectId(1L);
+        position.setBaselineDone(true);
+        position.setExternalBaselineTableNames(Set.of("ORDERS"));
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of());
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
+        when(positionStore.find(1L)).thenReturn(Optional.of(position));
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, cdc).get(0);
+
+        assertThat(status.name()).isEqualTo("ORDERS");
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.COMPLETED);
+        assertThat(status.externalBaseline()).isTrue();
     }
 
     @Test

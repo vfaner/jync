@@ -39,6 +39,9 @@
                         : (${s.state.name() == 'INCOMPLETE'} ? 'badge-warn'
                         : 'badge-mute'))"
           th:text="#{'tablesync.state.' + ${s.state.name()}}">state</span>
+    <span class="badge badge-info" th:if="${s.externalBaseline}"
+          th:title="#{tablesync.externalBaseline.help}"
+          th:text="#{tablesync.externalBaseline}">external</span>
     <span class="small muted" th:if="${s.targetsTotal != null}"
           th:text="#{tablesync.targets(${s.targetsDone}, ${s.targetsTotal})}">3/3</span>
 </td>
@@ -58,6 +61,13 @@
     th:text="${s.lastSyncTime != null}
              ? ${#temporals.format(s.lastSyncTime, 'MM-dd HH:mm:ss')}
              : #{common.never}">never</td>
+
+<td th:fragment="rowsSynced(s)" class="num small" data-status-cell="rowsSynced"
+    th:title="#{tablesync.rowsSynced.help}">
+    <span th:if="${s.rowsSyncedTotal != null}" th:text="${s.rowsSyncedTotal}">0</span>
+    <span class="muted" th:if="${s.rowsSyncedTotal == null}"
+          th:text="#{tablesync.noActive}">—</span>
+</td>
 
 <td th:fragment="fullProgress(s)" class="num small" data-status-cell="fullProgress"
     data-role="progress-full"

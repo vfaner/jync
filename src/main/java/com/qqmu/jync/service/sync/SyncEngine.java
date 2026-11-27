@@ -221,6 +221,17 @@ public class SyncEngine {
                 sourceMeta.setTables(sourceMeta.getTables().stream()
                         .filter(t -> containsIgnoreCase(ctx.getRepairTables(), t.getName()))
                         .collect(java.util.stream.Collectors.toList()));
+                if (sourceMeta.getTables().isEmpty()) {
+                    // The named table is gone from the source (or the account cannot see it).
+                    // Reporting success would claim a reload that wrote nothing.
+                    String msg = "Table reload/repair found no selected table in the source: "
+                            + ctx.getRepairTables();
+                    log.error("Project '{}': {}", ctx.projectName(), msg);
+                    result.addError(msg);
+                    stateWriter.recordLog(ctx.projectId(), ObjectType.PROJECT,
+                            ctx.projectName(), ChangeType.ERROR, msg, false, 0);
+                    return result;
+                }
             }
 
             // Validate the name mapping against the tables that actually exist: the save-time
@@ -1563,7 +1574,11 @@ public class SyncEngine {
         }
 
         boolean firstLoad = progress.getInitialLoadDone() == null || !progress.getInitialLoadDone();
-        if (firstLoad && ctx.getConfig().isTruncateBeforeInitialLoad()) {
+        // A manual one-table reload must produce the source's current contents, not a union
+        // with rows deleted at the source since the last load. The automatic repair path
+        // leaves the flag false: its target table was just recreated empty.
+        if (firstLoad && (ctx.getConfig().isTruncateBeforeInitialLoad()
+                || ctx.isForceTruncateBeforeLoad())) {
             try {
                 dataSync.truncateTarget(targetConn, table, ctx);
             } catch (SQLException e) {

@@ -127,6 +127,18 @@ public class CdcPositionStore {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CdcPosition adoptExternalBaseline(Long projectId, String file, Long pos, String gtid,
                                              Long serverId, String lsn, Long scn) {
+        return adoptExternalBaseline(projectId, file, pos, gtid, serverId, lsn, scn, null);
+    }
+
+    /**
+     * As above, plus the source tables the external dump covered. The detail page uses that
+     * scope to report those tables as an external baseline instead of "not started"; a null
+     * or empty scope keeps the old behaviour (an external baseline with no table attribution).
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public CdcPosition adoptExternalBaseline(Long projectId, String file, Long pos, String gtid,
+                                             Long serverId, String lsn, Long scn,
+                                             java.util.Collection<String> externalTables) {
         discard(projectId);
         CdcPosition position = repository.findByProjectId(projectId).orElseGet(() -> {
             CdcPosition created = new CdcPosition();
@@ -143,6 +155,7 @@ public class CdcPositionStore {
         // records fresh signatures.
         position.setSchemaSignatures(null);
         position.setBaselineDone(true);
+        position.setExternalBaselineTableNames(externalTables);
         position.setUpdatedAt(Instant.now());
         return repository.save(position);
     }
@@ -171,6 +184,7 @@ public class CdcPositionStore {
         // contract it actually wrote); a destructive path (rebuild sweep) resets the anchor
         // through resetAnchorKeepingProjectionSignature.
         position.setBaselineDone(false);
+        position.clearExternalBaseline();
         position.setUpdatedAt(Instant.now());
         return repository.save(position);
     }
@@ -184,6 +198,7 @@ public class CdcPositionStore {
     public void markBaselineDone(Long projectId) {
         repository.findByProjectId(projectId).ifPresent(position -> {
             position.setBaselineDone(true);
+            position.clearExternalBaseline();
             position.setUpdatedAt(Instant.now());
             repository.save(position);
         });
@@ -199,6 +214,7 @@ public class CdcPositionStore {
     public void markBaselineDone(Long projectId, String projectionSignature) {
         repository.findByProjectId(projectId).ifPresent(position -> {
             position.setBaselineDone(true);
+            position.clearExternalBaseline();
             position.setProjectionSignature(projectionSignature);
             position.setUpdatedAt(Instant.now());
             repository.save(position);
@@ -617,6 +633,7 @@ public class CdcPositionStore {
             position.setLsn(null);
             position.setSchemaSignatures(null);
             position.setBaselineDone(false);
+            position.clearExternalBaseline();
             position.setUpdatedAt(Instant.now());
             repository.save(position);
         });
@@ -639,6 +656,7 @@ public class CdcPositionStore {
         // Same rule as the binlog variant: the signature describes the keys still in Redis
         // and is only replaced by a completed cache baseline.
         position.setBaselineDone(false);
+        position.clearExternalBaseline();
         position.setUpdatedAt(Instant.now());
         return repository.save(position);
     }
@@ -694,6 +712,7 @@ public class CdcPositionStore {
         });
         position.setLsn(lsn);
         position.setBaselineDone(false);
+        position.clearExternalBaseline();
         position.setUpdatedAt(Instant.now());
         return repository.save(position);
     }
@@ -895,6 +914,7 @@ public class CdcPositionStore {
             copy.setServerId(stored.getServerId());
             copy.setProjectionSignature(stored.getProjectionSignature());
             copy.setBaselineDone(stored.isBaselineDone());
+            copy.setExternalBaselineTables(stored.getExternalBaselineTables());
             copy.setUpdatedAt(stored.getUpdatedAt());
             copy.setOptVersion(stored.getOptVersion());
             copy.setBinlogFile(file != null ? file : stored.getBinlogFile());

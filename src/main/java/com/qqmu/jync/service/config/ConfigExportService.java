@@ -404,7 +404,7 @@ public class ConfigExportService {
                 position.getBinlogFile(), position.getBinlogPos(), position.getGtidSet(),
                 position.getServerId(), position.getScn(), position.getLsn(),
                 position.getSchemaSignatures(), position.getProjectionSignature(),
-                position.isBaselineDone());
+                position.isBaselineDone(), position.getExternalBaselineTables());
     }
 
     private static ConfigPackageDtos.MetadataSnapshotDto toDto(MetadataSnapshot snapshot) {

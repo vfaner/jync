@@ -17,5 +17,13 @@ public record TablePreview(
         List<String> columns,
         List<List<String>> rows,
         boolean truncated,
-        long elapsedMs) {
+        long elapsedMs,
+        boolean orderedByPrimaryKey) {
+
+    /** Compatibility constructor for callers/tests that predate the ordering flag. */
+    public TablePreview(String side, String connection, String schema, String table,
+                        List<String> columns, List<List<String>> rows, boolean truncated,
+                        long elapsedMs) {
+        this(side, connection, schema, table, columns, rows, truncated, elapsedMs, false);
+    }
 }

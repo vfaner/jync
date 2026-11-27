@@ -132,6 +132,13 @@ public class SyncContext {
      */
     private final boolean cdcRepairRun;
 
+    /**
+     * Manual one-table reload: clear the target table before the full load so rows deleted
+     * at the source since the last load do not survive in the target. Automatic CDC repair
+     * leaves this false because its target was just recreated empty.
+     */
+    private final boolean forceTruncateBeforeLoad;
+
     /** The family the source actually speaks; a custom connection's declared one. */
     public DatabaseType.DialectFamily resolveSourceFamily() {
         return resolveFamily(sourceType, sourceConfig, sourceFamily);

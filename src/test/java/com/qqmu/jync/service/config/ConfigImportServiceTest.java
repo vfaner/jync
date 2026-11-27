@@ -651,6 +651,7 @@ class ConfigImportServiceTest {
         position.setBinlogFile("mysql-bin.000042");
         position.setBinlogPos(1234L);
         position.setBaselineDone(true);
+        position.setExternalBaselineTableNames(java.util.List.of("ORDERS"));
         cdcPositions.save(position);
 
         byte[] pkg = export(true).bytes();
@@ -664,6 +665,7 @@ class ConfigImportServiceTest {
             assertThat(restored.getBinlogFile()).isEqualTo("mysql-bin.000042");
             assertThat(restored.getBinlogPos()).isEqualTo(1234L);
             assertThat(restored.isBaselineDone()).isTrue();
+            assertThat(restored.getExternalBaselineTables()).isEqualTo("ORDERS");
         });
     }
 

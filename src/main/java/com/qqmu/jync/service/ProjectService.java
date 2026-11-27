@@ -2346,12 +2346,13 @@ public class ProjectService {
                                   String cursorStrategy, String cursorColumn,
                                   Boolean resumableLoad, Boolean fullLoadWithoutCursor,
                                   IncrementalState incremental,
-                                  Integer targetsDone, Integer targetsTotal) {
+                                  Integer targetsDone, Integer targetsTotal,
+                                  boolean externalBaseline) {
         /** Compatibility constructor for callers/tests that only need the full-load state. */
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
                                Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
-                    null, null, null, null, IncrementalState.NOT_STARTED, null, null);
+                    null, null, null, null, IncrementalState.NOT_STARTED, null, null, false);
         }
 
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
@@ -2361,7 +2362,18 @@ public class ProjectService {
                                IncrementalState incremental) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
                     cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
-                    incremental, null, null);
+                    incremental, null, null, false);
+        }
+
+        public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
+                               Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt,
+                               String cursorStrategy, String cursorColumn,
+                               Boolean resumableLoad, Boolean fullLoadWithoutCursor,
+                               IncrementalState incremental,
+                               Integer targetsDone, Integer targetsTotal) {
+            this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
+                    cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
+                    incremental, targetsDone, targetsTotal, false);
         }
 
         /** True when this row aggregates a one-source-many-targets baseline. */
@@ -2413,12 +2425,9 @@ public class ProjectService {
         // because its consumer lease is not the sync_task lock.
         boolean fullActive = cdc ? enabled : leaseHeld;
         boolean working = fullActive && !taskError;
-        boolean baselinePending = false;
-        if (cdc) {
-            CdcPosition position = positionStore.find(projectId).orElse(null);
-            baselinePending = position == null
-                    || !Boolean.TRUE.equals(position.isBaselineDone());
-        }
+        CdcPosition cdcPosition = cdc ? positionStore.find(projectId).orElse(null) : null;
+        boolean baselinePending = cdc && (cdcPosition == null
+                || !Boolean.TRUE.equals(cdcPosition.isBaselineDone()));
         // Fan-out: the shared baseline writes fanout_progress per target, not sync_progress.
         // Aggregate it so the page says "done 2/3 targets" instead of showing the stale
         // single-target row.
@@ -2470,6 +2479,11 @@ public class ProjectService {
             for (ProgressStatusRow progress : progressByName.values()) {
                 names.add(progress.objectName());
             }
+            if (names.isEmpty() && cdcPosition != null) {
+                // Adoption now records the dump's explicit table list, so an all-tables
+                // project keeps a table list even after its progress rows are cleared.
+                names.addAll(cdcPosition.externalBaselineTableNames());
+            }
         }
         List<TableSyncStatus> result = new ArrayList<>();
         for (String name : names) {
@@ -2479,8 +2493,21 @@ public class ProjectService {
             String key = name.toUpperCase(Locale.ROOT);
             ProgressStatusRow progress = progressByName.get(key);
             FullLoadProgress load = loadsByUpper.get(key);
+            // An external dump seeded these tables, so "no progress row" is not "not
+            // started". The scope is explicit: an all-tables marker only covers a table
+            // with no progress row, so a table added after the dump is not claimed as
+            // already loaded. Once Jync reloads the table itself, its progress row marks the
+            // load as done and the ordinary state takes over.
+            boolean externalBaseline = !baselinePending && cdcPosition != null
+                    && cdcPosition.externalBaselineCovers(name)
+                    && (cdcPosition.externalBaselineIsAllTables()
+                        ? progress == null
+                        : progress == null
+                                || !Boolean.TRUE.equals(progress.initialLoadDone()));
             SyncState state;
-            if (load != null) {
+            if (externalBaseline) {
+                state = SyncState.COMPLETED;
+            } else if (load != null) {
                 // Checkpoints survive a stop; only call it "in progress" when the project is
                 // enabled or a round still holds a live lease. A stopped partial load is
                 // INCOMPLETE, not a phantom running load.
@@ -2494,6 +2521,12 @@ public class ProjectService {
             }
             Long rowsSynced = progress == null ? null : progress.rowsSyncedTotal();
             Instant lastSync = progress == null ? null : progress.lastSyncTime();
+            if (externalBaseline) {
+                // Jync never read or counted these rows; a stale row from the pre-adoption
+                // target would be worse than "unknown".
+                rowsSynced = null;
+                lastSync = null;
+            }
             Integer targetsDone = null;
             Integer targetsTotal = null;
             if (fanoutTargets > 0) {
@@ -2540,7 +2573,7 @@ public class ProjectService {
                     progress == null ? null : progress.cursorColumn(),
                     progress == null ? null : progress.resumableLoad(),
                     progress == null ? null : progress.fullLoadWithoutCursor(),
-                    incremental, targetsDone, targetsTotal));
+                    incremental, targetsDone, targetsTotal, externalBaseline));
         }
         return result;
     }

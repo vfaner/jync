@@ -6,12 +6,14 @@ import java.util.Map;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.qqmu.jync.dto.TablePreview;
+import com.qqmu.jync.dto.TablePreviewCheck;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.TablePreviewService;
 import com.qqmu.jync.service.TablePreviewService.Side;
@@ -46,6 +48,18 @@ public class PreviewApiController {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("success", true);
         body.put("preview", preview);
+        return ResponseEntity.ok(body);
+    }
+
+    /** First-ten-rows / column-count check behind the preview modal's third tab. */
+    @PostMapping("/{id}/preview-check")
+    public ResponseEntity<Map<String, Object>> check(@PathVariable Long id,
+                                                     @RequestParam String table) {
+        projectService.requireEditable(id, AccessGuard.current());
+        TablePreviewCheck check = tablePreviewService.checkPreview(id, table);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("success", true);
+        body.put("previewCheck", check);
         return ResponseEntity.ok(body);
     }
 

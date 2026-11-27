@@ -44,7 +44,8 @@ class JsMessageMapCoverageTest {
             Path.of("src/main/java/com/qqmu/jync/controller/api/ProjectApiController.java"),
             Path.of("src/main/java/com/qqmu/jync/controller/CdcApiController.java"),
             Path.of("src/main/java/com/qqmu/jync/controller/api/RedisRebuildApiController.java"),
-            Path.of("src/main/java/com/qqmu/jync/controller/api/UpgradeApiController.java"));
+            Path.of("src/main/java/com/qqmu/jync/controller/api/UpgradeApiController.java"),
+            Path.of("src/main/java/com/qqmu/jync/controller/api/TableMaintenanceApiController.java"));
 
     /**
      * Refusals reachable from the buttons backed by the two controllers above.
@@ -81,6 +82,15 @@ class JsMessageMapCoverageTest {
             "error.project.redis.prefixConflict",
             "error.project.redis.prefixGlob",
             "error.redis.target.not.found",
+            "error.table.reload.failed",
+            "error.table.reload.busy",
+            "error.table.reload.stopFirst",
+            "error.table.reload.jdbcOnly",
+            "error.table.reload.fanout",
+            "error.table.reload.noData",
+            "error.table.reload.notSelected",
+            "error.table.reload.tableRequired",
+            "error.table.reload.config",
             "error.unexpected");
 
     /**
@@ -224,6 +234,21 @@ class JsMessageMapCoverageTest {
         assertThat(missing(checkKeys, mapKeys()))
                 .as("app.js resolves these at runtime (t('cdc.check.' + name)); a missing one "
                         + "renders as the raw key in the connection test panel")
+                .isEmpty();
+    }
+
+    @Test
+    @DisplayName("every table-reload label is in the browser map")
+    void everyTableReloadLabelIsInTheMap() throws Exception {
+        Set<String> keys = new TreeSet<>();
+        for (String key : I18nBundleParityTest.keysOf("i18n/messages.properties")) {
+            if (key.startsWith("tableReload.")) {
+                keys.add(key);
+            }
+        }
+        assertThat(keys).as("sanity: the bundles do define the table-reload labels").isNotEmpty();
+        assertThat(missing(keys, mapKeys()))
+                .as("a missing key reaches the browser as the raw key")
                 .isEmpty();
     }
 
