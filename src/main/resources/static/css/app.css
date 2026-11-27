@@ -445,9 +445,9 @@ code, .mono { font-family: var(--mono); font-size: .88em; }
 .card + .card { margin-top: 18px; }
 
 /* ─── 各表同步进度：紧凑的游标动作与对齐 ─────────────────── */
-table.tbl th.cursor-col, table.tbl td.cursor-col {
-  width: 112px; text-align: center; white-space: nowrap;
-}
+table.tbl td.row-actions { text-align: right; white-space: nowrap; }
+table.tbl td.row-actions > * + * { margin-left: 4px; }
+table.tbl td.row-actions [data-role="polling-only"] { display: inline-block; }
 .strategy-inline { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .strategy-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 table.tbl th[data-role="progress-strategy"],

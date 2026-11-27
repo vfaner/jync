@@ -135,10 +135,8 @@ class ProjectDetailModeGatingViewTest {
 
         String page = renderDetail();
 
-        // The cell is hidden on the server and carries no data-role, so app.js's strategy
-        // switch cannot reveal it; a viewer never sees an input whose POST would be a 403.
-        String cell = enclosingTag(page, "data-role=\"cursor-open\"", "<td");
-        assertThat(cell).contains("is-hidden").doesNotContain("data-role=\"polling-only\"");
+        // A viewer never gets the control whose POST would be a 403.
+        assertThat(page).doesNotContain("data-role=\"cursor-open\"");
     }
 
     @Test
@@ -149,7 +147,9 @@ class ProjectDetailModeGatingViewTest {
         String page = renderDetail();
 
         String cell = enclosingTag(page, "data-role=\"cursor-open\"", "<td");
-        assertThat(cell).contains("data-role=\"polling-only\"").doesNotContain("is-hidden");
+        assertThat(cell).contains("row-actions")
+                .contains("data-role=\"polling-only\"")
+                .doesNotContain("is-hidden");
     }
 
     @Test
