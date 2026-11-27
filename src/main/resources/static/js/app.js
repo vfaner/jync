@@ -2983,6 +2983,36 @@
     }
   }
 
+  /** Copies one preview cell; fallback keeps the feature usable on plain-HTTP intranets. */
+  function copyPreviewCell(text) {
+    function copied() { toast(t('msg.preview.copied'), 'ok'); }
+    function fallback() {
+      var area = document.createElement('textarea');
+      area.value = text;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.appendChild(area);
+      area.select();
+      try { document.execCommand('copy'); copied(); } catch (e) { /* select manually */ }
+      document.body.removeChild(area);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(copied).catch(fallback);
+    } else {
+      fallback();
+    }
+  }
+
+  function bindPreviewCellCopy() {
+    var body = document.getElementById('preview-body');
+    if (!body) { return; }
+    body.addEventListener('click', function (e) {
+      var cell = e.target && e.target.closest ? e.target.closest('.preview-cell') : null;
+      if (!cell || !cell.title) { return; }
+      copyPreviewCell(cell.title);
+    });
+  }
+
   function textBlock(text, cls) {
     var div = document.createElement('div');
     div.className = cls || 'help';
@@ -3015,6 +3045,150 @@
           target.disabled = false;
         });
       });
+    });
+  }
+
+  /**
+   * 项目级批量校验：逐表调用预览的前 50 行/列数检查。串行执行，避免一次打开几十个
+   * 源/目标连接；关闭弹窗或点「停止」后，当前请求结束即不再继续下一张表。
+   */
+  function bindBatchCheck() {
+    var modal = document.getElementById('batch-check-modal');
+    if (!modal) { return; }
+    var body = document.getElementById('batch-check-body');
+    var summary = document.getElementById('batch-check-summary');
+    var start = document.getElementById('batch-check-start');
+    var stop = document.getElementById('batch-check-stop');
+    var rows = body ? Array.prototype.slice.call(
+        body.querySelectorAll('[data-role="batch-check-row"]')) : [];
+    if (!body || !summary || !start || !stop || !rows.length) { return; }
+
+    var running = false;
+    var stopRequested = false;
+    var index = 0;
+    var counts = { OK: 0, MISMATCH: 0, SKIPPED: 0, ERROR: 0 };
+
+    function format(template) {
+      var values = Array.prototype.slice.call(arguments, 1);
+      var text = template || '';
+      values.forEach(function (value, i) {
+        text = text.replace('{' + i + '}', value == null ? 0 : value);
+      });
+      return text;
+    }
+
+    function setStatus(row, status, columns, detail, badgeClass) {
+      var columnsCell = row.querySelector('[data-role="batch-columns"]');
+      var statusCell = row.querySelector('[data-role="batch-status"]');
+      var detailCell = row.querySelector('[data-role="batch-detail"]');
+      if (columnsCell) { columnsCell.textContent = columns; }
+      if (statusCell) {
+        statusCell.innerHTML = '';
+        var badge = document.createElement('span');
+        badge.className = 'badge ' + badgeClass;
+        badge.textContent = t('previewCheck.status.' + status);
+        statusCell.appendChild(badge);
+      }
+      if (detailCell) { detailCell.textContent = detail || '—'; }
+    }
+
+    function resetRows() {
+      rows.forEach(function (row) {
+        setStatus(row, 'SKIPPED', '—', '—', 'badge-mute');
+        var statusCell = row.querySelector('[data-role="batch-status"]');
+        if (statusCell) {
+          statusCell.innerHTML = '<span class="badge badge-mute">'
+              + t('batchCheck.pending') + '</span>';
+        }
+      });
+    }
+
+    function detailText(check, fallback) {
+      if (check.mismatchColumns && check.mismatchColumns.length) {
+        return t('previewCheck.mismatchColumns') + ': ' + check.mismatchColumns.join(', ');
+      }
+      if (check.detail) {
+        var key = 'previewCheck.detail.' + check.detail;
+        var translated = t(key);
+        if (translated !== key) { return translated; }
+        var raw = t(check.detail);
+        return raw === check.detail ? check.detail : raw;
+      }
+      return fallback;
+    }
+
+    function finish() {
+      running = false;
+      start.disabled = false;
+      start.classList.remove('is-hidden');
+      stop.classList.add('is-hidden');
+      if (stopRequested) {
+        summary.textContent = format(t('batchCheck.stopped'), index, rows.length);
+      } else {
+        summary.textContent = format(t('batchCheck.summary'), rows.length,
+            counts.OK, counts.MISMATCH, counts.SKIPPED, counts.ERROR);
+        toast(t('msg.batchCheck.done'), 'ok');
+      }
+      stopRequested = false;
+    }
+
+    function step() {
+      if (!running) { return; }
+      if (stopRequested || modal.getAttribute('aria-hidden') === 'true'
+          || index >= rows.length) {
+        finish();
+        return;
+      }
+      var row = rows[index++];
+      summary.textContent = format(t('batchCheck.progress'), index, rows.length);
+      var url = modal.dataset.action + '?table='
+          + encodeURIComponent(row.getAttribute('data-table') || '');
+      postJson(url, null, false).then(function (payload) {
+        if (!running) { return; }
+        if (!payload.success) {
+          counts.ERROR++;
+          setStatus(row, 'ERROR', '—', t(payload.message || 'error.unexpected'),
+              'badge-danger');
+          return;
+        }
+        var check = payload.previewCheck || {};
+        var status = check.status || 'ERROR';
+        counts[status] = (counts[status] || 0) + 1;
+        var columns = (check.sourceColumns || 0) + ' / ' + (check.targetColumns || 0);
+        var badgeClass = status === 'OK' ? 'badge-ok'
+            : status === 'MISMATCH' ? 'badge-warn'
+            : status === 'SKIPPED' ? 'badge-mute' : 'badge-danger';
+        setStatus(row, status, columns, detailText(check, '—'), badgeClass);
+      }).catch(function () {
+        if (!running) { return; }
+        counts.ERROR++;
+        setStatus(row, 'ERROR', '—', t('error.unexpected'), 'badge-danger');
+      }).then(function () {
+        step();
+      });
+    }
+
+    start.addEventListener('click', function () {
+      if (running) { return; }
+      var message = format(modal.dataset.confirm, rows.length);
+      JyncDialog.confirm(message, function () {
+        running = true;
+        stopRequested = false;
+        index = 0;
+        counts = { OK: 0, MISMATCH: 0, SKIPPED: 0, ERROR: 0 };
+        resetRows();
+        start.disabled = true;
+        start.classList.add('is-hidden');
+        stop.classList.remove('is-hidden');
+        stop.disabled = false;
+        step();
+      });
+    });
+
+    stop.addEventListener('click', function () {
+      if (!running) { return; }
+      stopRequested = true;
+      stop.disabled = true;
     });
   }
 
@@ -6157,6 +6331,8 @@
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
     bindExternalScopeBackfill();
+    bindBatchCheck();
+    bindPreviewCellCopy();
     bindFullLoadRefresh();
     bindFanoutStatusRefresh();
     bindResourceRefresh();

@@ -156,6 +156,17 @@ class TablePreviewViewTest {
     }
 
     @Test
+    void theProgressCardOffersAProjectWideBatchCheck() throws Exception {
+        String html = render();
+
+        assertThat(html).contains("data-role=\"batch-check-open\"");
+        assertThat(html).contains("id=\"batch-check-modal\"");
+        assertThat(html).contains("data-role=\"batch-check-row\"");
+        assertThat(html).contains("data-action=\"/api/projects/1/preview-check\"");
+        assertThat(html).contains(">Batch check</span>");
+    }
+
+    @Test
     void thePreviewModalOffersTheFirstTenRowsCheckInsteadOfASeparateAuditModal() throws Exception {
         String html = render();
 

@@ -23,6 +23,14 @@
                 <svg class="ico"><use href="#check-lg"/></svg>
                 <span th:text="#{rowcount.open}">Check row counts</span>
             </button>
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-role="batch-check-open"
+                    data-open-modal="batch-check-modal"
+                    th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(tableStatuses)}"
+                    th:attr="title=#{batchCheck.hint}">
+                <svg class="ico"><use href="#list-check"/></svg>
+                <span th:text="#{batchCheck.open}">Batch check</span>
+            </button>
             <!-- 批量设置只改项目级游标优先级，不读源库、不逐表写配置；表多时也只需一次操作。
                  未首次跑的项目同样可用，因此不依赖进度表是否为空。 -->
             <button type="button" class="btn btn-ghost btn-sm"
@@ -310,6 +318,61 @@
                     id="row-count-stop" th:text="#{rowcount.stop}">Stop</button>
             <button type="button" class="btn btn-ghost btn-sm"
                     data-close-modal="row-count-modal"
+                    th:text="#{common.close}">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- 项目级批量校验：逐表调用预览前 50 行/列数检查，浏览器串行执行，可随时停止。
+     页面只渲染空壳行，结果由 app.js 填充。 -->
+<div class="modal" id="batch-check-modal" aria-hidden="true" role="dialog" aria-modal="true"
+     th:if="${access.canEdit(project.ownerUsername) and !isRedisTarget and !#lists.isEmpty(tableStatuses)}"
+     th:attr="aria-label=#{batchCheck.title},
+              data-action=@{/api/projects/{id}/preview-check(id=${project.id})},
+              data-confirm=#{batchCheck.confirm}">
+    <div class="modal-mask" data-close-modal="batch-check-modal"></div>
+    <div class="modal-dialog preview-dialog">
+        <button type="button" class="modal-close" data-close-modal="batch-check-modal"
+                th:attr="aria-label=#{common.close}">
+            <svg class="ico"><use href="#x-lg"/></svg>
+        </button>
+        <div class="modal-head">
+            <h3 th:text="#{batchCheck.title}">Batch content check</h3>
+            <p id="batch-check-summary" class="small muted"
+               th:text="#{batchCheck.idle}">Not started</p>
+            <p class="small muted" th:text="#{batchCheck.hint}">Hint</p>
+        </div>
+        <div id="batch-check-body" class="preview-body">
+            <table class="tbl dense">
+                <thead>
+                <tr>
+                    <th th:text="#{log.objectName}">Table</th>
+                    <th class="num" th:text="#{batchCheck.columns}">Columns</th>
+                    <th th:text="#{previewCheck.title}">Result</th>
+                    <th th:text="#{previewCheck.detail}">Detail</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr th:each="s : ${tableStatuses}"
+                    data-role="batch-check-row"
+                    th:attr="data-table=${s.name}">
+                    <td class="mono" th:text="${s.name}">table</td>
+                    <td class="num" data-role="batch-columns">—</td>
+                    <td data-role="batch-status">
+                        <span class="badge badge-mute" th:text="#{batchCheck.pending}">Not checked</span>
+                    </td>
+                    <td class="small" data-role="batch-detail">—</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-primary btn-sm" id="batch-check-start"
+                    th:text="#{batchCheck.start}">Start</button>
+            <button type="button" class="btn btn-ghost btn-sm is-hidden" id="batch-check-stop"
+                    th:text="#{batchCheck.stop}">Stop</button>
+            <button type="button" class="btn btn-ghost btn-sm"
+                    data-close-modal="batch-check-modal"
                     th:text="#{common.close}">Close</button>
         </div>
     </div>

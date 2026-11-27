@@ -1735,7 +1735,9 @@ table.tbl a.truncate { display: block; }
 .preview-cell {
   display: inline-block; max-width: 360px; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;
+  cursor: copy;
 }
+.preview-cell:hover { text-decoration: underline dotted; }
 .preview-null { color: var(--ink-mute); font-style: italic; white-space: nowrap; }
 .preview-note { margin: 10px 2px 0; }
 .preview-side-switch {
