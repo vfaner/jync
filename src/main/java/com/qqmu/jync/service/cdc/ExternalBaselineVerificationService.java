@@ -12,6 +12,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import com.qqmu.jync.dto.SyncConfig;
@@ -21,6 +23,7 @@ import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.ChangeType;
 import com.qqmu.jync.model.ObjectType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.repository.CdcPositionRepository;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -54,6 +57,7 @@ public class ExternalBaselineVerificationService {
     private final SyncContextFactory contextFactory;
     private final DataSourceManager dataSourceManager;
     private final CdcPositionStore positionStore;
+    private final CdcPositionRepository positionRepository;
     private final ChangeLogRepository changeLogRepository;
     private final Set<Long> active = ConcurrentHashMap.newKeySet();
     private final ExecutorService executor = Executors.newFixedThreadPool(1, runnable -> {
@@ -66,11 +70,13 @@ public class ExternalBaselineVerificationService {
                                                SyncContextFactory contextFactory,
                                                DataSourceManager dataSourceManager,
                                                CdcPositionStore positionStore,
+                                               CdcPositionRepository positionRepository,
                                                ChangeLogRepository changeLogRepository) {
         this.projectRepository = projectRepository;
         this.contextFactory = contextFactory;
         this.dataSourceManager = dataSourceManager;
         this.positionStore = positionStore;
+        this.positionRepository = positionRepository;
         this.changeLogRepository = changeLogRepository;
     }
 
@@ -81,7 +87,7 @@ public class ExternalBaselineVerificationService {
         }
         try {
             positionStore.markExternalBaselineVerification(projectId,
-                    CdcPosition.VERIFY_RUNNING, null, null, null);
+                    CdcPosition.VERIFY_RUNNING, null, null, Instant.now());
         } catch (RuntimeException e) {
             // The adoption itself has already committed; a metadata-store hiccup here must
             // not turn it into a failed request. The status simply stays PENDING.
@@ -105,6 +111,26 @@ public class ExternalBaselineVerificationService {
             active.remove(projectId);
             finish(projectId, CdcPosition.VERIFY_ERROR, 1,
                     "verification executor refused the job", null);
+        }
+    }
+
+    /**
+     * A node that died mid-check leaves RUNNING behind. Recover only rows old enough that no
+     * live verification could still be progressing; a fresh 30-minute run is treated as
+     * abandoned and shown as pending again instead of "stuck forever".
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void recoverStaleRuns() {
+        try {
+            for (CdcPosition position : positionRepository
+                    .findByExternalBaselineVerifyStatusAndExternalBaselineVerifiedAtBefore(
+                            CdcPosition.VERIFY_RUNNING,
+                            Instant.now().minusSeconds(30 * 60))) {
+                positionStore.markExternalBaselineVerification(position.getProjectId(),
+                        CdcPosition.VERIFY_PENDING, null, null, null);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Could not recover stale external-baseline checks: {}", e.toString());
         }
     }
 

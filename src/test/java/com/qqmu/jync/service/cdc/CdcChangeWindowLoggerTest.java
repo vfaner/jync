@@ -63,7 +63,10 @@ class CdcChangeWindowLoggerTest {
         assertThat(detail.getValue()).contains("123 upserts", "4 deletes",
                 "through SCN 2112284");
         assertThat(rows.getValue()).isEqualTo(127);
-        verify(stateWriter).recordCdcTableProgress(eq(7L), eq("ORDERS"), eq(127L), any());
+        org.mockito.ArgumentCaptor<java.util.Map<String, Long>> progressRows =
+                org.mockito.ArgumentCaptor.forClass(java.util.Map.class);
+        verify(stateWriter).recordCdcTableProgressBatch(eq(7L), progressRows.capture(), any());
+        assertThat(progressRows.getValue()).containsEntry("ORDERS", 127L);
 
         // 已交接:到龄再刷不重复写
         clock.set(20_000L);

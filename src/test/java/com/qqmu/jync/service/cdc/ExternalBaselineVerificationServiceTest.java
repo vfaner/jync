@@ -3,6 +3,7 @@ package com.qqmu.jync.service.cdc;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -31,6 +32,7 @@ import com.qqmu.jync.model.ChangeLog;
 import com.qqmu.jync.model.DatabaseConfig;
 import com.qqmu.jync.model.DatabaseType;
 import com.qqmu.jync.model.Project;
+import com.qqmu.jync.repository.CdcPositionRepository;
 import com.qqmu.jync.repository.ChangeLogRepository;
 import com.qqmu.jync.repository.ProjectRepository;
 import com.qqmu.jync.service.connection.DataSourceManager;
@@ -45,6 +47,7 @@ class ExternalBaselineVerificationServiceTest {
     @Mock private SyncContextFactory contextFactory;
     @Mock private DataSourceManager dataSourceManager;
     @Mock private CdcPositionStore positionStore;
+    @Mock private CdcPositionRepository positionRepository;
     @Mock private ChangeLogRepository changeLogRepository;
 
     private ExternalBaselineVerificationService service;
@@ -58,7 +61,7 @@ class ExternalBaselineVerificationServiceTest {
     @BeforeEach
     void setUp() throws Exception {
         service = new ExternalBaselineVerificationService(projectRepository, contextFactory,
-                dataSourceManager, positionStore, changeLogRepository);
+                dataSourceManager, positionStore, positionRepository, changeLogRepository);
         source = DriverManager.getConnection("jdbc:h2:mem:baseline_verify", "sa", "");
         target = DriverManager.getConnection("jdbc:h2:mem:baseline_verify", "sa", "");
         try (Statement st = target.createStatement()) {
@@ -78,9 +81,9 @@ class ExternalBaselineVerificationServiceTest {
         position.setProjectId(1L);
         position.setBaselineDone(true);
         position.setExternalBaselineTableNames(List.of("ORDERS"));
-        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
-        when(positionStore.find(1L)).thenReturn(Optional.of(position));
-        when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
+        lenient().when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        lenient().when(positionStore.find(1L)).thenReturn(Optional.of(position));
+        lenient().when(contextFactory.parseConfig(project)).thenReturn(new SyncConfig());
         lenient().when(dataSourceManager.getConnection(sourceConfig)).thenReturn(source);
         lenient().when(dataSourceManager.getConnection(targetConfig)).thenReturn(target);
     }
@@ -131,6 +134,21 @@ class ExternalBaselineVerificationServiceTest {
         verify(positionStore).markExternalBaselineVerification(eq(1L),
                 eq(CdcPosition.VERIFY_ERROR), eq(1), any(), any());
         verify(changeLogRepository).save(any(ChangeLog.class));
+    }
+
+    @Test
+    void recoversAStaleRunningCheckToPending() {
+        CdcPosition stale = new CdcPosition();
+        stale.setProjectId(2L);
+        when(positionRepository
+                .findByExternalBaselineVerifyStatusAndExternalBaselineVerifiedAtBefore(
+                        eq(CdcPosition.VERIFY_RUNNING), any()))
+                .thenReturn(List.of(stale));
+
+        service.recoverStaleRuns();
+
+        verify(positionStore).markExternalBaselineVerification(eq(2L),
+                eq(CdcPosition.VERIFY_PENDING), isNull(), isNull(), isNull());
     }
 
     private SyncContext context() {

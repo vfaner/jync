@@ -90,13 +90,7 @@ public class TablePreviewService {
         long started = System.currentTimeMillis();
         Project project = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
-        Long databaseId = side == Side.SOURCE ? project.getSourceDbId() : project.getTargetDbId();
-        if (databaseId == null) {
-            throw new IllegalStateException(side == Side.SOURCE
-                    ? "error.project.source.required" : "error.project.target.required");
-        }
-        DatabaseConfig config = databaseConfigRepository.findById(databaseId)
-                .orElseThrow(() -> new IllegalStateException("error.connection.missing"));
+        DatabaseConfig config = sideConfig(project, side);
 
         // The declared family, not the bare type: a CUSTOM connection carries GENERIC and
         // would otherwise preview through the generic reader and the generic dialect.
@@ -133,23 +127,52 @@ public class TablePreviewService {
         String table = tableName == null ? "?" : tableName.trim();
         int rowBudget = Math.max(1, Math.min(ROW_LIMIT, rows));
         try {
-            TablePreview source = preview(projectId, table, Side.SOURCE);
-            TablePreview target = preview(projectId, table, Side.TARGET);
-            boolean columnCountMatch = source.columns().size() == target.columns().size();
-            if (!source.orderedByPrimaryKey() || !target.orderedByPrimaryKey()) {
-                // Without a primary key the two databases may return the same rows in
-                // different physical order. Comparing by position would then invent drift;
-                // the column counts are still meaningful.
-                return new TablePreviewCheck(table, columnCountMatch
-                        ? TablePreviewCheck.Status.SKIPPED
-                        : TablePreviewCheck.Status.MISMATCH,
-                        source.columns().size(), target.columns().size(), columnCountMatch,
-                        0, 0, 0, 0, List.of(),
-                        columnCountMatch ? "unordered" : "column-count",
-                        System.currentTimeMillis() - started);
+            Project project = projectRepository.findById(projectId)
+                    .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+            DatabaseConfig sourceConfig = sideConfig(project, Side.SOURCE);
+            DatabaseConfig targetConfig = sideConfig(project, Side.TARGET);
+            MetadataReader sourceReader = readerFactory.forType(sourceConfig.getType(),
+                    sourceConfig.resolvedFamily());
+            MetadataReader targetReader = readerFactory.forType(targetConfig.getType(),
+                    targetConfig.resolvedFamily());
+            SqlDialect sourceDialect = dialectFactory.forType(sourceConfig.getType(), null,
+                    sourceConfig.resolvedFamily());
+            SqlDialect targetDialect = dialectFactory.forType(targetConfig.getType(), null,
+                    targetConfig.resolvedFamily());
+            SyncConfig syncConfig = parseConfig(project);
+            try (Connection sourceConn = dataSourceManager.getConnection(sourceConfig);
+                 Connection targetConn = dataSourceManager.getConnection(targetConfig)) {
+                String sourceSchema = resolveSchema(sourceConfig, sourceReader, sourceConn);
+                String targetSchema = resolveSchema(targetConfig, targetReader, targetConn);
+                String sourceTable = resolveTableName(sourceConn, sourceReader, sourceSchema, table);
+                String targetTable = resolveTableName(targetConn, targetReader, targetSchema,
+                        syncConfig.targetTableName(table));
+                List<String> sourceKeys = primaryKeys(sourceConn, sourceReader, sourceSchema,
+                        sourceTable);
+                List<String> targetKeys = primaryKeys(targetConn, targetReader, targetSchema,
+                        targetTable);
+                TablePreview source = read(sourceConn, sourceDialect, sourceSchema, sourceTable,
+                        sourceKeys, sourceConfig.getName(), Side.SOURCE, started,
+                        sourceConfig.effectiveType());
+                TablePreview target = read(targetConn, targetDialect, targetSchema, targetTable,
+                        targetKeys, targetConfig.getName(), Side.TARGET, started,
+                        targetConfig.effectiveType());
+                boolean columnCountMatch = source.columns().size() == target.columns().size();
+                if (!source.orderedByPrimaryKey() || !target.orderedByPrimaryKey()) {
+                    // Without a primary key the two databases may return the same rows in
+                    // different physical order. Comparing by position would then invent drift;
+                    // the column counts are still meaningful.
+                    return new TablePreviewCheck(table, columnCountMatch
+                            ? TablePreviewCheck.Status.SKIPPED
+                            : TablePreviewCheck.Status.MISMATCH,
+                            source.columns().size(), target.columns().size(), columnCountMatch,
+                            0, 0, 0, 0, List.of(),
+                            columnCountMatch ? "unordered" : "column-count",
+                            System.currentTimeMillis() - started);
+                }
+                return comparePreviews(table, source, target, rowBudget, started);
             }
-            return comparePreviews(table, source, target, rowBudget, started);
-        } catch (RuntimeException e) {
+        } catch (SQLException | RuntimeException e) {
             log.debug("Preview check failed for '{}' of project {}: {}",
                     table, projectId, e.toString());
             String message = e.getMessage();
@@ -395,6 +418,16 @@ public class TablePreviewService {
         }
         String state = e.getSQLState();
         return "HYT00".equals(state) || "57014".equals(state);
+    }
+
+    private DatabaseConfig sideConfig(Project project, Side side) {
+        Long databaseId = side == Side.SOURCE ? project.getSourceDbId() : project.getTargetDbId();
+        if (databaseId == null) {
+            throw new IllegalStateException(side == Side.SOURCE
+                    ? "error.project.source.required" : "error.project.target.required");
+        }
+        return databaseConfigRepository.findById(databaseId)
+                .orElseThrow(() -> new IllegalStateException("error.connection.missing"));
     }
 
     private TablePreview read(Connection conn, SqlDialect dialect, String schema, String table,

@@ -1,6 +1,9 @@
 package com.qqmu.jync.service.sync;
 
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import org.springframework.context.ApplicationEventPublisher;
@@ -439,25 +442,52 @@ public class SyncStateWriter {
     }
 
     /**
-     * Advances a CDC table's last-applied timestamp and cumulative row count. Called from the
-     * change-window flush (not per row), so a busy stream writes one row per table per flush.
-     * The progress row is the one the baseline created; an external baseline cleared it and
-     * deliberately keeps the table's state in the position marker instead.
+     * Advances the last-applied timestamp and cumulative row count of every table in one
+     * CDC change window, in one transaction. The window logger already has the per-table
+     * counts; issuing one REQUIRES_NEW transaction per table made a busy stream pay a
+     * metadata commit per table per flush.
+     *
+     * <p>Progress rows are the ones the baseline created; an external baseline cleared them
+     * and deliberately keeps the table's state in the position marker instead.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void recordCdcTableProgress(Long projectId, String table, long rows, Instant at) {
-        if (rows <= 0) {
+    public void recordCdcTableProgressBatch(Long projectId, Map<String, Long> rowsByTable,
+                                            Instant at) {
+        if (rowsByTable == null || rowsByTable.isEmpty()) {
             return;
         }
-        progressRepository
-                .findByProjectIdAndObjectTypeAndObjectName(projectId, ObjectType.TABLE, table)
-                .ifPresent(progress -> {
-                    long total = progress.getRowsSyncedTotal() == null
-                            ? 0L : progress.getRowsSyncedTotal();
-                    progress.setRowsSyncedTotal(total + rows);
-                    progress.setLastSyncTime(at);
-                    progressRepository.save(progress);
-                });
+        Collection<String> names = rowsByTable.keySet();
+        List<SyncProgress> rows = progressRepository.findCdcProgressRows(projectId,
+                ObjectType.TABLE, names);
+        for (SyncProgress progress : rows) {
+            Long add = rowsByTable.get(progress.getObjectName());
+            if (add == null) {
+                // Case-sensitive miss; the CDC table spelling and the baseline row normally
+                // agree, but do not let an odd case skip the update.
+                for (Map.Entry<String, Long> entry : rowsByTable.entrySet()) {
+                    if (entry.getKey().equalsIgnoreCase(progress.getObjectName())) {
+                        add = entry.getValue();
+                        break;
+                    }
+                }
+            }
+            if (add == null || add <= 0) {
+                continue;
+            }
+            long total = progress.getRowsSyncedTotal() == null
+                    ? 0L : progress.getRowsSyncedTotal();
+            progress.setRowsSyncedTotal(total + add);
+            progress.setLastSyncTime(at);
+        }
+        progressRepository.saveAll(rows);
+    }
+
+    /** Single-table convenience used by callers that do not already have a window batch. */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordCdcTableProgress(Long projectId, String table, long rows, Instant at) {
+        if (rows > 0) {
+            recordCdcTableProgressBatch(projectId, Map.of(table, rows), at);
+        }
     }
 
     /** Clears every cursor and snapshot for a project, forcing a full reload next run. */

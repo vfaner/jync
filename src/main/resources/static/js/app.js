@@ -3207,6 +3207,29 @@
     });
   }
 
+  /** Re-runs the external-baseline structure check from the CDC card. */
+  function bindExternalBaselineReverify() {
+    document.addEventListener('click', function (e) {
+      var target = e.target && e.target.closest
+          ? e.target.closest('[data-role="external-baseline-reverify"]') : null;
+      if (!target || target.disabled) { return; }
+      e.preventDefault();
+      target.disabled = true;
+      postJson(target.dataset.action, null, false).then(function (payload) {
+        if (!payload.success) {
+          toast(t(payload.message || 'error.unexpected'), 'danger');
+          target.disabled = false;
+          return;
+        }
+        toast(t(payload.message || 'msg.cdc.verify.started'), 'ok');
+        setTimeout(function () { window.location.reload(); }, 850);
+      }).catch(function () {
+        toast(t('error.unexpected'), 'danger');
+        target.disabled = false;
+      });
+    });
+  }
+
   /* ─── 赞赏弹窗 ──────────────────────────────────────────── */
 
   /**
@@ -6346,6 +6369,7 @@
     document.querySelectorAll('[data-role="pager"]').forEach(bindPager);
     bindCdcRefresh();
     bindExternalScopeBackfill();
+    bindExternalBaselineReverify();
     bindBatchCheck();
     bindPreviewCellCopy();
     bindFullLoadRefresh();

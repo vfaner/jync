@@ -84,6 +84,15 @@ class CdcApiControllerTest {
     }
 
     @Test
+    void verifyExternalBaselineStartsTheStructureCheck() throws Exception {
+        mvc.perform(post("/api/projects/1/cdc/verify-baseline").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true))
+                .andExpect(jsonPath("$.message").value("msg.cdc.verify.started"));
+        verify(operations).reverifyExternalBaseline(1L);
+    }
+
+    @Test
     void rebaselineReturnsOk() throws Exception {
         when(operations.rebaseline(1L)).thenReturn(true);
 

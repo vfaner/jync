@@ -17,6 +17,9 @@ public interface CdcPositionRepository extends JpaRepository<CdcPosition, Long> 
     @Query("delete from CdcPosition p where p.projectId = :projectId")
     void deleteByProjectId(@Param("projectId") Long projectId);
 
+    java.util.List<CdcPosition> findByExternalBaselineVerifyStatusAndExternalBaselineVerifiedAtBefore(
+            String status, java.time.Instant cutoff);
+
     /**
      * Verification metadata is diagnostic and must not rewrite the position row through a
      * stale entity: a live consumer may advance the row between the read and the save. A

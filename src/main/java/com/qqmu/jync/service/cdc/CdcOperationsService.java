@@ -373,6 +373,17 @@ public class CdcOperationsService {
         baselineVerification.verifyAsync(projectId);
     }
 
+    /** Re-runs the structural check of an already-adopted external baseline. */
+    public void reverifyExternalBaseline(Long projectId) {
+        projectRepository.findById(projectId)
+                .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));
+        CdcPosition position = positionStore.find(projectId).orElse(null);
+        if (position == null || !position.hasExternalBaseline()) {
+            throw new IllegalStateException("error.cdc.external.scopeNotEligible");
+        }
+        baselineVerification.verifyAsync(projectId);
+    }
+
     /**
      * Repairs the table scope of a baseline adopted by an older version, which marked
      * {@code baselineDone} but did not record which tables the dump covered. This is

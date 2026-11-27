@@ -45,6 +45,13 @@ public interface SyncProgressRepository extends JpaRepository<SyncProgress, Long
             + "where p.objectType = :objectType group by p.projectId")
     List<Object[]> countByObjectTypeGroupedByProject(@Param("objectType") ObjectType objectType);
 
+    /** Progress rows for one CDC change-window flush, loaded in one transaction for update. */
+    @Query("select p from SyncProgress p where p.projectId = :projectId "
+            + "and p.objectType = :objectType and p.objectName in :names")
+    List<SyncProgress> findCdcProgressRows(@Param("projectId") Long projectId,
+                                           @Param("objectType") ObjectType objectType,
+                                           @Param("names") java.util.Collection<String> names);
+
     // Bulk, not a derived delete: a derived delete loads each entity before removing it.
     @Modifying
     @Query("delete from SyncProgress p where p.projectId = :projectId")

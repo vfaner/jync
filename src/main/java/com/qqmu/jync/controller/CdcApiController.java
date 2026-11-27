@@ -133,6 +133,24 @@ public class CdcApiController {
      * Repairs the table scope of an external baseline adopted before the scope was stored.
      * This only writes metadata; the source position and baseline flag stay untouched.
      */
+    /** Re-runs the structural verification of an adopted external baseline. */
+    @PostMapping("/{id}/cdc/verify-baseline")
+    public ResponseEntity<Map<String, Object>> verifyExternalBaseline(@PathVariable Long id) {
+        try {
+            projectService.requireEditable(id, AccessGuard.current());
+            operations.reverifyExternalBaseline(id);
+        } catch (IllegalArgumentException e) {
+            return badRequest(e);
+        } catch (IllegalStateException e) {
+            return badRequest(new IllegalArgumentException(String.valueOf(e.getMessage())));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        body.put("success", true);
+        body.put("message", "msg.cdc.verify.started");
+        return ResponseEntity.ok(body);
+    }
+
     @PostMapping("/{id}/cdc/backfill-external-scope")
     public ResponseEntity<Map<String, Object>> backfillExternalScope(@PathVariable Long id) {
         try {

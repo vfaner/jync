@@ -1,7 +1,9 @@
 package com.qqmu.jync.service.cdc;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -128,9 +130,13 @@ public final class CdcChangeWindowLogger implements AutoCloseable {
         }
         String through = stats.positionLabel();
         boolean applied = false;
+        Map<String, Long> rowsByTable = new LinkedHashMap<>();
         for (TableChange change : changes) {
             long total = change.upserts() + change.deletes();
             applied |= total > 0;
+            if (total > 0) {
+                rowsByTable.merge(change.table(), total, Long::sum);
+            }
             String detail = "CDC window: " + change.upserts() + " upserts, "
                     + change.deletes() + " deletes"
                     + (through != null ? " (through " + through + ")" : "");
@@ -138,13 +144,21 @@ public final class CdcChangeWindowLogger implements AutoCloseable {
                 stateWriter.recordLog(projectId, ObjectType.DATA, change.table(),
                         ChangeType.INFO, detail, true, 0L,
                         (int) Math.min(Integer.MAX_VALUE, total));
-                // The change log is the history; progress is the per-table "last applied"
-                // state the detail page and the AI status tool read.
-                stateWriter.recordCdcTableProgress(projectId, change.table(), total,
-                        Instant.ofEpochMilli(clockMillis.getAsLong()));
             } catch (RuntimeException e) {
                 log.warn("Could not write CDC change window for project {} table {}: {}",
                         projectId, change.table(), e.getMessage());
+            }
+        }
+        if (!rowsByTable.isEmpty()) {
+            try {
+                // The change log is the history; progress is the per-table "last applied"
+                // state the detail page and the AI status tool read. One transaction per
+                // window, not one per table.
+                stateWriter.recordCdcTableProgressBatch(projectId, rowsByTable,
+                        Instant.ofEpochMilli(clockMillis.getAsLong()));
+            } catch (RuntimeException e) {
+                log.warn("Could not update CDC table progress for project {}: {}",
+                        projectId, e.getMessage());
             }
         }
         // One stamp per flush, not per table: the dashboard cares when data last landed,
