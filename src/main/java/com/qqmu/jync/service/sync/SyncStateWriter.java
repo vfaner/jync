@@ -502,6 +502,17 @@ public class SyncStateWriter {
         }
     }
 
+    /**
+     * Records the statistics-only estimate when a full load starts, so the progress percentage
+     * is available while the load is still running. The later {@code advanceCursor} keeps the
+     * same value as part of its final write.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SyncProgress recordFullLoadEstimate(SyncProgress progress, Long estimate) {
+        progress.setFullLoadTotalRows(estimate);
+        return progressRepository.save(progress);
+    }
+
     /** Clears every cursor and snapshot for a project, forcing a full reload next run. */
     @Transactional
     public void resetProject(Long projectId) {

@@ -101,6 +101,19 @@ class SyncStateWriterLastSyncTimeTest {
     }
 
     @Test
+    @DisplayName("the full-load estimate is persisted before the load finishes")
+    void theFullLoadEstimateIsPersistedBeforeTheLoadFinishes() {
+        SyncProgress progress = writer.loadOrCreateProgress(915L, "orders");
+
+        writer.recordFullLoadEstimate(progress, 250L);
+
+        assertThat(progressRepository
+                .findByProjectIdAndObjectTypeAndObjectName(915L, ObjectType.TABLE, "orders")
+                .orElseThrow(IllegalStateException::new)
+                .getFullLoadTotalRows()).isEqualTo(250L);
+    }
+
+    @Test
     @DisplayName("a full load records its completion time even when it moved no rows")
     void aFullLoadRecordsItsCompletionTimeWithoutClaimingAnIncrementalSync() {
         SyncProgress progress = seededProgress(914L, "orders");

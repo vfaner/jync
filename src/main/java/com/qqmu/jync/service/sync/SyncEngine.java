@@ -1593,6 +1593,19 @@ public class SyncEngine {
             }
         }
 
+        if (firstLoad) {
+            // Persist the statistics estimate before the load starts: waiting for
+            // advanceCursor would leave the running load without a percentage until it
+            // finished. Missing statistics stay null; no COUNT(*) is issued here.
+            Long estimate = dataSync.statisticsRowEstimate(table, sourceConn, ctx);
+            if (!java.util.Objects.equals(progress.getFullLoadTotalRows(), estimate)) {
+                SyncProgress updated = stateWriter.recordFullLoadEstimate(progress, estimate);
+                if (updated != null) {
+                    progress = updated;
+                }
+            }
+        }
+
         // 游标只能证明"我们读到哪儿了"，证明不了"目标真的收到了"。定期核对一次行数，
         // 目标少了就把游标清掉，让下一轮重新全量读一遍。
         // 用审计返回的实例继续：一旦它清了游标，修复是在自己的事务里提交的，

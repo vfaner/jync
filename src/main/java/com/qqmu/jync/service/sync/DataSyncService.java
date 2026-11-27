@@ -2074,7 +2074,7 @@ public class DataSyncService {
      * COUNT(*); a product with no usable statistics yields null and the UI simply omits the
      * percentage.
      */
-    private Long statisticsRowEstimate(TableMeta table, Connection sourceConn, SyncContext ctx) {
+    Long statisticsRowEstimate(TableMeta table, Connection sourceConn, SyncContext ctx) {
         MetadataReader.TableStat stat = tableStat(table, sourceConn, ctx);
         return stat == null || stat.rows() == null || stat.rows() <= 0 ? null : stat.rows();
     }
