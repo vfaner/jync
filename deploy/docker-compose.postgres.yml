@@ -53,7 +53,7 @@ services:
       # 默认密钥（等于没加密）。必须改成自己的长随机串并长期保持不变——修改后
       # 数据库里已存的连接密码将无法解密。多实例部署也必须让每个节点用同一组值。
       SYNC_CRYPTO_PASSWORD: change-crypto-password
-      SYNC_CRYPTO_SALT: change-crypto-salt
+      SYNC_CRYPTO_SALT: 0123456789abcdef
     volumes:
       # 元数据已经不在本地，但这个卷仍要保留：应用内 HTTPS 证书
       # （/app/data/tls）和备份都放在这里

@@ -173,11 +173,11 @@ export SPRING_DATASOURCE_USERNAME='jync'
 export SPRING_DATASOURCE_PASSWORD='change-me'
 export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
 export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
-export SYNC_CRYPTO_SALT='another-long-random-value'
+export SYNC_CRYPTO_SALT='0123456789abcdef'  # even-length hex
 java -jar jync.jar
 ```
 
-For PostgreSQL use `jdbc:postgresql://db.example.com:5432/jync` / `org.postgresql.Driver`; for Oracle use `jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1` / `oracle.jdbc.OracleDriver`. Tables are created by `ddl-auto: update`.
+`SYNC_CRYPTO_SALT` must be an even-length hexadecimal string; replace the sample before production. For PostgreSQL use `jdbc:postgresql://db.example.com:5432/jync` / `org.postgresql.Driver`; for Oracle use `jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1` / `oracle.jdbc.OracleDriver`. Tables are created by `ddl-auto: update`.
 
 Set `SYNC_CRYPTO_*` explicitly and keep it stable; changing it makes stored connection passwords undecryptable. Existing H2 data must be exported as a config package and imported after the new instance starts; changing the JDBC URL alone is not a migration. See [metadata migration](docs/configuration.md#元数据库迁移).
 

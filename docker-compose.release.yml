@@ -39,7 +39,8 @@ services:
       #
       # 使用外部元数据库时，强烈建议同时设置并长期保持不变：
       # SYNC_CRYPTO_PASSWORD: change-crypto-password
-      # SYNC_CRYPTO_SALT: change-crypto-salt
+      # SYNC_CRYPTO_SALT 必须是偶数位十六进制字符串（示例值上线前换成自己的）
+      # SYNC_CRYPTO_SALT: 0123456789abcdef
       # 页面上的「一键升级」在容器内会改为展示镜像更新命令；
       # 若要让宿主机自动拉取新镜像，可自行加 Watchtower，例如：
       # labels:

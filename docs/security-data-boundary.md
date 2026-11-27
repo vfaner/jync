@@ -56,7 +56,7 @@ Jync 是自托管单体进程：业务数据只在「源库 → Jync 进程内�
 
 ### 3.1 连接密码与 Webhook 地址
 
-- 算法：Spring Security `Encryptors.delux`（AES-256-CBC，每个值独立随机 IV），密文带 `enc:` 前缀。
+- 算法：Spring Security `Encryptors.delux`（AES-256-GCM，每个值独立随机 IV），密文带 `enc:` 前缀。
 - 密钥：`sync.crypto-password` / `sync.crypto-salt`，或首次启动生成并写入 `./data/jync.key`。
 - **外部元数据库没有本地 H2 文件可依附**：此时必须显式设置 `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT`（建议放 Secret）。未设置时会退回发行包里的公开默认值，`enc:` 只相当于混淆——这是多实例部署最容易被忽略的一条。
 - `data/jync.key` 等同于全部存量凭据的钥匙：不要放进配置包、不要提交到代码仓库，备份数据卷时按密钥材料保护。丢失后只能重新录入连接密码；泄露后应更换所有数据库口令并轮换密钥。
@@ -88,7 +88,7 @@ APP_UPDATE_CHECK_ENABLED=false
 SYNC_AI_ENABLED=false
 # 使用外部元数据库时必须显式设置；H2 部署可省略（首次启动自动生成 key 文件）
 SYNC_CRYPTO_PASSWORD=<强随机值>
-SYNC_CRYPTO_SALT=<强随机值>
+SYNC_CRYPTO_SALT=<偶数位十六进制，如 0123456789abcdef>
 ```
 
 ```yaml

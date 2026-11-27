@@ -158,7 +158,7 @@ Spring 的 relaxed binding 让所有配置项都能用环境变量覆盖，无�
 | `SPRING_DATASOURCE_DRIVER_CLASS_NAME` | `spring.datasource.driver-class-name` | 驱动类；能按 URL 推断时可省略 |
 | `JYN_RESET_LOGIN` | `app.login.reset-on-startup` | 应急开关：关闭本地登录后外部认证不可用时，设为 `true` 启动一次即恢复本地登录并保存；修好后去掉 |
 | `JYN_METRICS_TOKEN` | `metrics.prometheus-token` | Prometheus 抓取 `/api/metrics/prometheus` 的 Bearer token。不设则端点返回 404；设置后用 `Authorization: Bearer <token>` 访问。建议放 Secret |
-| `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT` | `sync.crypto-password` / `sync.crypto-salt` | 可选：连接密码的加密密钥。不设则首次启动生成并写入数据卷里的 `<库名>.key`（备份数据卷即已包含）；从旧版本升级上来的部署**不要改** |
+| `SYNC_CRYPTO_PASSWORD` / `SYNC_CRYPTO_SALT` | `sync.crypto-password` / `sync.crypto-salt` | 可选：连接密码的加密密钥。`SYNC_CRYPTO_SALT` 必须是偶数位十六进制字符串（如 `0123456789abcdef`）。不设则首次启动生成并写入数据卷里的 `<库名>.key`（备份数据卷即已包含）；从旧版本升级上来的部署**不要改** |
 | `SYNC_POLL_INTERVAL` | `sync.poll-interval` | 默认轮询间隔（毫秒） |
 | `SYNC_AI_ENABLED` | `sync.ai.enabled` | `false` 可整体移除 AI 功能（纯内网合规场景） |
 | `APP_UPDATE_CHECK_ENABLED` | `app.update-check.enabled` | 纯内网访问不了 GitHub 时设 `false`（也可在「系统配置 → 更新检查」关闭；显式设置时页面开关只读） |

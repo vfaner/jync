@@ -166,7 +166,8 @@ Jync 的元数据（连接、同步任务、ETL、专属迁移、用户、系统
    SPRING_DATASOURCE_DRIVER_CLASS_NAME=org.postgresql.Driver
    # 强烈建议显式指定；不设则落到发行包的公开默认密钥
    SYNC_CRYPTO_PASSWORD=...
-   SYNC_CRYPTO_SALT=...
+   # salt 必须是偶数位十六进制字符串
+   SYNC_CRYPTO_SALT=0123456789abcdef
    ```
 
 3. 启动新实例。`ddl-auto: update` 会自动建出全部元数据表。

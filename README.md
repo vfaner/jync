@@ -132,11 +132,11 @@ export SPRING_DATASOURCE_USERNAME='jync'
 export SPRING_DATASOURCE_PASSWORD='change-me'
 export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
 export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
-export SYNC_CRYPTO_SALT='another-long-random-value'
+export SYNC_CRYPTO_SALT='0123456789abcdef'  # 偶数位十六进制
 java -jar jync.jar
 ```
 
-PostgreSQL 使用 `jdbc:postgresql://db.example.com:5432/jync` / `org.postgresql.Driver`，Oracle 使用 `jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1` / `oracle.jdbc.OracleDriver`。新库由 `ddl-auto: update` 自动建表。
+`SYNC_CRYPTO_SALT` 必须是偶数位十六进制字符串；示例值上线前要换掉。PostgreSQL 使用 `jdbc:postgresql://db.example.com:5432/jync` / `org.postgresql.Driver`，Oracle 使用 `jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1` / `oracle.jdbc.OracleDriver`。新库由 `ddl-auto: update` 自动建表。
 
 `SYNC_CRYPTO_*` 必须显式设置并长期保持不变；更换后已保存的连接密码将无法解密。已有 H2 数据不能只改连接串，需先在旧实例导出配置包，启动新实例后导入，详见[元数据库迁移](docs/configuration.md#元数据库迁移)。
 

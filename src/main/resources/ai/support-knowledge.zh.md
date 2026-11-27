@@ -598,11 +598,11 @@ export SPRING_DATASOURCE_USERNAME='jync'
 export SPRING_DATASOURCE_PASSWORD='change-me'
 export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
 export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
-export SYNC_CRYPTO_SALT='another-long-random-value'
+export SYNC_CRYPTO_SALT='0123456789abcdef'  # 偶数位十六进制
 java -jar jync.jar
 ```
 
-PostgreSQL 的 URL 例如 `jdbc:postgresql://db:5432/jync`，驱动为 `org.postgresql.Driver`；Oracle 可用 `jdbc:oracle:thin:@//db:1521/FREEPDB1`，驱动为 `oracle.jdbc.OracleDriver`。新库的表由 `ddl-auto: update` 自动创建；不是只改 URL 就会带上旧数据，已有 H2 数据要按上一节导出配置包再导入。`SYNC_CRYPTO_PASSWORD/SALT` 必须显式设置并长期保持不变；`/app/data` 仍建议挂载，用于 TLS 证书和备份。
+`SYNC_CRYPTO_SALT` 必须是偶数位十六进制字符串；示例值上线前要换掉。PostgreSQL 的 URL 例如 `jdbc:postgresql://db:5432/jync`，驱动为 `org.postgresql.Driver`；Oracle 可用 `jdbc:oracle:thin:@//db:1521/FREEPDB1`，驱动为 `oracle.jdbc.OracleDriver`。新库的表由 `ddl-auto: update` 自动创建；不是只改 URL 就会带上旧数据，已有 H2 数据要按上一节导出配置包再导入。`SYNC_CRYPTO_PASSWORD/SALT` 必须显式设置并长期保持不变；`/app/data` 仍建议挂载，用于 TLS 证书和备份。
 
 ### Docker / Compose 启动
 
@@ -622,7 +622,7 @@ docker run -d --name jync -p 8080:8080 \
   -e SPRING_DATASOURCE_PASSWORD=change-me \
   -e SPRING_DATASOURCE_DRIVER_CLASS_NAME=com.mysql.cj.jdbc.Driver \
   -e SYNC_CRYPTO_PASSWORD=a-long-random-secret \
-  -e SYNC_CRYPTO_SALT=another-long-random-value \
+  -e SYNC_CRYPTO_SALT=0123456789abcdef \
   -v jync-data:/app/data -v jync-logs:/app/logs \
   vfaner/jync:latest
 ```

@@ -737,11 +737,11 @@ export SPRING_DATASOURCE_USERNAME='jync'
 export SPRING_DATASOURCE_PASSWORD='change-me'
 export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
 export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
-export SYNC_CRYPTO_SALT='another-long-random-value'
+export SYNC_CRYPTO_SALT='0123456789abcdef'  # even-length hex
 java -jar jync.jar
 ```
 
-For PostgreSQL use `jdbc:postgresql://db:5432/jync` and `org.postgresql.Driver`; for Oracle use `jdbc:oracle:thin:@//db:1521/FREEPDB1` and `oracle.jdbc.OracleDriver`. Tables are created by `ddl-auto: update` in the empty database. Changing the URL alone does not migrate existing H2 data: export a config package from the old instance, start the new one, then import it. Set `SYNC_CRYPTO_PASSWORD/SALT` explicitly and keep them stable; keep `/app/data` mounted for TLS certificates and backups.
+`SYNC_CRYPTO_SALT` must be an even-length hexadecimal string; replace the sample before production. For PostgreSQL use `jdbc:postgresql://db:5432/jync` and `org.postgresql.Driver`; for Oracle use `jdbc:oracle:thin:@//db:1521/FREEPDB1` and `oracle.jdbc.OracleDriver`. Tables are created by `ddl-auto: update` in the empty database. Changing the URL alone does not migrate existing H2 data: export a config package from the old instance, start the new one, then import it. Set `SYNC_CRYPTO_PASSWORD/SALT` explicitly and keep them stable; keep `/app/data` mounted for TLS certificates and backups.
 
 ### Starting with Docker / Compose
 
@@ -761,7 +761,7 @@ docker run -d --name jync -p 8080:8080 \
   -e SPRING_DATASOURCE_PASSWORD=change-me \
   -e SPRING_DATASOURCE_DRIVER_CLASS_NAME=com.mysql.cj.jdbc.Driver \
   -e SYNC_CRYPTO_PASSWORD=a-long-random-secret \
-  -e SYNC_CRYPTO_SALT=another-long-random-value \
+  -e SYNC_CRYPTO_SALT=0123456789abcdef \
   -v jync-data:/app/data -v jync-logs:/app/logs \
   vfaner/jync:latest
 ```
