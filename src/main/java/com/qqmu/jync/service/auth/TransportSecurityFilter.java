@@ -1,9 +1,13 @@
 package com.qqmu.jync.service.auth;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import jakarta.servlet.FilterChain;
@@ -17,6 +21,8 @@ import com.qqmu.jync.service.tls.TlsConfig;
 import com.qqmu.jync.service.tls.TlsRuntimeState;
 import com.qqmu.jync.util.ClientIpResolver;
 import com.qqmu.jync.util.HttpsSupport;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Transport security: HTTPS enforcement and the headers that only make sense with it.
@@ -44,8 +50,9 @@ import com.qqmu.jync.util.HttpsSupport;
  *
  * <p>The switch is read per request through a {@link BooleanSupplier}: it is page-editable
  * now, and a value captured at construction would keep enforcing the old setting until the
- * next restart. It is consulted only for a plaintext, non-exempt request, so HTTPS traffic
- * and probes never pay for the lookup.
+ * next restart. HTTPS traffic skips it entirely. A plaintext request needs the TLS snapshot
+ * for the CSP as well, because the login form must be allowed to follow the redirect to the
+ * app's own HTTPS endpoint; that snapshot is an in-memory value, not a database lookup.
  *
  * <p>{@code X-Forwarded-Proto} is believed only from a peer already named as a trusted
  * proxy. That is the same rule {@link ClientIpResolver} applies to {@code X-Forwarded-For}:
@@ -56,6 +63,7 @@ import com.qqmu.jync.util.HttpsSupport;
  * terminated by a trusted proxy. The header is about the browser-to-public-host leg, which
  * is exactly the leg the proxy owns.
  */
+@Slf4j
 public class TransportSecurityFilter extends OncePerRequestFilter {
 
     /**
@@ -84,9 +92,14 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
     /** Enough of the IPv6 alphabet to trust; the connector itself rejects anything invalid. */
     private static final Pattern IPV6 = Pattern.compile("[0-9A-Fa-f:.]{2,45}");
 
+    /** A bare http(s) origin: no credentials, path, query or fragment. */
+    private static final Pattern ORIGIN = Pattern.compile(
+            "(?i)^(https?)://(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9._-]{1,253})(?::(\\d{1,5}))?$");
+
     private final BooleanSupplier requireHttps;
     private final Supplier<TlsRuntimeState> tlsState;
     private final String redirectHost;
+    private final List<String> formActionOrigins;
 
     /** Fixed-value form, kept for tests that do not exercise the dynamic switch. */
     public TransportSecurityFilter(boolean requireHttps) {
@@ -100,9 +113,17 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
     public TransportSecurityFilter(BooleanSupplier requireHttps,
                                    Supplier<TlsRuntimeState> tlsState,
                                    String redirectHost) {
+        this(requireHttps, tlsState, redirectHost, "");
+    }
+
+    public TransportSecurityFilter(BooleanSupplier requireHttps,
+                                   Supplier<TlsRuntimeState> tlsState,
+                                   String redirectHost,
+                                   String formActionOrigins) {
         this.requireHttps = requireHttps;
         this.tlsState = tlsState;
         this.redirectHost = redirectHost == null ? "" : redirectHost.trim();
+        this.formActionOrigins = parseOrigins(formActionOrigins);
     }
 
     @Override
@@ -112,12 +133,14 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
         if (secure) {
             response.setHeader("Strict-Transport-Security", HSTS);
         }
-        response.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+        // The TLS snapshot is also needed to decide whether the login form's POST is allowed
+        // to follow the plaintext-to-HTTPS redirect. It is a plain in-memory read, and the
+        // secure path still skips it entirely.
+        Optional<TlsConfig> active = secure ? Optional.empty() : tlsState.get().active();
+        response.setHeader("Content-Security-Policy", contentSecurityPolicy(request, active));
         response.setHeader("Referrer-Policy", "same-origin");
         response.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
 
-        // Short-circuit order is load-bearing: the suppliers must not be asked for a secure
-        // request or the health probe.
         if (secure || isUncredentialedLoginProbe(request)) {
             filterChain.doFilter(request, response);
             return;
@@ -126,7 +149,6 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
         // The app's own HTTPS connector wins over the proxy-mode switch: when it was loaded at
         // startup there is a real TLS endpoint to send the browser to, and a 403 would hide it.
         // The source address does not matter here — loopback gets redirected like everyone else.
-        Optional<TlsConfig> active = tlsState.get().active();
         if (active.isPresent() && active.get().redirectHttp()) {
             redirectToHttps(request, response, active.get().httpsPort());
             return;
@@ -148,6 +170,32 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
     }
 
     /**
+     * The base policy, plus any origin the login form must be allowed to reach.
+     *
+     * <p>A plaintext page is served on {@code http://host:8080}, and the login POST is then
+     * answered with a 307 to {@code https://host:8443/login}. CSP's {@code 'self'} compares
+     * schemes, so the browser blocks that redirect before the password is sent and the login
+     * button looks dead. The app's own HTTPS endpoint is a safe, exact exception; a reverse
+     * proxy that redirects to a different name can add its origin through
+     * {@code app.security.form-action-origins}.
+     */
+    private String contentSecurityPolicy(HttpServletRequest request,
+                                         Optional<TlsConfig> active) {
+        LinkedHashSet<String> origins = new LinkedHashSet<>(formActionOrigins);
+        if (active.isPresent() && active.get().redirectHttp()) {
+            String authority = httpsAuthority(request, active.get().httpsPort());
+            if (authority != null) {
+                origins.add("https://" + authority);
+            }
+        }
+        if (origins.isEmpty()) {
+            return CONTENT_SECURITY_POLICY;
+        }
+        return CONTENT_SECURITY_POLICY.replace("form-action 'self'",
+                "form-action 'self' " + String.join(" ", origins));
+    }
+
+    /**
      * Sends the browser to the app-terminated HTTPS port, preserving method and body.
      *
      * <p>The authority never comes from a request header. {@code getServerName()} is derived
@@ -161,8 +209,7 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
      */
     private void redirectToHttps(HttpServletRequest request, HttpServletResponse response,
                                  int httpsPort) throws IOException {
-        String host = redirectHost.isEmpty() ? localAuthority(request) : redirectHost;
-        String authority = urlAuthority(host);
+        String authority = httpsAuthority(request, httpsPort);
         if (authority == null) {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST,
                     "The request host cannot be used for an HTTPS redirect");
@@ -171,9 +218,6 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
 
         String query = request.getQueryString();
         StringBuilder location = new StringBuilder("https://").append(authority);
-        if (httpsPort != 443) {
-            location.append(':').append(httpsPort);
-        }
         location.append(request.getRequestURI());
         if (query != null && !query.isEmpty()) {
             location.append('?').append(query);
@@ -181,6 +225,57 @@ public class TransportSecurityFilter extends OncePerRequestFilter {
 
         response.setStatus(HttpServletResponse.SC_TEMPORARY_REDIRECT);
         response.setHeader("Location", location.toString());
+    }
+
+    /** The redirect origin's authority, including the port unless it is the HTTPS default. */
+    private String httpsAuthority(HttpServletRequest request, int httpsPort) {
+        String host = redirectHost.isEmpty() ? localAuthority(request) : redirectHost;
+        String authority = urlAuthority(host);
+        if (authority == null) {
+            return null;
+        }
+        return httpsPort == 443 ? authority : authority + ":" + httpsPort;
+    }
+
+    /**
+     * Parses a comma/space-separated list of bare http(s) origins. Anything with a path,
+     * credentials, wildcard or malformed port is ignored: a typo must not silently widen the
+     * directive, and the app's normal same-origin form does not need any entry.
+     */
+    private static List<String> parseOrigins(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        List<String> origins = new ArrayList<>();
+        for (String token : raw.split("[,\\s]+")) {
+            String candidate = token.trim();
+            while (candidate.endsWith("/")) {
+                candidate = candidate.substring(0, candidate.length() - 1);
+            }
+            Matcher matcher = ORIGIN.matcher(candidate);
+            if (!matcher.matches()) {
+                log.warn("Ignoring an invalid form-action origin '{}'", token);
+                continue;
+            }
+            String portText = matcher.group(3);
+            if (portText != null) {
+                int port;
+                try {
+                    port = Integer.parseInt(portText);
+                } catch (NumberFormatException e) {
+                    log.warn("Ignoring an invalid form-action origin '{}'", token);
+                    continue;
+                }
+                if (port < 1 || port > 65535) {
+                    log.warn("Ignoring an invalid form-action origin '{}'", token);
+                    continue;
+                }
+            }
+            origins.add(matcher.group(1).toLowerCase(java.util.Locale.ROOT) + "://"
+                    + matcher.group(2).toLowerCase(java.util.Locale.ROOT)
+                    + (portText == null ? "" : ":" + portText));
+        }
+        return List.copyOf(origins);
     }
 
     /** The address the client dialled; server-controlled, unlike {@code Host}. */

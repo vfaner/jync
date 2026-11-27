@@ -223,6 +223,35 @@ class TransportSecurityFilterTest {
     }
 
     @Test
+    void aPlaintextLoginPageMaySubmitToItsHttpsRedirectTarget() throws Exception {
+        // The health-probe exemption serves the login page over HTTP even while the connector
+        // is active. Without this origin, form-action 'self' blocks the 307 before the login
+        // POST leaves the browser, so the button appears to do nothing.
+        MockHttpServletRequest request = request("GET", "/login", "10.0.0.5");
+        request.setLocalAddr("192.0.2.10");
+
+        MockHttpServletResponse response = runWithTls(state(8443, true), false, "", request);
+
+        assertThat(response.getStatus()).isEqualTo(200);
+        assertThat(response.getHeader("Content-Security-Policy"))
+                .contains("form-action 'self' https://192.0.2.10:8443");
+    }
+
+    @Test
+    void aConfiguredExternalFormActionOriginIsAddedAndNormalized() throws Exception {
+        MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
+
+        MockHttpServletResponse response = runWithTls(state(8443, false), false, "",
+                "https://Auth.Example.com:8443/, not-an-origin, http://portal.example.com:99999",
+                request);
+
+        assertThat(response.getHeader("Content-Security-Policy"))
+                .contains("form-action 'self' https://auth.example.com:8443")
+                .doesNotContain("not-an-origin")
+                .doesNotContain("99999");
+    }
+
+    @Test
     void omitsThePortWhenHttpsRunsOn443() throws Exception {
         MockHttpServletRequest request = request("GET", "/", "203.0.113.9");
         request.setLocalAddr("192.0.2.10");
@@ -416,9 +445,15 @@ class TransportSecurityFilterTest {
     private MockHttpServletResponse runWithTls(TlsRuntimeState state, boolean requireHttps,
                                                String redirectHost,
                                                MockHttpServletRequest request) throws Exception {
+        return runWithTls(state, requireHttps, redirectHost, "", request);
+    }
+
+    private MockHttpServletResponse runWithTls(TlsRuntimeState state, boolean requireHttps,
+                                               String redirectHost, String formActionOrigins,
+                                               MockHttpServletRequest request) throws Exception {
         MockHttpServletResponse response = new MockHttpServletResponse();
-        new TransportSecurityFilter(() -> requireHttps, () -> state, redirectHost)
-                .doFilter(request, response, chain);
+        new TransportSecurityFilter(() -> requireHttps, () -> state, redirectHost,
+                formActionOrigins).doFilter(request, response, chain);
         return response;
     }
 

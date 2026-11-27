@@ -278,10 +278,12 @@ public class SecurityConfig {
     public TransportSecurityFilter transportSecurityFilter(
             RequireHttpsResolver requireHttps,
             TlsRuntimeState tlsState,
-            @Value("${app.tls.redirect-host:}") String redirectHost) {
+            @Value("${app.tls.redirect-host:}") String redirectHost,
+            @Value("${app.security.form-action-origins:}") String formActionOrigins) {
         // The snapshot is read per request, not captured: it is fixed for the life of the process,
         // but taking it lazily keeps this bean constructible before the web server exists.
-        return new TransportSecurityFilter(requireHttps::isRequired, () -> tlsState, redirectHost);
+        return new TransportSecurityFilter(requireHttps::isRequired, () -> tlsState, redirectHost,
+                formActionOrigins);
     }
 
     /** Same reason as the lockout filter: in the security chain only, exactly once. */
