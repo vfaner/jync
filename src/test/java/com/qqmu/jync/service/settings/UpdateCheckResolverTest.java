@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import com.qqmu.jync.service.settings.UpdateCheckResolver.Effective;
 import com.qqmu.jync.service.settings.UpdateCheckResolver.Source;
@@ -109,6 +110,15 @@ class UpdateCheckResolverTest {
         when(settings.findBoolean(KEY)).thenReturn(Optional.of(false));
 
         assertThat(resolver.isEnabled()).isFalse();
+    }
+
+    @Test
+    void aClosedMetadataStoreFallsBackToTheDefaultInsteadOfFailingThePage() {
+        when(settings.revision()).thenThrow(
+                new DataAccessResourceFailureException("database has been closed"));
+
+        assertThat(new UpdateCheckResolver(settings, "", 60_000).effective())
+                .isEqualTo(new Effective(true, Source.DEFAULT));
     }
 
     @Test

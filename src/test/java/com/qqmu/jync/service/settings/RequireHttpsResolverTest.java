@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 
 import com.qqmu.jync.service.settings.RequireHttpsResolver.Effective;
 import com.qqmu.jync.service.settings.RequireHttpsResolver.Source;
@@ -110,6 +111,15 @@ class RequireHttpsResolverTest {
         when(settings.findBoolean(KEY)).thenReturn(Optional.of(true));
 
         assertThat(resolver.isRequired()).isTrue();
+    }
+
+    @Test
+    void aClosedMetadataStoreFallsBackToTheDefaultInsteadOfFailingEveryPlaintextRequest() {
+        when(settings.revision()).thenThrow(
+                new DataAccessResourceFailureException("database has been closed"));
+
+        assertThat(new RequireHttpsResolver(settings, "", 60_000).effective())
+                .isEqualTo(new Effective(false, Source.DEFAULT));
     }
 
     @Test

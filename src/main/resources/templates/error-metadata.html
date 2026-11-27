@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org"
+      th:lang="${#locale.toString().startsWith('zh')} ? 'zh-CN' : 'en'"
+      data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title th:text="|#{error.metadata.heading} · #{app.title}|">Metadata store unavailable · Jync</title>
+    <script th:replace="~{fragments/theme-bootstrap :: script}"></script>
+    <link rel="icon" type="image/svg+xml" th:href="@{/vendor/favicon.svg}">
+    <link rel="stylesheet" th:href="@{/css/app.css}">
+</head>
+<body>
+<div class="empty" style="max-width:720px;margin:12vh auto;padding:0 24px">
+    <div class="empty-ico"><svg class="ico"><use href="#exclamation-triangle-fill"/></svg></div>
+    <h3 th:text="#{error.metadata.heading}">Metadata store unavailable</h3>
+    <p th:text="#{error.metadata.text}">
+        Jync cannot read or write its metadata store. Check the disk space, permissions and
+        jync.mv.db in /app/data. Back up the data directory before repairing it.
+    </p>
+    <p th:text="#{error.metadata.externalDb}">
+        For production, use MySQL / PostgreSQL / Oracle as the metadata store instead.
+    </p>
+    <p th:text="#{error.metadata.restart}">Restore the data directory and restart Jync.</p>
+    <p th:text="#{error.metadata.fallback}">
+        If those steps cannot fix it, move or delete data/jync.mv.db and restart as a last-resort
+        recovery. This creates an empty database; connections, projects, users and settings are
+        lost and must be reconfigured or restored from a configuration package.
+    </p>
+</div>
+</body>
+</html>

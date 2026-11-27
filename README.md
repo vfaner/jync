@@ -88,32 +88,87 @@ AI 只做**助手**，不参与同步链路：未启用供应商时不产生任�
 
 ## 快速开始
 
+默认使用内置 H2 元数据库，单个 `jync.jar` 即可启动；生产环境建议使用 MySQL / PostgreSQL / Oracle 元数据库。
+
 | 项 | 要求 |
 |---|---|
 | JDK | **17+** |
 | 端口 | 默认 `8080` |
-| 内存 / 磁盘 | 建议堆 ≥ 512MB，预留 1GB |
-| 工作目录 | 固定：`./data`（元数据库与密钥）与 `./logs` |
+| 内存 / 磁盘 | 堆建议 ≥ 512MB，磁盘预留 ≥ 1GB |
+| 工作目录 | `./data`（元数据库 / 密钥 / TLS 证书）与 `./logs` |
 
-从 [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) 或 [GitHub Releases](https://github.com/vfaner/jync/releases/latest) 下载 `jync.jar`；源码编译为 `mvn clean package -DskipTests`，产物 `target/jync.jar`。
+从 [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) 或 [GitHub Releases](https://github.com/vfaner/jync/releases/latest) 下载 `jync.jar`；源码构建执行 `mvn clean package -DskipTests`，产物为 `target/jync.jar`。
+
+### 1. JAR（默认 H2）
 
 ```bash
 mkdir -p /opt/jync && cd /opt/jync
-java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
-  -jar jync.jar --spring.config.additional-location=file:./application.yml
+java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai -jar jync.jar
 ```
 
-容器部署（官方镜像由 tag 触发的 GitHub Actions 构建，**linux/amd64（x86_64）与 linux/arm64（aarch64）**；aarch64 即 ARM64，Docker 会自动选择架构）：
+访问 `http://<服务器>:8080`，使用 `admin / 123456`、`ops / 123456` 或 `view / 123456` 登录，首次登录强制修改密码。
+
+需要覆盖配置时，使用叠加式配置：
+
+```bash
+java -jar jync.jar --spring.config.additional-location=file:./application.yml
+```
+
+不要使用 `spring.config.location`，否则会丢掉 jar 内置配置。
+
+### 2. JAR + 外部元数据库
+
+先创建空库和账号；MySQL 示例：
+
+```sql
+CREATE DATABASE jync CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+```
+
+启动前设置环境变量：
+
+```bash
+export SPRING_DATASOURCE_URL='jdbc:mysql://db.example.com:3306/jync?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8'
+export SPRING_DATASOURCE_USERNAME='jync'
+export SPRING_DATASOURCE_PASSWORD='change-me'
+export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
+export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
+export SYNC_CRYPTO_SALT='another-long-random-value'
+java -jar jync.jar
+```
+
+PostgreSQL 使用 `jdbc:postgresql://db.example.com:5432/jync` / `org.postgresql.Driver`，Oracle 使用 `jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1` / `oracle.jdbc.OracleDriver`。新库由 `ddl-auto: update` 自动建表。
+
+`SYNC_CRYPTO_*` 必须显式设置并长期保持不变；更换后已保存的连接密码将无法解密。已有 H2 数据不能只改连接串，需先在旧实例导出配置包，启动新实例后导入，详见[元数据库迁移](docs/configuration.md#元数据库迁移)。
+
+### 3. Docker（默认 H2）
 
 ```bash
 docker pull vfaner/jync:latest
 docker compose -f docker-compose.release.yml up -d
-# 备用镜像 ghcr.io/vfaner/jync:latest；生产环境可固定到具体版本 tag，升级时拉取新镜像并重建容器
 ```
 
-首次访问 `http://<服务器>:8080`，使用内置账号 `admin / 123456`、`ops / 123456` 或 `view / 123456` 登录，**首次登录强制修改密码**。生产部署、外部元数据库、Docker / Kubernetes、HTTPS 与升级备份见[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)与[部署说明](docs/deploy-container.md)。
+官方镜像支持 linux/amd64 与 linux/arm64；备用镜像为 `ghcr.io/vfaner/jync:latest`。数据在 `./data` 与 `./logs`，重建容器不会丢失。
 
-> 使用 `--spring.config.additional-location`（叠加覆盖），不要用替换式的 `spring.config.location`，否则会丢掉 jar 内置配置。
+### 4. Docker + 外部元数据库
+
+Jync 镜像本身不包含数据库服务。最简方式是在 `docker-compose.release.yml` 的 `environment` 下取消 MySQL / PostgreSQL / Oracle 对应注释，填入真实地址和密码；保持与 `TZ` 相同的 6 个空格缩进，不要使用 Tab。然后执行：
+
+```bash
+docker compose -f docker-compose.release.yml up -d
+```
+
+也可以直接用 `deploy/` 下的组合示例，让数据库与 Jync 一起启动：
+
+```bash
+docker compose -f deploy/docker-compose.mysql.yml up -d --build
+# 也可换成 postgres / oracle 示例
+```
+
+使用已有托管数据库时，保留 `SPRING_DATASOURCE_*` 环境变量并删除数据库服务。示例默认从源码构建；使用官方镜像时把 `build` 换成 `image: vfaner/jync:latest`。修改 Compose 环境变量后要执行 `docker compose up -d`，`restart` 不会重新读取。
+
+### 5. Kubernetes 与生产部署
+
+Kubernetes 清单在 `deploy/k8s/`；HTTPS、外部元数据库迁移、升级备份和更多参数见[部署说明](docs/deploy-container.md)与[部署与运维手册](https://jync.qqmu.com/docs/jync-ops-guide.pdf)。
 
 ## 技术栈与架构
 

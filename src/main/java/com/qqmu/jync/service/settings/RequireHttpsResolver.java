@@ -4,6 +4,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.atomic.AtomicLong;
+
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * Decides whether plaintext requests are refused.
  *
@@ -22,6 +26,7 @@ import org.springframework.stereotype.Component;
  * within the TTL.
  */
 @Component
+@Slf4j
 public class RequireHttpsResolver {
 
     public enum Source { CONFIG, DATABASE, DEFAULT }
@@ -38,6 +43,7 @@ public class RequireHttpsResolver {
     private volatile Effective cached;
     private volatile long cachedAtMillis;
     private volatile long cachedRevision;
+    private final AtomicLong lastFailureLogAt = new AtomicLong();
 
     @Autowired
     public RequireHttpsResolver(SystemSettingService settings,
@@ -55,19 +61,38 @@ public class RequireHttpsResolver {
         if (configured != null) {
             return new Effective(configured, Source.CONFIG);
         }
-        long revision = settings.revision();
-        long now = System.currentTimeMillis();
-        Effective current = cached;
-        if (current != null && revision == cachedRevision && now - cachedAtMillis < ttlMillis) {
-            return current;
+        try {
+            long revision = settings.revision();
+            long now = System.currentTimeMillis();
+            Effective current = cached;
+            if (current != null && revision == cachedRevision
+                    && now - cachedAtMillis < ttlMillis) {
+                return current;
+            }
+            Effective resolved = settings.findBoolean(SystemSettingKey.SECURITY_REQUIRE_HTTPS)
+                    .map(value -> new Effective(value, Source.DATABASE))
+                    .orElseGet(() -> new Effective(false, Source.DEFAULT));
+            cached = resolved;
+            cachedAtMillis = now;
+            cachedRevision = revision;
+            return resolved;
+        } catch (RuntimeException e) {
+            // The transport filter asks on every plaintext request. A closed metadata store
+            // must not itself turn into a 500 before the request reaches the error page; keep
+            // the last decision (or the documented plaintext default) until it recovers.
+            warnFailure(e);
+            Effective current = cached;
+            return current != null ? current : new Effective(false, Source.DEFAULT);
         }
-        Effective resolved = settings.findBoolean(SystemSettingKey.SECURITY_REQUIRE_HTTPS)
-                .map(value -> new Effective(value, Source.DATABASE))
-                .orElseGet(() -> new Effective(false, Source.DEFAULT));
-        cached = resolved;
-        cachedAtMillis = now;
-        cachedRevision = revision;
-        return resolved;
+    }
+
+    private void warnFailure(RuntimeException failure) {
+        long now = System.currentTimeMillis();
+        long previous = lastFailureLogAt.get();
+        if (now - previous >= 60_000L && lastFailureLogAt.compareAndSet(previous, now)) {
+            log.warn("Could not read require-HTTPS setting; using the last value/default: {}",
+                    failure.toString());
+        }
     }
 
     public boolean isRequired() {

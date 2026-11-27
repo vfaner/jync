@@ -717,6 +717,57 @@ External users keep only a session; they are not written to app_user and have no
   service names carry a random suffix: stop the old instance's CDC and clean old slots/services
   before importing, or a new task can attach to a slot that is still running.
 
+## Starting jync.jar or Docker with an external metadata database
+
+Without `SPRING_DATASOURCE_*`, Jync uses embedded H2 at `./data/jync.mv.db`. MySQL, PostgreSQL and Oracle are supported for production metadata.
+
+### Starting jync.jar
+
+Create an empty database and account first. For MySQL:
+
+```sql
+CREATE DATABASE jync CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+```
+
+Set the environment and run with JDK 17:
+
+```bash
+export SPRING_DATASOURCE_URL='jdbc:mysql://db:3306/jync?useSSL=true&serverTimezone=Asia/Shanghai'
+export SPRING_DATASOURCE_USERNAME='jync'
+export SPRING_DATASOURCE_PASSWORD='change-me'
+export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
+export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
+export SYNC_CRYPTO_SALT='another-long-random-value'
+java -jar jync.jar
+```
+
+For PostgreSQL use `jdbc:postgresql://db:5432/jync` and `org.postgresql.Driver`; for Oracle use `jdbc:oracle:thin:@//db:1521/FREEPDB1` and `oracle.jdbc.OracleDriver`. Tables are created by `ddl-auto: update` in the empty database. Changing the URL alone does not migrate existing H2 data: export a config package from the old instance, start the new one, then import it. Set `SYNC_CRYPTO_PASSWORD/SALT` explicitly and keep them stable; keep `/app/data` mounted for TLS certificates and backups.
+
+### Starting with Docker / Compose
+
+The Jync image contains the application and JDBC drivers, not a MySQL/PostgreSQL/Oracle server. Ready-made examples live in:
+
+```bash
+docker compose -f deploy/docker-compose.mysql.yml up -d --build
+# or docker-compose.postgres.yml / docker-compose.oracle.yml
+```
+
+They start the database and Jync together and point Jync at it. For an existing managed database, remove the database service and keep only Jync with the same environment variables. A direct `docker run` looks like:
+
+```bash
+docker run -d --name jync -p 8080:8080 \
+  -e SPRING_DATASOURCE_URL='jdbc:mysql://db:3306/jync?useSSL=true&serverTimezone=Asia/Shanghai' \
+  -e SPRING_DATASOURCE_USERNAME=jync \
+  -e SPRING_DATASOURCE_PASSWORD=change-me \
+  -e SPRING_DATASOURCE_DRIVER_CLASS_NAME=com.mysql.cj.jdbc.Driver \
+  -e SYNC_CRYPTO_PASSWORD=a-long-random-secret \
+  -e SYNC_CRYPTO_SALT=another-long-random-value \
+  -v jync-data:/app/data -v jync-logs:/app/logs \
+  vfaner/jync:latest
+```
+
+After editing Compose environment variables, run `docker compose up -d` to recreate the container; `restart` does not reread them. If the old instance has data, export a config package first and import it into the new instance; do not treat deleting the H2 file as a migration.
+
 ## Backup, upgrade and data directory
 
 - Back up the whole data directory (default ./data, /app/data in containers) before upgrading; it

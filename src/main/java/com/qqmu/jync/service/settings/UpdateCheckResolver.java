@@ -4,6 +4,9 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.atomic.AtomicLong;
+
+import lombok.extern.slf4j.Slf4j;
 
 /**
  * Decides whether Jync asks GitHub/Gitee for newer releases.
@@ -24,6 +27,7 @@ import org.springframework.stereotype.Component;
  * lapses.
  */
 @Component
+@Slf4j
 public class UpdateCheckResolver {
 
     public enum Source { CONFIG, DATABASE, DEFAULT }
@@ -40,6 +44,7 @@ public class UpdateCheckResolver {
     private volatile Effective cached;
     private volatile long cachedAtMillis;
     private volatile long cachedRevision;
+    private final AtomicLong lastFailureLogAt = new AtomicLong();
 
     @Autowired
     public UpdateCheckResolver(SystemSettingService settings,
@@ -57,19 +62,38 @@ public class UpdateCheckResolver {
         if (configured != null) {
             return new Effective(configured, Source.CONFIG);
         }
-        long revision = settings.revision();
-        long now = System.currentTimeMillis();
-        Effective current = cached;
-        if (current != null && revision == cachedRevision && now - cachedAtMillis < ttlMillis) {
-            return current;
+        try {
+            long revision = settings.revision();
+            long now = System.currentTimeMillis();
+            Effective current = cached;
+            if (current != null && revision == cachedRevision
+                    && now - cachedAtMillis < ttlMillis) {
+                return current;
+            }
+            Effective resolved = settings.findBoolean(SystemSettingKey.UPDATE_CHECK_ENABLED)
+                    .map(value -> new Effective(value, Source.DATABASE))
+                    .orElseGet(() -> new Effective(true, Source.DEFAULT));
+            cached = resolved;
+            cachedAtMillis = now;
+            cachedRevision = revision;
+            return resolved;
+        } catch (RuntimeException e) {
+            // This flag is optional UI metadata. A metadata-store hiccup must not turn every
+            // page render into a 500; keep the last known value (or the default) and retry on
+            // the next request once the store is reachable again.
+            warnFailure(e);
+            Effective current = cached;
+            return current != null ? current : new Effective(true, Source.DEFAULT);
         }
-        Effective resolved = settings.findBoolean(SystemSettingKey.UPDATE_CHECK_ENABLED)
-                .map(value -> new Effective(value, Source.DATABASE))
-                .orElseGet(() -> new Effective(true, Source.DEFAULT));
-        cached = resolved;
-        cachedAtMillis = now;
-        cachedRevision = revision;
-        return resolved;
+    }
+
+    private void warnFailure(RuntimeException failure) {
+        long now = System.currentTimeMillis();
+        long previous = lastFailureLogAt.get();
+        if (now - previous >= 60_000L && lastFailureLogAt.compareAndSet(previous, now)) {
+            log.warn("Could not read update-check setting; using the last value/default: {}",
+                    failure.toString());
+        }
     }
 
     public boolean isEnabled() {

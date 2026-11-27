@@ -10,10 +10,36 @@ services:
     ports:
       - "8080:8080"
     volumes:
+      # 外部元数据库启用后，./data 不再存 H2，但仍用于应用内 TLS 证书和备份。
       - ./data:/app/data
       - ./logs:/app/logs
     environment:
       TZ: Asia/Shanghai
+      # 默认使用内置 H2（数据在 ./data/jync.mv.db）。要改用外部元数据库，取消下面
+      # 对应数据库的注释并填入真实地址、账号与密码；三组只保留一组。
+      # 取消注释时保持与 TZ 相同的缩进（environment 下 6 个空格），不要使用 Tab。
+      #
+      # MySQL 8：启用下面的配置
+      # SPRING_DATASOURCE_URL: "jdbc:mysql://db.example.com:3306/jync?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8"
+      # SPRING_DATASOURCE_USERNAME: jync
+      # SPRING_DATASOURCE_PASSWORD: change-me
+      # SPRING_DATASOURCE_DRIVER_CLASS_NAME: com.mysql.cj.jdbc.Driver
+      #
+      # PostgreSQL 16：启用下面的配置
+      # SPRING_DATASOURCE_URL: "jdbc:postgresql://db.example.com:5432/jync"
+      # SPRING_DATASOURCE_USERNAME: jync
+      # SPRING_DATASOURCE_PASSWORD: change-me
+      # SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      #
+      # Oracle 23：启用下面的配置
+      # SPRING_DATASOURCE_URL: "jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1"
+      # SPRING_DATASOURCE_USERNAME: jync
+      # SPRING_DATASOURCE_PASSWORD: change-me
+      # SPRING_DATASOURCE_DRIVER_CLASS_NAME: oracle.jdbc.OracleDriver
+      #
+      # 使用外部元数据库时，强烈建议同时设置并长期保持不变：
+      # SYNC_CRYPTO_PASSWORD: change-crypto-password
+      # SYNC_CRYPTO_SALT: change-crypto-salt
       # 页面上的「一键升级」在容器内会改为展示镜像更新命令；
       # 若要让宿主机自动拉取新镜像，可自行加 Watchtower，例如：
       # labels:

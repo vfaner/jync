@@ -129,39 +129,87 @@ and the separate dedicated-migration chains.
 
 ## Quick start
 
+Jync runs as a single `jync.jar` with embedded H2 by default. MySQL, PostgreSQL and Oracle are recommended for production metadata.
+
 | Item | Requirement |
 |---|---|
 | JDK | **17+** |
 | Port | `8080` by default |
-| Memory / disk | heap ≥ 512 MB, about 1 GB free |
-| Working directory | fixed: `./data` (metadata and keys) and `./logs` |
+| Memory / disk | heap ≥ 512 MB, about 1 GB free disk |
+| Working directory | `./data` (metadata / keys / TLS) and `./logs` |
 
-Download `jync.jar` from [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) or
-[GitHub Releases](https://github.com/vfaner/jync/releases/latest); build from source with
-`mvn clean package -DskipTests` (artifact: `target/jync.jar`).
+Download `jync.jar` from [Gitee Releases](https://gitee.com/super_rgh/jync/releases/latest) or [GitHub Releases](https://github.com/vfaner/jync/releases/latest); build from source with `mvn clean package -DskipTests` (artifact: `target/jync.jar`).
+
+### 1. JAR with embedded H2
 
 ```bash
 mkdir -p /opt/jync && cd /opt/jync
-java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai \
-  -jar jync.jar --spring.config.additional-location=file:./application.yml
+java -Xms512m -Xmx2g -Duser.timezone=Asia/Shanghai -jar jync.jar
 ```
 
-Container deployment (official images built by GitHub Actions on tags, **linux/amd64 (x86_64) and linux/arm64 (aarch64)**; aarch64 is ARM64 and Docker selects it automatically):
+Open `http://<host>:8080` and sign in with `admin / 123456`, `ops / 123456` or `view / 123456`; the first login forces a password change.
+
+To add configuration overrides, use layered configuration:
+
+```bash
+java -jar jync.jar --spring.config.additional-location=file:./application.yml
+```
+
+Do not use `spring.config.location`; it replaces the jar's built-in configuration.
+
+### 2. JAR with an external metadata database
+
+Create an empty database and account first. MySQL example:
+
+```sql
+CREATE DATABASE jync CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+```
+
+Set these variables before startup:
+
+```bash
+export SPRING_DATASOURCE_URL='jdbc:mysql://db.example.com:3306/jync?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8'
+export SPRING_DATASOURCE_USERNAME='jync'
+export SPRING_DATASOURCE_PASSWORD='change-me'
+export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
+export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
+export SYNC_CRYPTO_SALT='another-long-random-value'
+java -jar jync.jar
+```
+
+For PostgreSQL use `jdbc:postgresql://db.example.com:5432/jync` / `org.postgresql.Driver`; for Oracle use `jdbc:oracle:thin:@//db.example.com:1521/FREEPDB1` / `oracle.jdbc.OracleDriver`. Tables are created by `ddl-auto: update`.
+
+Set `SYNC_CRYPTO_*` explicitly and keep it stable; changing it makes stored connection passwords undecryptable. Existing H2 data must be exported as a config package and imported after the new instance starts; changing the JDBC URL alone is not a migration. See [metadata migration](docs/configuration.md#元数据库迁移).
+
+### 3. Docker with embedded H2
 
 ```bash
 docker pull vfaner/jync:latest
 docker compose -f docker-compose.release.yml up -d
-# Mirror: ghcr.io/vfaner/jync:latest; pin a version tag in production; upgrade by pulling and recreating
 ```
 
-Open `http://<host>:8080` and sign in with `admin / 123456`, `ops / 123456` or `view / 123456`;
-the first login forces a password change. Production deployment, external metadata stores,
-Docker / Kubernetes, HTTPS and upgrade/backup are covered in the
-[operations guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf) and
-[deployment notes](docs/deploy-container.md).
+Official images support linux/amd64 and linux/arm64; the mirror is `ghcr.io/vfaner/jync:latest`. Data lives in `./data` and `./logs`, so recreating the container keeps it.
 
-> Use `--spring.config.additional-location` (layered override), not `spring.config.location`,
-> or the jar's built-in configuration is lost.
+### 4. Docker with an external metadata database
+
+The Jync image does not contain a database server. The simplest path is to uncomment the MySQL / PostgreSQL / Oracle environment block in `docker-compose.release.yml`, fill in the address and password, and keep the same six-space indentation as `TZ` (spaces, not tabs), then run:
+
+```bash
+docker compose -f docker-compose.release.yml up -d
+```
+
+Alternatively, the examples under `deploy/` start a database and Jync together:
+
+```bash
+docker compose -f deploy/docker-compose.mysql.yml up -d --build
+# or the postgres / oracle example
+```
+
+For an existing managed database, keep the `SPRING_DATASOURCE_*` variables and remove the database service. The examples build from source by default; for the official image replace `build` with `image: vfaner/jync:latest`. After changing Compose environment variables run `docker compose up -d`; `restart` does not reread them.
+
+### 5. Kubernetes and production deployment
+
+Kubernetes manifests live under `deploy/k8s/`; HTTPS, metadata migration, upgrades/backup and advanced settings are covered in [deployment notes](docs/deploy-container.md) and the [operations guide](https://jync.qqmu.com/docs/jync-ops-guide.pdf).
 
 ## Stack and architecture
 

@@ -3,7 +3,11 @@ package com.qqmu.jync.service.settings;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.atomic.AtomicLong;
+
 import com.qqmu.jync.config.SyncProperties;
+
+import lombok.extern.slf4j.Slf4j;
 import com.qqmu.jync.service.ai.AiDisabledException;
 
 /**
@@ -24,6 +28,7 @@ import com.qqmu.jync.service.ai.AiDisabledException;
  * lapses.
  */
 @Component
+@Slf4j
 public class AiAvailability {
 
     private static final long DEFAULT_TTL_MILLIS = 5_000L;
@@ -35,6 +40,7 @@ public class AiAvailability {
     private volatile Boolean cached;
     private volatile long cachedAtMillis;
     private volatile long cachedRevision;
+    private final AtomicLong lastFailureLogAt = new AtomicLong();
 
     @Autowired
     public AiAvailability(SystemSettingService settings, SyncProperties properties) {
@@ -57,17 +63,34 @@ public class AiAvailability {
         if (!configured) {
             return false;
         }
-        long revision = settings.revision();
-        long now = System.currentTimeMillis();
-        Boolean current = cached;
-        if (current != null && revision == cachedRevision && now - cachedAtMillis < ttlMillis) {
-            return current;
+        try {
+            long revision = settings.revision();
+            long now = System.currentTimeMillis();
+            Boolean current = cached;
+            if (current != null && revision == cachedRevision
+                    && now - cachedAtMillis < ttlMillis) {
+                return current;
+            }
+            boolean resolved = settings.findBoolean(SystemSettingKey.AI_ENABLED).orElse(true);
+            cached = resolved;
+            cachedAtMillis = now;
+            cachedRevision = revision;
+            return resolved;
+        } catch (RuntimeException e) {
+            // Optional UI feature: a metadata-store failure must not break every page render.
+            warnFailure(e);
+            Boolean current = cached;
+            return current != null ? current : true;
         }
-        boolean resolved = settings.findBoolean(SystemSettingKey.AI_ENABLED).orElse(true);
-        cached = resolved;
-        cachedAtMillis = now;
-        cachedRevision = revision;
-        return resolved;
+    }
+
+    private void warnFailure(RuntimeException failure) {
+        long now = System.currentTimeMillis();
+        long previous = lastFailureLogAt.get();
+        if (now - previous >= 60_000L && lastFailureLogAt.compareAndSet(previous, now)) {
+            log.warn("Could not read AI availability; using the last value/default: {}",
+                    failure.toString());
+        }
     }
 
     public void requireEnabled() {

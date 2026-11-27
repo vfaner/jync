@@ -212,6 +212,35 @@ class SupportKnowledgeBaseTest {
         });
     }
 
+    @Test
+    void aChineseQuestionAboutStartingWithAnExternalMetadataDatabaseFindsTheSection() {
+        var hits = kb.search("zh",
+                "jync.jar 启动 指定 MySQL PostgreSQL Oracle 元数据库", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title()).isEqualTo("启动 jync.jar 或 Docker 时指定外部元数据库");
+            assertThat(hit.body())
+                    .contains("SPRING_DATASOURCE_URL")
+                    .contains("SYNC_CRYPTO_PASSWORD")
+                    .contains("docker compose");
+        });
+    }
+
+    @Test
+    void anEnglishQuestionAboutDockerWithAnExternalMetadataDatabaseFindsTheSection() {
+        var hits = kb.search("en",
+                "Docker start external metadata database MySQL PostgreSQL Oracle", 3);
+        assertThat(hits).isNotEmpty();
+        assertThat(hits).anySatisfy(hit -> {
+            assertThat(hit.title())
+                    .isEqualTo("Starting jync.jar or Docker with an external metadata database");
+            assertThat(hit.body())
+                    .contains("SPRING_DATASOURCE_URL")
+                    .contains("SYNC_CRYPTO_PASSWORD")
+                    .contains("docker run");
+        });
+    }
+
     /** The per-section cap times topK must still fit the registry's result cap. */
     @Test
     void excerptsStayWithinTheTotalBudget() {

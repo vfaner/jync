@@ -578,6 +578,57 @@ MongoDB 外，驱动随包内置。这些厂商需要自备 JDBC jar 并在连�
   PG 复制槽名只含 project id、YStream 服务名带随机后缀，换库后旧槽/旧服务必须手工清理，
   否则新实例可能接到仍在运行的旧槽上；迁移前先停掉旧实例的 CDC。
 
+## 启动 jync.jar 或 Docker 时指定外部元数据库
+
+不设置 `SPRING_DATASOURCE_*` 时，Jync 使用内置 H2（默认 `./data/jync.mv.db`）；生产环境建议换成 MySQL / PostgreSQL / Oracle。
+
+### jync.jar 启动
+
+先在目标数据库创建空库和账号。MySQL 示例：
+
+```sql
+CREATE DATABASE jync CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+```
+
+启动前设置环境变量，再用 JDK 17 运行：
+
+```bash
+export SPRING_DATASOURCE_URL='jdbc:mysql://db:3306/jync?useSSL=true&serverTimezone=Asia/Shanghai'
+export SPRING_DATASOURCE_USERNAME='jync'
+export SPRING_DATASOURCE_PASSWORD='change-me'
+export SPRING_DATASOURCE_DRIVER_CLASS_NAME='com.mysql.cj.jdbc.Driver'
+export SYNC_CRYPTO_PASSWORD='a-long-random-secret'
+export SYNC_CRYPTO_SALT='another-long-random-value'
+java -jar jync.jar
+```
+
+PostgreSQL 的 URL 例如 `jdbc:postgresql://db:5432/jync`，驱动为 `org.postgresql.Driver`；Oracle 可用 `jdbc:oracle:thin:@//db:1521/FREEPDB1`，驱动为 `oracle.jdbc.OracleDriver`。新库的表由 `ddl-auto: update` 自动创建；不是只改 URL 就会带上旧数据，已有 H2 数据要按上一节导出配置包再导入。`SYNC_CRYPTO_PASSWORD/SALT` 必须显式设置并长期保持不变；`/app/data` 仍建议挂载，用于 TLS 证书和备份。
+
+### Docker / Compose 启动
+
+Jync 镜像只包含应用和 JDBC 驱动，不包含 MySQL / PostgreSQL / Oracle 数据库服务。仓库提供三个外部元数据库示例：
+
+```bash
+docker compose -f deploy/docker-compose.mysql.yml up -d --build
+# 也可换成 postgres 或 oracle 示例
+```
+
+示例会同时启动数据库和 Jync，并已通过 `SPRING_DATASOURCE_*` 指向数据库；生产使用已有数据库时，可以删掉数据库服务，只保留 Jync 并改这些变量。若直接 `docker run`：
+
+```bash
+docker run -d --name jync -p 8080:8080 \
+  -e SPRING_DATASOURCE_URL='jdbc:mysql://db:3306/jync?useSSL=true&serverTimezone=Asia/Shanghai' \
+  -e SPRING_DATASOURCE_USERNAME=jync \
+  -e SPRING_DATASOURCE_PASSWORD=change-me \
+  -e SPRING_DATASOURCE_DRIVER_CLASS_NAME=com.mysql.cj.jdbc.Driver \
+  -e SYNC_CRYPTO_PASSWORD=a-long-random-secret \
+  -e SYNC_CRYPTO_SALT=another-long-random-value \
+  -v jync-data:/app/data -v jync-logs:/app/logs \
+  vfaner/jync:latest
+```
+
+修改 Compose 的环境变量后要执行 `docker compose up -d` 重建容器（`restart` 不会重新读取环境变量）。旧实例已有数据时，先在旧实例导出配置包，启动新实例后再导入；不要直接删除 H2 文件当作迁移。
+
 ## 备份、升级与数据目录
 
 - 升级前备份整个数据目录（默认 ./data，容器内 /app/data），其中包含 H2 元数据库与 data/tls 证书。
