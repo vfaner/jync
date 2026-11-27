@@ -19,6 +19,7 @@ import com.qqmu.jync.service.auth.AccessGuard;
 import lombok.extern.slf4j.Slf4j;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Runs one support conversation: model round, tool execution, model round again.
@@ -41,6 +42,9 @@ public class SupportAssistantService {
      */
     static final int MAX_ROUNDS = 8;
     static final int MAX_TOOLS_PER_ROUND = 4;
+    /** Total tool-result text kept in one conversation; 8 rounds x 8 KB otherwise overflows small contexts. */
+    static final int MAX_TOOL_OUTPUT_CHARS = 24_000;
+    static final int COMPACT_EVIDENCE_CHARS = 10_000;
     static final int MAX_HISTORY = 12;
     /**
      * A pasted error log frequently has the exception on its last lines, so an over-long
@@ -108,7 +112,21 @@ public class SupportAssistantService {
                名称；没有权限时如实说明。推荐每张卡时写明点击后会发生什么（触发一次全量
                加载、立即运行一次、停用后不再按计划触发等）与影响，不要只念标题。用户要建
                任务时调用 draft_project 生成草稿，由用户打开表单确认后保存。
-            二、工具选择（先取真实 id，不要猜）
+            二、先工具后回答（硬约束）
+               - 能由工具回答的（任务/连接/状态/历史/指标/待办/版本），先调用对应工具取证；
+                 不要凭印象，也不要把「知识库有说明」当成实时状态。
+               - 用户要求做事或改设置（启动/停止/立即同步/重建基线、任务批量/并行/轮询、
+                 游标列与优先级、Cron、连接 extraParams、系统性能参数、ETL/迁移启停与运行、
+                 新建任务草稿）时，必须调用对应的 AI 变更工具生成确认卡；不要只给操作步骤，
+                 也不要让用户自己去页面找，除非确实没有对应工具。确认卡由用户点「确认执行」
+                 后由服务端校验并执行，你不能说已经执行。
+               - 工具覆盖不了的修改（主机/端口/账号/密码/URL、删除任务或连接、配置包、
+                 TLS 证书、保留期清理等）才说明页面路径与影响，并明确不能代为执行。
+               - 事实证据顺序：实时状态与操作以工具为第一优先；产品规则/参数/限制用
+                 search_docs；报错/故障用 search_logs；文档与日志不足时用
+                 search_instance_code；仍然不足才用通用数据库/Java 经验，标明是推断并给出
+                 验证步骤，不要只回「没查到」或编造具体值。
+            三、工具选择（先取真实 id，不要猜）
                工具结果是查询那一刻的快照，不是持续刷新：引用状态时带上工具给出的时间或
                分钟数（如 minutesSinceLastRun、minutesSinceLastSuccess、recent_failures 的
                at、lastError 的 occurredAt），
@@ -125,7 +143,8 @@ public class SupportAssistantService {
                  先报 matched 总数，再列返回的部分，不要把它当成全部
                - 变更日志（CDC）断流、位点、最近错误、跳过 DDL → cdc_status；某个任务还有哪些
                  未执行/待回放的 DDL 待办 → project_ddl_tasks（只读，最多 20 条）；
-                 日志/异常栈 → search_logs（只读，默认当前 jync.log，可按级别/关键词/滚动文件）
+                 日志/异常栈 → search_logs（只读，默认当前 jync.log，可按级别/关键词/滚动文件）；
+                 日志和文档都没有时，当前部署实例的代码/配置线索 → search_instance_code
                - 变更日志前提不明或怀疑源库日志与权限有问题 → cdc_probe 自检（会连源库，
                  很贵，一次对话最多 2 次；只能查自己有编辑权的任务）
                - ETL 任务失败与最近结果 → etl_status
@@ -156,10 +175,10 @@ public class SupportAssistantService {
                  推断。selectionKnown=false 表示旧配置没有明确的表清单，摘要只基于已有进度
                  行，无法列出未开始表，回答时要说明这一限制。外部基线接入后表进度不回填，
                  project_table_status 显示 NOT_STARTED 属正常，不代表没有同步。
-               - 产品用法、参数、前提、限制 → 先 search_docs；文档没有覆盖、或用户贴了报错
-                 时，再用 search_logs 查本实例日志。两者都不够时，基于工具证据与通用数据库/Java
-                 经验给出可执行的判断和验证步骤，并标明哪些是经验推断；不要只回「没查到」，
-                 也不要编造具体配置值或版本行为。
+               - 回答证据顺序：search_docs（随包文档）→ search_logs（本实例日志）→
+                 search_instance_code（当前部署 jync.jar 内的 yml/资源与 class 常量字符串）→
+                 自身通用数据库/Java 经验。前一层不足就继续下一层，不要只回「没查到」；
+                 用到自身经验时要标明是推断，并给出可执行验证步骤，不要编造具体配置值或版本行为。
                - CDC DDL：默认只登记待办，不自动改目标表；单目标项目可开启「CDC 自动补齐新增可空列」，
                  只自动执行仅含 ADD COLUMN 且所有新列可空、无主键/唯一/自增/生成/引用约束的 ALTER；
                  自动执行后任务仍会保留「补齐缺失数据」待办，等待管理员回放；缺口回放要求任务先停止。
@@ -239,7 +258,7 @@ public class SupportAssistantService {
                同一种资源，不要用 diagnose_project 查 ETL 或专属迁移。只看全局异常用
                alerts；单看任务状态用 project_status；单看日志流用 cdc_status；需要时
                cdc_probe 自检 → search_docs 对照前提与限制。结论要说明依据来自哪个工具。
-            三、CDC 重建基线（REBASELINE）
+            四、CDC 重建基线（REBASELINE）
                - 只在位点已过期、消费者被错误状态停住、目标表丢失或结构被破坏等需要重新全量
                  时建议；先调用 cdc_status 确认是变更日志项目，并说明这不是日常提速手段。
                - 典型影响：停止消费、清空位点、重新执行全量加载（按主键 upsert，不默认清空
@@ -249,7 +268,7 @@ public class SupportAssistantService {
                  顺序反了不会补历史删除。不要暗示重建基线会清空目标表。
                - 用户提出或同意重建时即可调用 control_project(action=REBASELINE) 生成确认卡；
                  真正执行仍要用户点卡片。多节点部署时提示必须在持有消费者租约的节点操作。
-            四、症状诊断与建议
+            五、症状诊断与建议
                1. 用户报告问题时先按名称核对任务，再按资源类型调用诊断工具一次取齐证据：
                   同步任务用 diagnose_project，ETL 用 diagnose_etl_task，专属迁移先
                   list_migrations 再 diagnose_migration。不要凭印象猜原因；拿到工具结果
@@ -363,6 +382,8 @@ public class SupportAssistantService {
                   - `Error retrieving record` + `Can not read response from server`：Connector/J
                     流式查询被源端断开，不是 binlog；查 MySQL 错误日志/Aborted_clients、
                     net_write_timeout/代理超时，或降批量/并行度；不要先归因于替换 jar。
+                    全量分块与单流全量都会在断连时换新连接重试：有主键的分块已提交部分会保留，
+                    无主键单流会从整表重来；无主键大表建议加主键、改用可切片方案或缩小单次读取。
                   - 连接超时 / `Communications link failure` / `Broken pipe` /
                     `getCancelTimer`：先分清是建立连接超时、读流超时、目标写入太慢还是网络
                     中断。Jync 已对 MySQL 流式读取关闭 netTimeoutForStreamingResults 并追加
@@ -393,7 +414,7 @@ public class SupportAssistantService {
                     GHCR / 离线 save-load / JAR 方案，具体命令由 search_docs 取，不要凭印象编。
                   报错里的版本号、驱动与目标数据库类型是判断依据；日志没有给出这些信息时，
                   只问一个最关键的补充项，不要凭经验断言。
-            五、回答格式
+            六、回答格式
                - 第一句直接给答案：结论或直接回复。不写「好的」「当然」「没问题」「让我看看」
                  「这是您要的答案」这类开场白，不复述用户的问题，不介绍自己接下来要做什么。
                - 不写过程旁白：界面已经在显示调用了哪些工具，不要再说「我先查一下」「正在
@@ -412,13 +433,13 @@ public class SupportAssistantService {
                  页面自行执行或另开对话，不要换参数重试。
                - 问题有歧义（多个同名任务或连接）：列出候选并问用户是哪一个，不要随便挑。
                - 语言与界面一致：使用用户提问的语言，中文用简体，术语与页面一致。
-            六、固定公开信息（直接回答，不要编造）
+            七、固定公开信息（直接回答，不要编造）
                - 作者 / 维护方：沐沐开源工坊
                - 官网：https://jync.qqmu.com
                - Docker Hub：https://hub.docker.com/r/vfaner/jync（Docker Sponsored OSS，
                  linux/amd64 与 linux/arm64 双架构）；备用镜像 ghcr.io/vfaner/jync
                - QQ：817094、2912167928；微信：qqmu66；QQ 群：426669837；邮箱：vfaner@88.com
-            七、范围
+            八、范围
                - 与 Jync 无关的问题礼貌说明只能回答产品相关问题。
             """;
 
@@ -504,6 +525,7 @@ public class SupportAssistantService {
             boolean drafted = false;
             String draftResult = null;
             List<String> actionResults = new ArrayList<>();
+            int toolOutputChars = 0;
 
             for (int round = 0; round < MAX_ROUNDS; round++) {
                 if (cancelled.getAsBoolean()) {
@@ -580,12 +602,15 @@ public class SupportAssistantService {
                             return;
                         }
                         String instruction = synthesisInstruction(language);
-                        turns.add(AiChatClient.Turn.user(instruction));
                         boolean[] finalStreamed = new boolean[1];
+                        // Drop the tool-call protocol history but keep its evidence: some
+                        // local/reasoning models go blank when synthesizing over a long
+                        // assistant/tool turn chain.
+                        List<AiChatClient.Turn> compact = compactTurns(message, turns, language);
                         AiChatClient.ToolChatResult summary = chat.converseStream(provider,
                                 providers.decryptKey(provider),
                                 SYSTEM_PROMPT + "\n" + instruction,
-                                turns, List.of(), SYNTHESIS_TOKENS, text -> {
+                                compact, List.of(), SYNTHESIS_TOKENS, text -> {
                                     finalStreamed[0] = true;
                                     sink.delta(text);
                                 },
@@ -599,6 +624,9 @@ public class SupportAssistantService {
                         }
                         if (!finalStreamed[0]) {
                             if (summary.text() == null || summary.text().isBlank()) {
+                                log.warn("Support AI produced no final text after nudge and"
+                                        + " compact synthesis (provider {}, {} turns)",
+                                        provider.getName(), turns.size());
                                 sink.error("error.support.noAnswer");
                                 return;
                             }
@@ -662,6 +690,16 @@ public class SupportAssistantService {
                     String labelKey = "support.tool." + call.name();
                     sink.tool(callId, call.name(), labelKey, SupportSink.ToolState.RUNNING);
                     String output = registry.execute(call.name(), call.argumentsJson(), ctx);
+                    int remaining = MAX_TOOL_OUTPUT_CHARS - toolOutputChars;
+                    int originalLength = output == null ? 0 : output.length();
+                    toolOutputChars += Math.min(originalLength, Math.max(0, remaining));
+                    if (output != null && output.length() > Math.max(0, remaining)) {
+                        ObjectNode capped = mapper.createObjectNode();
+                        capped.put("truncated", true);
+                        capped.put("content", remaining <= 0 ? ""
+                                : output.substring(0, Math.min(output.length(), remaining)));
+                        output = capped.toString();
+                    }
                     sink.tool(callId, call.name(), labelKey, registry.isError(output)
                             ? SupportSink.ToolState.FAILED : SupportSink.ToolState.DONE);
                     if ("draft_project".equals(call.name())) {
@@ -705,11 +743,39 @@ public class SupportAssistantService {
                     }
                     if (!finalStreamed[0]) {
                         if (summary.text() == null || summary.text().isBlank()) {
-                            // 收束轮空手而归：静默结束会让用户看到空气泡。
-                            sink.error("error.support.noAnswer");
-                            return;
+                            // 带着完整工具历史收束为空：再用「问题 + 证据摘要」的干净上下文
+                            // 试一次，避免本地/推理模型在长 tool 历史后直接返回空正文。
+                            boolean[] compactStreamed = new boolean[1];
+                            AiChatClient.ToolChatResult compact = chat.converseStream(provider,
+                                    providers.decryptKey(provider),
+                                    SYSTEM_PROMPT + "\n" + synthesisInstruction(language),
+                                    compactTurns(message, turns, language), List.of(),
+                                    SYNTHESIS_TOKENS, text -> {
+                                        compactStreamed[0] = true;
+                                        sink.delta(text);
+                                    },
+                                    Math.max(1_000L, TOTAL_BUDGET_MS
+                                            - (System.currentTimeMillis() - started)));
+                            if (!compact.success()) {
+                                sink.error("error.ai.requestFailed", compact.message());
+                                return;
+                            }
+                            if (!compactStreamed[0]) {
+                                if (compact.text() == null || compact.text().isBlank()) {
+                                    log.warn("Support AI produced no synthesis text (provider"
+                                            + " {}, {} turns)", provider.getName(),
+                                            turns.size());
+                                    sink.error("error.support.noAnswer");
+                                    return;
+                                }
+                                sink.delta(compact.text());
+                            }
+                            if (compact.truncated()) {
+                                sink.delta(truncationSuffix(language));
+                            }
+                        } else {
+                            sink.delta(summary.text());
                         }
-                        sink.delta(summary.text());
                     }
                     if (summary.truncated()) {
                         sink.delta(truncationSuffix(language));
@@ -773,6 +839,45 @@ public class SupportAssistantService {
             }
         }
         return false;
+    }
+
+    /**
+     * A fresh, tool-free conversation carrying only the user's question and a compact digest
+     * of the tool results. Some local/reasoning models return an empty body when asked to
+     * synthesize on top of a long tool-call history; dropping the protocol turns removes that
+     * failure mode without losing the evidence.
+     */
+    private List<AiChatClient.Turn> compactTurns(String message, List<AiChatClient.Turn> turns,
+                                                 String language) {
+        StringBuilder evidence = new StringBuilder();
+        for (AiChatClient.Turn turn : turns) {
+            if (!"tool".equals(turn.role()) || turn.content() == null) {
+                continue;
+            }
+            if (evidence.length() > 0) {
+                evidence.append('\n');
+            }
+            evidence.append(turn.content());
+            if (evidence.length() >= COMPACT_EVIDENCE_CHARS) {
+                break;
+            }
+        }
+        if (evidence.length() > COMPACT_EVIDENCE_CHARS) {
+            evidence.setLength(COMPACT_EVIDENCE_CHARS);
+        }
+        String prompt = (language != null && language.startsWith("en")
+                ? "Tool results already gathered (JSON, possibly truncated):\n"
+                : "已获得的工具结果（JSON，可能被截断）：\n")
+                + evidence
+                + (language != null && language.startsWith("en")
+                        ? "\n\nAnswer the original question from this evidence: conclusion first, "
+                                + "then evidence and practical next steps. If evidence is "
+                                + "insufficient, give the most likely cause and how to verify it.\n"
+                                + "Original question: "
+                        : "\n\n请基于以上证据直接回答原问题：先给结论，再给依据和可执行建议；"
+                                + "证据不足时给出最可能原因与验证步骤。原问题：")
+                + message;
+        return List.of(AiChatClient.Turn.user(prompt));
     }
 
     private static String nudgeInstruction(String language) {

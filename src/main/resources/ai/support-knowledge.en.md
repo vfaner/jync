@@ -420,7 +420,7 @@ executes once when a worker becomes free.
 - Columns added after a capture instance was created are not in its `@captured_column_list`. Jync
   parks with a schema-drift error naming the missing columns and asks for the capture instance to
   be recreated; it no longer skips every change on that table.
-- `Error retrieving record: Can not read response from server ... before connection was unexpectedly lost` comes from Connector/J streaming a query result, not from binlog decoding. The source connection was killed/restarted, a proxy/network timeout fired, or the target was slow enough to exceed MySQL `net_write_timeout`. Check the MySQL error log/`Aborted_clients`, raise `net_write_timeout`/proxy idle timeouts, or reduce batch size/parallelism. Replacing the jar only triggers it when the old process was still querying.
+- `Error retrieving record: Can not read response from server ... before connection was unexpectedly lost` comes from Connector/J streaming a query result, not from binlog decoding. The source connection was killed/restarted, a proxy/network timeout fired, or the target was slow enough to exceed MySQL `net_write_timeout`. Check the MySQL error log/`Aborted_clients`, raise `net_write_timeout`/proxy idle timeouts, or reduce batch size/parallelism. Replacing the jar only triggers it when the old process was still querying. Both chunked and single-stream full loads retry on a fresh connection after a disconnect: a keyed chunk keeps its committed part, a keyless single stream restarts the table. Add a primary key or use a sliceable plan for a huge keyless table.
 - A skipped DDL is recorded as a todo (Change log → execute DDL on target); with "Auto-add nullable CDC columns" enabled, a single-target project automatically applies ALTER statements containing only ADD COLUMN where every new column is nullable and has no key/unique/identity/generated/reference clause. Even on success the task stays pending for "replay missing rows"; a gap replay requires the
 project to be stopped. A failure also returns to the todo. Fan-out stays manual. DROP TABLE / DROP VIEW
   is stored with `IF EXISTS`; Oracle/DM/YashanDB strip the clause and treat "object already gone"
@@ -841,6 +841,11 @@ Conversion review lists a task's views, procedures and functions with a mechanic
 
 - The floating assistant is for administrators and operators; it reads project state, progress rows,
   the last failure, and 1-hour throughput and lag.
+- Evidence and execution order: live state/history/metrics/todos → call the tool first; product
+  rules → search_docs; errors → search_logs; if docs and logs are insufficient →
+  search_instance_code; only then use general experience, labeled as inference. For a requested
+  change, call the matching control_*/update_* tool to produce a confirmation card instead of
+  only pointing at the page.
 - It reads one task's details (project_status): both connection names and types, capture strategy,
   selected-table count, sync data/structure/delete switches and next scheduled run.
 - It reads per-table sync state inside a task (project_table_status), including tables that never
@@ -856,6 +861,10 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   separating "never saw a change" (read side) from "saw it and the write failed" (write side).
 - It searches this installation's own application log (`search_logs`) by keyword, level and
   rolled file — use it to explain an error stack or a failure.
+- It searches the deployed artifact (`search_instance_code`) for configuration and code
+  constants: application.yml, i18n, AI docs, templates, static JS and com.qqmu.jync class
+  constants (error messages/SQL/property names). It does not read business data and the jar
+  contains no .java sources.
 - It reads the open CDC DDL tasks of one project (`project_ddl_tasks`, up to 20): task id,
   table, status (PENDING/FAILED), executed/replayed flags, target SQL, error and affected tables —
   use it when the target is missing a column or a replay is still outstanding.

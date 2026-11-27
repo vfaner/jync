@@ -347,7 +347,7 @@ Cron：同步任务用 Quartz 语法，6 段或 7 段（含年份）；ETL 与�
 - 位点过期（归档或 binlog 已被清理）需要重建基线。
 - 目标表被删时默认只重建并重灌这张表，位点不动；连续修复超过 3 次会停车。
 - 源库执行 DDL 导致目标缺列时，流内裁剪并登记待办，任务不停摆。
-- `Error retrieving record: Can not read response from server... before connection was unexpectedly lost`：来自 MySQL Connector/J 的流式查询读取，不是 binlog 解码；通常是源端连接被 `KILL`/重启、网络或代理超时，或目标写入太慢超过源库 `net_write_timeout`。先看 MySQL 错误日志/`Aborted_clients`，调大 `net_write_timeout`、代理空闲超时，或降低批量/并行度；替换 jar 只有在旧进程仍在查询时才会直接触发。
+- `Error retrieving record: Can not read response from server... before connection was unexpectedly lost`：来自 MySQL Connector/J 的流式查询读取，不是 binlog 解码；通常是源端连接被 `KILL`/重启、网络或代理超时，或目标写入太慢超过源库 `net_write_timeout`。先看 MySQL 错误日志/`Aborted_clients`，调大 `net_write_timeout`、代理空闲超时，或降低批量/并行度；替换 jar 只有在旧进程仍在查询时才会直接触发。全量分块与单流全量都会在断连时换新连接重试：有主键的分块保留已提交部分，无主键单流会从整表重来；无主键大表建议加主键或改用可切片方案。
 - 被跳过的 DDL 会登记为待办（变更日志「在目标库执行 DDL」）；开启自动补齐可空列后，安全子集会在目标自动执行，执行成功后仍保留「补齐缺失数据」待办，失败也回到待办；缺口回放要求任务先停止。DROP TABLE / DROP VIEW 默认写成 `IF EXISTS` 再执行；Oracle / DM / 崖山会自动去掉该子句，并把「对象本来就不存在」当作完成，所以目标已经删过表不会让待办永远红灯。
 
 ## CDC 停摆与重建基线
@@ -677,6 +677,9 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
 ## AI 运维助手能查什么
 
 - 内嵌悬浮窗面向管理员与运维，可查项目运行状态、进度行数、最近失败、1 小时吞吐与延迟。
+- 取证与执行优先级：实时状态/历史/指标/待办 → 先调用工具；产品规则 → search_docs；报错 →
+  search_logs；文档和日志不足 → search_instance_code；最后才用通用经验（标明推断）。用户要求
+  改设置时先调用对应 control_* / update_* 生成确认卡，不要只教用户去页面操作。
 - 可查单个同步任务的详情（project_status）：两端连接的名称与类型、捕获策略、选中表数量、
   同步数据 / 结构 / 删除等开关、下次计划时间，以及运行状态与当前周期进度。
 - 可查任务内每张表的同步状态（project_table_status）：COMPLETED 首次全量已完成并在增量；
@@ -689,6 +692,7 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
   没有进度行，不能只凭任务状态推断。selectionKnown=false 表示旧配置没有明确的表清单，
   摘要只能基于已有进度行，回答时应说明「未开始表无法完整列出」。
 - 可查本实例应用日志（search_logs）：按关键词、级别与滚动文件搜索，返回最近的匹配行；用于解释报错栈和“为什么失败”。
+- 可查当前部署实例的代码/配置线索（search_instance_code）：搜索 jar 内 application.yml、i18n、AI 文档、模板、静态 JS 与 com.qqmu.jync 的 class 常量（错误消息/SQL/属性名）；不读取业务数据，也没有 .java 源码。
 - 可查某个任务尚未收尾的 CDC DDL 待办（project_ddl_tasks）：最多 20 条，给出待办 id、表、
   状态（PENDING/FAILED）、是否已执行/已回放、目标 SQL、错误与受影响表；用于解释「为什么目标
   缺列 / 还需要回放」。
