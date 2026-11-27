@@ -2920,6 +2920,35 @@
     }
   }
 
+  /**
+   * The settings version card is server-rendered from the passive cache, while the nav check
+   * is a fresh synchronous answer. If the fresh answer differs (a release was published after
+   * that cache was filled), reload once so the card gets the buttons/date for the same release
+   * as the badge. The session key prevents a reload loop if a mirror keeps giving inconsistent
+   * bytes.
+   */
+  function maybeReloadStaleVersionCard(payload) {
+    var card = document.getElementById('version-info');
+    var source = document.querySelector('.nav-update-dot[data-url]');
+    if (!card || !source || source.dataset.refresh !== 'true'
+        || !payload || !payload.checked) { return; }
+    var desiredState = payload.updateAvailable
+      ? (payload.artifactUpdated ? 'ARTIFACT_UPDATED' : 'UPDATE_AVAILABLE')
+      : 'UP_TO_DATE';
+    var latest = payload.latestVersion || '';
+    var serverState = card.getAttribute('data-version-state') || '';
+    var serverLatest = card.getAttribute('data-latest-version') || '';
+    if (serverState === desiredState && serverLatest === latest) { return; }
+    var key = 'jync-version-card-refresh:' + latest + ':' + desiredState;
+    try {
+      if (window.sessionStorage.getItem(key)) { return; }
+      window.sessionStorage.setItem(key, '1');
+    } catch (e) {
+      return; // storage unavailable: do not risk a reload loop
+    }
+    window.location.reload();
+  }
+
   function bindNavUpdateBadge() {
     var source = document.querySelector('.nav-update-dot[data-url]');
     if (!source) { return; }
@@ -2941,6 +2970,7 @@
       });
       applyNavUpdateBadges(payload);
       maybeShowUpdatePrompt(entry);
+      maybeReloadStaleVersionCard(payload);
     }).catch(function () {
       // 离线或请求超时：有缓存就保留，没有就保持安静
     });

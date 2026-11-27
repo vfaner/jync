@@ -48,11 +48,38 @@ public final class RunningJar {
         if (!"jar".equalsIgnoreCase(location.getProtocol())) {
             return Path.of(location.toURI());
         }
-        String spec = location.toString();
-        int separator = spec.indexOf("!/");
-        if (separator < 0) {
+        return fromJarSpec(location.toString());
+    }
+
+    /**
+     * Spring Boot 3.2+ reports a nested URL such as
+     * {@code jar:nested:/app/jync.jar/!BOOT-INF/classes!/}; older loaders use
+     * {@code jar:file:/app/jync.jar!/BOOT-INF/classes!/}. In both forms the executable jar
+     * is the file before the first inner entry separator.
+     */
+    static Path fromJarSpec(String spec) {
+        if (spec == null || !spec.startsWith("jar:")) {
             return null;
         }
-        return Path.of(URI.create(spec.substring("jar:".length(), separator)));
+        String inner = spec.substring("jar:".length());
+        if (inner.startsWith("nested:")) {
+            String nested = inner.substring("nested:".length());
+            int separator = nested.indexOf("/!");
+            return separator <= 0 ? null : pathOrNull(nested.substring(0, separator));
+        }
+        int separator = spec.indexOf("!/");
+        return separator < 0 ? null : pathOrNull(spec.substring("jar:".length(), separator));
+    }
+
+    private static Path pathOrNull(String value) {
+        try {
+            return Path.of(URI.create(value));
+        } catch (RuntimeException ignored) {
+            try {
+                return Path.of(value);
+            } catch (RuntimeException notAPath) {
+                return null;
+            }
+        }
     }
 }

@@ -274,6 +274,7 @@ class SupportAssistantServiceTest {
                 .contains("connection_details")
                 .contains("system_params")
                 .contains("update_system_params")
+                .contains("update_session_timeout")
                 .contains("database_metrics")
                 .contains("project_row_count")
                 .contains("search_docs")

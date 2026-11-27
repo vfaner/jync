@@ -240,15 +240,17 @@ public class VersionService {
             log.debug("Click-triggered update check failed: {}", bothFailed.toString());
             return new UpdateCheck(false, false, current, null, null, null, false);
         }
-        String latestVersion = stripV(latest.tag());
-        int cmp = current == null ? 1 : compareVersions(latestVersion, current);
-        boolean newer = current != null && cmp > 0;
-        // Same version, different bytes: the release was re-uploaded under an unchanged tag.
-        // A version-number-only answer would call that "up to date" forever.
-        boolean artifactUpdated = current != null && cmp == 0
-                && artifactDiffers(latest) && !isDismissed(artifactKey(latest));
-        return new UpdateCheck(true, newer || artifactUpdated, current, latestVersion,
-                latest.tag(), trustedReleaseUrl(latest.htmlUrl()), artifactUpdated);
+        // The click check and the passive settings snapshot share one cache. Without this
+        // update, a release published after the last passive refresh leaves the nav badge
+        // showing "new version" while the version card still says the old tag is latest.
+        Cached fresh = cachedFrom(latest, current, Instant.now());
+        synchronized (this) {
+            cached = fresh;
+        }
+        boolean artifactUpdated = fresh.state == VersionInfo.State.ARTIFACT_UPDATED;
+        boolean newer = fresh.state == VersionInfo.State.UPDATE_AVAILABLE;
+        return new UpdateCheck(true, newer || artifactUpdated, current, fresh.latestVersion,
+                fresh.latestTag, fresh.releaseUrl, artifactUpdated);
     }
 
     /**
@@ -297,35 +299,37 @@ public class VersionService {
             return cached; // Another thread won the race while we waited.
         }
         try {
-            ReleaseFeed.Release latest = feed.latest();
-            String latestVersion = stripV(latest.tag());
-            VersionInfo.State state;
-            if (current == null) {
-                state = VersionInfo.State.UNKNOWN;
-            } else {
-                int cmp = compareVersions(latestVersion, current);
-                if (cmp > 0) {
-                    state = VersionInfo.State.UPDATE_AVAILABLE;
-                } else if (cmp == 0 && artifactDiffers(latest)
-                        && !isDismissed(artifactKey(latest))) {
-                    state = VersionInfo.State.ARTIFACT_UPDATED;
-                } else {
-                    state = VersionInfo.State.UP_TO_DATE;
-                }
-            }
-            cached = new Cached(state, latest.tag(), latestVersion,
-                    trustedReleaseUrl(latest.htmlUrl()),
-                    latest.publishedAt() == null ? null : DATE.format(latest.publishedAt()),
-                    artifactDate(latest),
-                    artifactKey(latest),
-                    latest.source(),
-                    now.plus(POSITIVE_TTL));
+            cached = cachedFrom(feed.latest(), current, now);
         } catch (Exception e) {
             log.debug("Update check failed: {}", e.toString());
             cached = new Cached(VersionInfo.State.UNKNOWN, null, null, null, null, null, null,
                     null, now.plus(NEGATIVE_TTL));
         }
         return cached;
+    }
+
+    /** Builds the shared cache entry from one release feed answer. */
+    private Cached cachedFrom(ReleaseFeed.Release latest, String current, Instant now) {
+        String latestVersion = stripV(latest.tag());
+        VersionInfo.State state;
+        if (current == null) {
+            state = VersionInfo.State.UNKNOWN;
+        } else {
+            int cmp = compareVersions(latestVersion, current);
+            if (cmp > 0) {
+                state = VersionInfo.State.UPDATE_AVAILABLE;
+            } else if (cmp == 0 && artifactDiffers(latest)
+                    && !isDismissed(artifactKey(latest))) {
+                state = VersionInfo.State.ARTIFACT_UPDATED;
+            } else {
+                state = VersionInfo.State.UP_TO_DATE;
+            }
+        }
+        return new Cached(state, latest.tag(), latestVersion,
+                trustedReleaseUrl(latest.htmlUrl()),
+                latest.publishedAt() == null ? null : DATE.format(latest.publishedAt()),
+                artifactDate(latest), artifactKey(latest), latest.source(),
+                now.plus(POSITIVE_TTL));
     }
 
     /** True only when the feed says the published jar is provably not the running one. */

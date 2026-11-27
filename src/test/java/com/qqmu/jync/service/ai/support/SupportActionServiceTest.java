@@ -21,6 +21,7 @@ import com.qqmu.jync.model.AuditAction;
 import com.qqmu.jync.model.UserRole;
 import com.qqmu.jync.service.AdminAuditService;
 import com.qqmu.jync.service.DatabaseConfigService;
+import com.qqmu.jync.service.settings.SessionTimeoutService;
 import com.qqmu.jync.service.settings.SystemTuningService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.auth.AccessGuard;
@@ -45,13 +46,14 @@ class SupportActionServiceTest {
     private final CdcOperationsService cdcOperations = mock(CdcOperationsService.class);
     private final DatabaseConfigService databases = mock(DatabaseConfigService.class);
     private final SystemTuningService tuning = mock(SystemTuningService.class);
+    private final SessionTimeoutService sessionTimeouts = mock(SessionTimeoutService.class);
     private final AdminAuditService audit = mock(AdminAuditService.class);
     private final AccessGuard ops = AccessGuard.of("ops1", UserRole.OPS);
     private final AccessGuard admin = AccessGuard.of("admin", UserRole.ADMIN);
 
     private SupportActionService service() {
         return new SupportActionService(store, projects, etlTasks, migrationTasks,
-                cdcOperations, databases, tuning, audit);
+                cdcOperations, databases, tuning, sessionTimeouts, audit);
     }
 
     private String token(String username, SupportActionStore.Kind kind, long id,
@@ -204,6 +206,33 @@ class SupportActionServiceTest {
                 List.of("sync.chunk-size"), admin);
         verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
                 contains("audit.detail.supportSystem"), eq("admin"));
+    }
+
+    @Test
+    void aSessionTimeoutCardAppliesOnlyAfterConfirmation() {
+        String token = store.put("admin", SupportActionStore.Kind.SYSTEM, 0L,
+                SupportActionStore.Action.UPDATE_SESSION_TIMEOUT, "system",
+                Map.of("minutes", 720));
+
+        var result = service().execute(token, admin);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.OK);
+        assertThat(result.messageKey()).isEqualTo("support.action.system.session.done");
+        verify(sessionTimeouts).apply(720, admin);
+        verify(audit).record(eq(AuditAction.AI_SUPPORT_ACTION),
+                contains("audit.detail.supportSystem"), eq("admin"));
+    }
+
+    @Test
+    void aSessionTimeoutTokenPresentedByAnOperatorIsDenied() {
+        String token = store.put("ops1", SupportActionStore.Kind.SYSTEM, 0L,
+                SupportActionStore.Action.UPDATE_SESSION_TIMEOUT, "system",
+                Map.of("minutes", 720));
+
+        var result = service().execute(token, ops);
+
+        assertThat(result.outcome()).isEqualTo(SupportActionService.Outcome.DENIED);
+        verify(sessionTimeouts, never()).apply(org.mockito.ArgumentMatchers.anyInt(), any());
     }
 
     @Test

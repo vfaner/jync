@@ -19,6 +19,7 @@ import com.qqmu.jync.service.cdc.CdcOperationsService;
 import com.qqmu.jync.service.cdc.CdcRestartFailedException;
 import com.qqmu.jync.service.etl.EtlTaskService;
 import com.qqmu.jync.service.migration.MigrationTaskService;
+import com.qqmu.jync.service.settings.SessionTimeoutService;
 import com.qqmu.jync.service.settings.SystemTuningService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -55,12 +56,14 @@ public class SupportActionService {
     private final CdcOperationsService cdcOperations;
     private final DatabaseConfigService databases;
     private final SystemTuningService tuning;
+    private final SessionTimeoutService sessionTimeouts;
     private final AdminAuditService audit;
 
     public SupportActionService(SupportActionStore store, ProjectService projects,
                                 EtlTaskService etlTasks, MigrationTaskService migrationTasks,
                                 CdcOperationsService cdcOperations, DatabaseConfigService databases,
-                                SystemTuningService tuning, AdminAuditService audit) {
+                                SystemTuningService tuning, SessionTimeoutService sessionTimeouts,
+                                AdminAuditService audit) {
         this.store = store;
         this.projects = projects;
         this.etlTasks = etlTasks;
@@ -68,6 +71,7 @@ public class SupportActionService {
         this.cdcOperations = cdcOperations;
         this.databases = databases;
         this.tuning = tuning;
+        this.sessionTimeouts = sessionTimeouts;
         this.audit = audit;
     }
 
@@ -175,6 +179,16 @@ public class SupportActionService {
                 tuning.apply(stringMap(pending.payload().get("set")),
                         stringList(pending.payload().get("reset")), actor);
             }
+            case UPDATE_SESSION_TIMEOUT -> {
+                if (!actor.isAdmin()) {
+                    throw new AccessDeniedException(AccessGuard.DENIED_KEY);
+                }
+                Object raw = pending.payload().get("minutes");
+                if (!(raw instanceof Number number)) {
+                    throw new IllegalArgumentException("error.support.param.invalid");
+                }
+                sessionTimeouts.apply(number.intValue(), actor);
+            }
             default -> throw new IllegalStateException("support.action.failed");
         }
     }
@@ -223,6 +237,7 @@ public class SupportActionService {
             case UPDATE_SCHEDULE -> "support.action.schedule.done";
             case UPDATE_PARAMS -> kind == SupportActionStore.Kind.SYSTEM
                     ? "support.action.system.done" : "support.action.connection.done";
+            case UPDATE_SESSION_TIMEOUT -> "support.action.system.session.done";
             default -> "support.action.done";
         };
     }

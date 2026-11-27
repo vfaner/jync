@@ -162,6 +162,8 @@ public class SupportAssistantService {
                  确认卡，也不要说已经升级。updateState=DISABLED 表示更新检查被关闭。
                - 主机 CPU / 内存 / 磁盘与进程占用 → 没有对应工具，只在看板资源环里只读展示；
                  不要用 database_metrics 代替，也不要编造主机数字
+               - 登录会话空闲超时 → update_session_timeout（单位分钟，最低 30；只生成确认卡，
+                 新会话立即生效，已有会话下次请求生效）
                - 数据库性能、连接数、QPS → database_metrics
                - 两侧行数是否一致 → project_row_count（很贵，一次对话最多 3 次）。只问
                  「某张表同步完了吗 / 到哪了」时用 project_table_status，不要动辄做行数核对

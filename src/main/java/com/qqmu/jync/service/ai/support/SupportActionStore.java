@@ -39,6 +39,8 @@ public class SupportActionStore {
         UPDATE_CURSOR,
         /** Set or clear the project's cron expression. */
         UPDATE_SCHEDULE,
+        /** Change the idle timeout of authenticated HTTP sessions. */
+        UPDATE_SESSION_TIMEOUT,
         /** Change a connection's free-form JDBC extra parameters. */
         UPDATE_PARAMS,
         /** Stop a dedicated-migration run that is in flight. */

@@ -83,6 +83,9 @@ server:
       charset: UTF-8
       force: true
     session:
+      # Idle timeout, not an absolute session lifetime: every authenticated request slides it.
+      # The default was Tomcat's 30 minutes, which was too short for an operations console.
+      timeout: ${JYN_SESSION_TIMEOUT:8h}
       cookie:
         http-only: true
         # Lax lets top-level navigations carry the cookie but blocks CSRF-prone cross-site posts.

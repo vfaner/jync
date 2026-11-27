@@ -629,6 +629,47 @@ class VersionServiceTest {
         assertThat(check.latestVersion()).isEqualTo("1.7.9");
     }
 
+    /**
+     * The settings card and the nav badge read the same service. The nav check is the fresh
+     * answer; it must replace the passive cache so the next settings render no longer says the
+     * previous release is the latest one.
+     */
+    @Test
+    void clickCheckRefreshesThePassiveSnapshotForTheSettingsPage() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = release("v2.4.6", "https://github.com/o/r/releases/tag/v2.4.6", "");
+        VersionService versionService = service("2.4.7", feed, true);
+
+        assertThat(versionService.snapshot().getLatestVersion()).isEqualTo("2.4.6");
+
+        feed.latest = release("v2.4.7", "https://github.com/o/r/releases/tag/v2.4.7", "");
+        VersionService.UpdateCheck check = versionService.checkNow();
+
+        assertThat(check.checked()).isTrue();
+        assertThat(check.latestVersion()).isEqualTo("2.4.7");
+        VersionInfo info = versionService.snapshot();
+        assertThat(info.getLatestVersion()).isEqualTo("2.4.7");
+        assertThat(info.getLatestTag()).isEqualTo("v2.4.7");
+        assertThat(feed.latestCalls).hasValue(2);
+    }
+
+    @Test
+    void clickCheckForARePublishedArtifactAlsoUpdatesThePassiveState() {
+        FakeFeed feed = new FakeFeed();
+        feed.latest = releaseWithJar("v2.4.7", "ab".repeat(32), PUBLISHED);
+        FakeArtifactComparison comparison =
+                new FakeArtifactComparison().answer(ArtifactComparison.Result.DIFFERENT);
+        VersionService versionService = serviceWithComparison("2.4.7", feed, comparison);
+
+        VersionService.UpdateCheck check = versionService.checkNow();
+
+        assertThat(check.updateAvailable()).isTrue();
+        assertThat(check.artifactUpdated()).isTrue();
+        assertThat(versionService.snapshot().getState())
+                .isEqualTo(VersionInfo.State.ARTIFACT_UPDATED);
+        assertThat(versionService.snapshot().getLatestVersion()).isEqualTo("2.4.7");
+    }
+
     @Test
     void clickCheckMakesNoNetworkCallWhenTheFeatureIsDisabled() {
         SourceAwareFakeFeed feed = new SourceAwareFakeFeed()

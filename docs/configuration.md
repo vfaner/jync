@@ -391,6 +391,8 @@ app:
 | 票据 | 登录中心签发一次性 ticket | 配置校验地址；只接受 http(s)，不跟随重定向 |
 
 - 外部用户只保留会话，不写入 `app_user`，没有本地密码，也没有改密入口。
+- 登录会话默认**空闲 8 小时**超时（`server.servlet.session.timeout`，可用 `JYN_SESSION_TIMEOUT` 覆盖），每次认证请求都会滑动续期；没有 JWT/refresh token，也没有 `remember-me`。浏览器关闭后会话 Cookie 通常也会丢失。
+- 管理员也可以在 AI 运维助手中说「把登录会话超时改成 12 小时」，助手只生成确认卡；确认后写入元数据库，最低 30 分钟、最高 30 天。新会话立即生效，已有会话在下一次请求时采用。
 - 本地账号默认保留为应急入口 `/login/local`。关闭前必须先启用并配置好外部认证；关闭后 `POST /login` 也会被拒绝。
 - **恢复本地登录**：以 `JYN_RESET_LOGIN=true` 启动一次（等价于 `app.login.reset-on-startup: true`），Jync 会重新打开本地登录并保存；登录后修好外部配置，去掉变量并改回 `false` 重启。
 - 嵌入 iframe 需要 HTTPS，并同时设置 `JYN_COOKIE_SECURE=true` 与 `JYN_COOKIE_SAME_SITE=None`。
