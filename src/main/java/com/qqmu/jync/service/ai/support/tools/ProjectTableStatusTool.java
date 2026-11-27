@@ -187,6 +187,8 @@ public class ProjectTableStatusTool implements SupportTool {
                 ? null : row.lastSyncTime().toString());
         out.put("fullLoadRowsCopied", row.rowsCopied());
         out.put("fullLoadPercent", row.fullLoadPercent());
+        out.put("fullLoadCompletedAt", row.fullLoadCompletedAt() == null
+                ? null : row.fullLoadCompletedAt().toString());
         out.put("externalBaseline", row.externalBaseline());
         out.put("fullLoadUpdatedAt", row.lastUpdatedAt() == null
                 ? null : row.lastUpdatedAt().toString());

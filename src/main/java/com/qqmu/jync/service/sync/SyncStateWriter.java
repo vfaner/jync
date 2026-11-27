@@ -106,6 +106,10 @@ public class SyncStateWriter {
             changed = true;
         }
         if (result.isInitialLoad()) {
+            progress.setFullLoadCompletedAt(Instant.now());
+            changed = true;
+        }
+        if (result.isInitialLoad()) {
             // Record whether this full load produced a cursor. A null one is not "never
             // loaded": it means the cursor column (or the table) had no usable value, and
             // re-running the load every poll is what this flag prevents. Only full-load
@@ -190,6 +194,7 @@ public class SyncStateWriter {
         progress.setInitialLoadDone(false);
         progress.setFullLoadWithoutCursor(false);
         progress.setFullLoadTotalRows(null);
+        progress.setFullLoadCompletedAt(null);
         return progressRepository.save(progress);
     }
 

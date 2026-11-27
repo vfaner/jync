@@ -2347,13 +2347,14 @@ public class ProjectService {
                                   Boolean resumableLoad, Boolean fullLoadWithoutCursor,
                                   IncrementalState incremental,
                                   Integer targetsDone, Integer targetsTotal,
-                                  boolean externalBaseline, Integer fullLoadPercent) {
+                                  boolean externalBaseline, Integer fullLoadPercent,
+                                  Instant fullLoadCompletedAt) {
         /** Compatibility constructor for callers/tests that only need the full-load state. */
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
                                Instant lastSyncTime, Long rowsCopied, Instant lastUpdatedAt) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
                     null, null, null, null, IncrementalState.NOT_STARTED, null, null, false,
-                    null);
+                    null, null);
         }
 
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
@@ -2363,7 +2364,7 @@ public class ProjectService {
                                IncrementalState incremental) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
                     cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
-                    incremental, null, null, false, null);
+                    incremental, null, null, false, null, null);
         }
 
         public TableSyncStatus(String name, SyncState state, Long rowsSyncedTotal,
@@ -2374,7 +2375,7 @@ public class ProjectService {
                                Integer targetsDone, Integer targetsTotal) {
             this(name, state, rowsSyncedTotal, lastSyncTime, rowsCopied, lastUpdatedAt,
                     cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
-                    incremental, targetsDone, targetsTotal, false, null);
+                    incremental, targetsDone, targetsTotal, false, null, null);
         }
 
         /** True when this row aggregates a one-source-many-targets baseline. */
@@ -2582,7 +2583,7 @@ public class ProjectService {
                     progress == null ? null : progress.resumableLoad(),
                     progress == null ? null : progress.fullLoadWithoutCursor(),
                     incremental, targetsDone, targetsTotal, externalBaseline,
-                    fullLoadPercent));
+                    fullLoadPercent, progress == null ? null : progress.fullLoadCompletedAt()));
         }
         return result;
     }

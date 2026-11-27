@@ -101,6 +101,23 @@ class SyncStateWriterLastSyncTimeTest {
     }
 
     @Test
+    @DisplayName("a full load records its completion time even when it moved no rows")
+    void aFullLoadRecordsItsCompletionTimeWithoutClaimingAnIncrementalSync() {
+        SyncProgress progress = seededProgress(914L, "orders");
+        DataSyncService.TableSyncResult result = new DataSyncService.TableSyncResult();
+        ReflectionTestUtils.setField(result, "initialLoad", true);
+
+        writer.advanceCursor(progress, result,
+                CursorStrategy.identity("id", Types.INTEGER, "test"));
+
+        SyncProgress stored = progressRepository
+                .findByProjectIdAndObjectTypeAndObjectName(914L, ObjectType.TABLE, "orders")
+                .orElseThrow(IllegalStateException::new);
+        assertThat(stored.getFullLoadCompletedAt()).isNotNull();
+        assertThat(stored.getLastSyncTime()).isEqualTo(LAST_REAL_SYNC);
+    }
+
+    @Test
     @DisplayName("a cycle that changed rows moves it")
     void aCycleThatChangedRowsMovesTheTablesLastSyncTime() {
         SyncProgress progress = seededProgress(912L, "orders");

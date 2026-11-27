@@ -1846,7 +1846,7 @@ class ProjectServiceTest {
         SyncConfig config = new SyncConfig();
         config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
         ProgressStatusRow started = new ProgressStatusRow("ORDERS", false, 0L, null,
-                null, null, null, null, 200L);
+                null, null, null, null, 200L, null);
         SyncTask running = new SyncTask();
         running.setLockOwner("node-a");
         running.setLockExpiresAt(java.time.Instant.now().plusSeconds(60));

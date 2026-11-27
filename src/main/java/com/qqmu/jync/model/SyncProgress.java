@@ -108,6 +108,10 @@ public class SyncProgress {
     @Column(name = "full_load_total_rows")
     private Long fullLoadTotalRows;
 
+    /** When the last successful initial/full load completed, even when it moved no rows. */
+    @Column(name = "full_load_completed_at")
+    private Instant fullLoadCompletedAt;
+
     @Column(name = "rows_synced_total")
     private Long rowsSyncedTotal = 0L;
 

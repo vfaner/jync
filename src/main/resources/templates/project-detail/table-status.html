@@ -57,10 +57,17 @@
           th:text="#{'tablesync.inc.' + ${s.incremental.name()}}">state</span>
 </td>
 
-<td th:fragment="lastSync(s)" class="small muted" data-status-cell="lastSync"
-    th:text="${s.lastSyncTime != null}
-             ? ${#temporals.format(s.lastSyncTime, 'MM-dd HH:mm:ss')}
-             : #{common.never}">never</td>
+<td th:fragment="lastSync(s)" class="small muted" data-status-cell="lastSync">
+    <span th:if="${s.lastSyncTime != null}"
+          th:text="${#temporals.format(s.lastSyncTime, 'MM-dd HH:mm:ss')}">never</span>
+    <span th:if="${s.lastSyncTime == null and s.fullLoadCompletedAt != null}"
+          th:title="#{tablesync.fullLoadCompletedAtHint}"
+          th:text="#{tablesync.fullLoadAt(${#temporals.format(s.fullLoadCompletedAt, 'MM-dd HH:mm:ss')})}">full load</span>
+    <span th:if="${s.lastSyncTime == null and s.fullLoadCompletedAt == null and s.externalBaseline}"
+          th:text="#{tablesync.externalBaseline}">external</span>
+    <span th:if="${s.lastSyncTime == null and s.fullLoadCompletedAt == null and !s.externalBaseline}"
+          th:text="#{common.never}">never</span>
+</td>
 
 <td th:fragment="rowsSynced(s)" class="num small" data-status-cell="rowsSynced"
     th:title="#{tablesync.rowsSynced.help}">
