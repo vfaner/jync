@@ -35,6 +35,7 @@ import com.qqmu.jync.service.DatabaseConfigService;
 import com.qqmu.jync.service.ProjectService;
 import com.qqmu.jync.service.cdc.CdcConsumerManager;
 import com.qqmu.jync.service.cdc.CdcOperationsService;
+import com.qqmu.jync.model.CdcPosition;
 import com.qqmu.jync.service.cdc.CdcPositionStore;
 import com.qqmu.jync.service.projection.redis.RedisTargetService;
 
@@ -106,6 +107,22 @@ class ProjectDetailModeGatingViewTest {
         return mvc.perform(get("/projects/1").locale(Locale.ENGLISH))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
+    }
+
+    @Test
+    @WithMockUser(roles = "ADMIN")
+    void anExternalBaselineVerificationBadgeRendersForACdcProject() throws Exception {
+        stubProject(SyncTargetKind.JDBC, CaptureStrategy.BINLOG_CDC, false);
+        CdcPosition position = new CdcPosition();
+        position.setProjectId(1L);
+        position.setBaselineDone(true);
+        position.setExternalBaselineTableNames(List.of("orders"));
+        position.setExternalBaselineVerifyStatus(CdcPosition.VERIFY_OK);
+        when(cdcPositionStore.find(1L)).thenReturn(Optional.of(position));
+
+        String page = renderDetail();
+
+        assertThat(page).contains("Baseline structure OK");
     }
 
     @Test

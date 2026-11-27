@@ -49,8 +49,11 @@
                                 : (${verifyStatus == 'MISMATCH'} ? 'badge-warn'
                                 : (${verifyStatus == 'ERROR'} ? 'badge-danger' : 'badge-info'))"
                   th:attr="title=${verifyDetails}"
-                  th:text="#{'cdc.verify.' + (verifyStatus == null
-                              ? 'pending' : #strings.toLowerCase(verifyStatus))}">Baseline verification</span>
+                  th:text="${verifyStatus == 'OK'} ? #{cdc.verify.ok}
+                          : (${verifyStatus == 'MISMATCH'} ? #{cdc.verify.mismatch}
+                          : (${verifyStatus == 'ERROR'} ? #{cdc.verify.error}
+                          : (${verifyStatus == 'RUNNING'} ? #{cdc.verify.running}
+                          : #{cdc.verify.pending})))">Baseline verification</span>
             <button type="button" class="btn btn-ghost btn-xs"
                     data-role="external-baseline-reverify"
                     th:if="${cdcPosition != null and cdcPosition.hasExternalBaseline()
