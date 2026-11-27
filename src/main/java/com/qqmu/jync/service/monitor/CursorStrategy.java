@@ -109,13 +109,17 @@ public class CursorStrategy {
     /** Column-name fragments that conventionally mark a last-modified timestamp. */
     static final List<String> TIMESTAMP_HINTS = List.of(
             "UPDATE_TIME", "UPDATED_AT", "UPDATETIME", "UPDATED_TIME",
+            // Common abbreviated spellings seen in domestic/legacy schemas.
+            "UPDT_TM", "UPDT_TIME", "UPDATE_TM", "UPD_TIME", "LAST_UPD_TIME",
             "LAST_MODIFIED", "LASTMODIFIED", "LAST_UPDATE", "LAST_UPDATED",
-            "MODIFY_TIME", "MODIFIED_AT", "MODIFIED_TIME", "GMT_MODIFIED",
-            "ROW_VERSION", "ROWVERSION", "SYS_UPDATE_TIME", "DATA_CHANGE_TIME");
+            "MODIFY_TIME", "MODIFIED_AT", "MODIFIED_TIME", "MOD_TM", "MODIFY_TM",
+            "GMT_MODIFIED", "ROW_VERSION", "ROWVERSION", "SYS_UPDATE_TIME",
+            "DATA_CHANGE_TIME");
 
     /** Weaker hints: creation timestamps catch inserts but never updates. */
     static final List<String> CREATE_TIME_HINTS = List.of(
             "CREATE_TIME", "CREATED_AT", "CREATETIME", "CREATED_TIME",
+            "CREATE_TM", "CREATED_TM", "CRT_TM", "CRT_TIME",
             "GMT_CREATE", "INSERT_TIME", "ADD_TIME");
 
     /** True when the type can be compared with {@code >} and aggregated with {@code MAX()}. */

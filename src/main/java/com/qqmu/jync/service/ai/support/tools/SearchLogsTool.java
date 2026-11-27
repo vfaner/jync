@@ -84,9 +84,11 @@ public class SearchLogsTool implements SupportTool {
         List<String> lines = new ArrayList<>();
         for (String line : result.getLines()) {
             // query() renders with HTML escaping and <mark> around the hit; the model needs
-            // the original text. The cap keeps one huge stack line from flooding the prompt.
-            String plain = HtmlUtils.htmlUnescape(line)
-                    .replace("<mark>", "").replace("</mark>", "");
+            // the original text. Remove the unescaped highlight markers before unescaping:
+            // a log line that literally contains "<mark>" is escaped as &lt;mark&gt; and must
+            // survive, while only the injected highlight tags are unescaped here.
+            String plain = HtmlUtils.htmlUnescape(
+                    line.replace("<mark>", "").replace("</mark>", ""));
             lines.add(ToolText.safe(plain, 600));
         }
         if (lines.size() > maxLines) {

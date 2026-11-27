@@ -41,6 +41,22 @@ class SearchLogsToolTest {
     }
 
     @Test
+    void aLiteralMarkTagInTheLogIsNotMistakenForTheHighlightMarker(@TempDir Path dir)
+            throws Exception {
+        Path log = dir.resolve("jync.log");
+        Files.writeString(log,
+                "2026-11-27 10:00:01.000 ERROR [main] c.q.j.Cdc - payload <mark>literal</mark>\n");
+        SearchLogsTool tool = new SearchLogsTool(new SystemLogService(log.toString()));
+
+        ObjectNode args = mapper.createObjectNode()
+                .put("keyword", "ERROR").put("level", "ERROR");
+        var result = mapper.readTree(mapper.writeValueAsString(tool.execute(args, ctx)));
+
+        assertThat(result.path("lines").get(0).asString())
+                .contains("payload <mark>literal</mark>");
+    }
+
+    @Test
     void aMissingFileIsReportedAsAToolError(@TempDir Path dir) throws Exception {
         Path log = dir.resolve("jync.log");
         Files.writeString(log, "2026-11-27 10:00:00 INFO [main] x - ok\n");

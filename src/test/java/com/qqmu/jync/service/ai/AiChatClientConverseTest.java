@@ -233,6 +233,42 @@ class AiChatClientConverseTest {
                 .isEqualTo("toolu_b");
     }
 
+    @Test
+    void anthropicFoldsAUserSynthesisTurnIntoTheToolResultMessage() {
+        sseBody = """
+                event: content_block_start
+                data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+                event: content_block_delta
+                data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"结论"}}
+
+                event: message_stop
+                data: {"type":"message_stop"}
+
+                """;
+        AiChatClient.ToolCall call =
+                new AiChatClient.ToolCall("toolu_1", "project_status", "{\"projectId\":7}");
+
+        client.converseStream(provider(AiProtocol.ANTHROPIC), "sk-1", "SYS",
+                List.of(AiChatClient.Turn.user("订单同步在跑吗"),
+                        AiChatClient.Turn.assistant("", List.of(call)),
+                        AiChatClient.Turn.toolResult("toolu_1", "{\"running\":true}"),
+                        AiChatClient.Turn.user("请基于结果直接收束")),
+                List.of(PROJECT_STATUS), 512, text -> { });
+
+        JsonNode messages = mapper.readTree(requestBodies.get(0)).path("messages");
+        assertThat(messages).hasSize(3);
+        JsonNode results = messages.get(2);
+        assertThat(results.path("role").asString()).isEqualTo("user");
+        assertThat(results.path("content")).hasSize(2);
+        assertThat(results.path("content").get(0).path("type").asString())
+                .isEqualTo("tool_result");
+        assertThat(results.path("content").get(1).path("type").asString())
+                .isEqualTo("text");
+        assertThat(results.path("content").get(1).path("text").asString())
+                .isEqualTo("请基于结果直接收束");
+    }
+
     /**
      * Anthropic validates {@code tool_use.input} as an object. A model (or a gateway that
      * reshapes the arguments) can emit {@code null}, an array or a bare string; echoing that

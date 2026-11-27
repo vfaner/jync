@@ -82,6 +82,41 @@ class LogMinerSessionDmTest {
         session.close();
     }
 
+
+    @Test
+    void aFailedStartMiningEndsTheHalfOpenLogMinerSession() throws SQLException {
+        Connection conn = mock(Connection.class);
+        Statement st = mock(Statement.class);
+        PreparedStatement archivesPs = mock(PreparedStatement.class);
+        ResultSet maxRs = mock(ResultSet.class);
+        ResultSet archivesRs = mock(ResultSet.class);
+        when(conn.createStatement()).thenReturn(st);
+        when(st.executeQuery(DmLogMinerDialect.Q_HIGH_WATER)).thenReturn(maxRs);
+        when(maxRs.next()).thenReturn(true);
+        when(maxRs.getLong(1)).thenReturn(900L);
+        when(maxRs.wasNull()).thenReturn(false);
+        when(conn.prepareStatement(DmLogMinerDialect.Q_ARCHIVED_LOGS_SINCE))
+                .thenReturn(archivesPs);
+        when(archivesPs.executeQuery()).thenReturn(archivesRs);
+        when(archivesRs.next()).thenReturn(true, false);
+        when(archivesRs.getString(1)).thenReturn("/arch/a.log");
+        when(archivesRs.getInt(2)).thenReturn(1);
+        when(archivesRs.getLong(3)).thenReturn(7L);
+        when(st.execute(Mockito.contains("START_LOGMNR")))
+                .thenThrow(new SQLException("ORA-01291: missing log file"));
+
+        try {
+            LogMinerSession.open(conn, 500L, 1000, DmLogMinerDialect.INSTANCE);
+            org.assertj.core.api.Assertions.fail("expected SQLException");
+        } catch (SQLException e) {
+            assertThat(e.getMessage()).contains("archive chain gap");
+        }
+
+        // ADD_LOGFILE succeeded before START_LOGMNR failed; the connection must not return
+        // to the pool with those files still registered.
+        verify(st).execute("CALL DBMS_LOGMNR.END_LOGMNR()");
+    }
+
     @Test
     void miningStartsInclusiveOfTheDmStartScn() throws SQLException {
         // The cursor must be bound with "CSCN >= startScn" on DM — the resume SCN is a file

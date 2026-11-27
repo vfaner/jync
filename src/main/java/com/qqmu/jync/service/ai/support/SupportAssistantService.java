@@ -77,7 +77,8 @@ public class SupportAssistantService {
     static final String SYNTHESIS_EN =
             "Give the final answer now: start with the conclusion, using the results already "
                     + "gathered. Do not call tools or talk about the lookup process, rounds or "
-                    + "budget. If evidence is missing, say exactly what is missing.";
+                    + "budget. If evidence is insufficient, give the most likely cause and "
+                    + "executable verification steps first, then say what is still missing.";
 
     /**
      * 一轮正文在用户端延迟下发的阈值：短正文先攒着，本轮结束时再决定发不发；超过这个
@@ -689,27 +690,37 @@ public class SupportAssistantService {
                     String callId = callId(call, i);
                     String labelKey = "support.tool." + call.name();
                     sink.tool(callId, call.name(), labelKey, SupportSink.ToolState.RUNNING);
-                    String output = registry.execute(call.name(), call.argumentsJson(), ctx);
-                    int remaining = MAX_TOOL_OUTPUT_CHARS - toolOutputChars;
-                    int originalLength = output == null ? 0 : output.length();
-                    toolOutputChars += Math.min(originalLength, Math.max(0, remaining));
-                    if (output != null && output.length() > Math.max(0, remaining)) {
+                    String rawOutput = registry.execute(call.name(), call.argumentsJson(), ctx);
+                    String output = rawOutput;
+                    // These root fields are protocol, not evidence: a capped wrapper would
+                    // erase the error marker, the draft token or the confirmation token. A
+                    // later tool call can arrive after the 24 KB evidence budget is spent, so
+                    // classify before capping and keep the card/error payload intact for the
+                    // browser. The copy sent back to the model still obeys the budget.
+                    boolean toolError = registry.isError(rawOutput);
+                    boolean draft = "draft_project".equals(call.name());
+                    boolean prepared = isPreparedAction(rawOutput);
+                    int originalLength = rawOutput == null ? 0 : rawOutput.length();
+                    int remaining = Math.max(0, MAX_TOOL_OUTPUT_CHARS - toolOutputChars);
+                    toolOutputChars += Math.min(originalLength, remaining);
+                    if (rawOutput != null && rawOutput.length() > remaining
+                            && (!toolError || rawOutput.length() > 2_000)) {
                         ObjectNode capped = mapper.createObjectNode();
                         capped.put("truncated", true);
                         capped.put("content", remaining <= 0 ? ""
-                                : output.substring(0, Math.min(output.length(), remaining)));
+                                : rawOutput.substring(0, Math.min(rawOutput.length(), remaining)));
                         output = capped.toString();
                     }
-                    sink.tool(callId, call.name(), labelKey, registry.isError(output)
+                    sink.tool(callId, call.name(), labelKey, toolError
                             ? SupportSink.ToolState.FAILED : SupportSink.ToolState.DONE);
-                    if ("draft_project".equals(call.name())) {
+                    if (draft) {
                         drafted = true;
-                        draftResult = output;
-                    } else if (isPreparedAction(output)) {
+                        draftResult = rawOutput;
+                    } else if (prepared) {
                         // Any tool that returns a single-use token prepared a write — control_*
                         // and the update_* tuning tools alike. The card is emitted once the
                         // model has finished its sentence.
-                        actionResults.add(output);
+                        actionResults.add(rawOutput);
                     }
                     turns.add(AiChatClient.Turn.toolResult(call.id(), output));
                 }
@@ -864,6 +875,18 @@ public class SupportAssistantService {
         }
         if (evidence.length() > COMPACT_EVIDENCE_CHARS) {
             evidence.setLength(COMPACT_EVIDENCE_CHARS);
+        }
+        if (evidence.length() == 0) {
+            // The blank-reply fallback also runs before the first tool call. Do not tell the
+            // model that evidence exists when the header would be followed by nothing.
+            String instruction = language != null && language.startsWith("en")
+                    ? "No tool results were gathered. Answer the original question from "
+                            + "product knowledge and general database/Java experience; if you "
+                            + "are unsure, state the inference and verification steps. Do not "
+                            + "claim to have checked live state."
+                    : "尚未获得工具结果。请基于产品文档和通用数据库/Java 经验直接回答原问题；"
+                            + "不确定时说明这是推断以及验证步骤，不要声称查到了实时状态。";
+            return List.of(AiChatClient.Turn.user(message + "\n\n" + instruction));
         }
         String prompt = (language != null && language.startsWith("en")
                 ? "Tool results already gathered (JSON, possibly truncated):\n"

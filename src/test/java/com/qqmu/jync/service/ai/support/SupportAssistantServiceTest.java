@@ -373,6 +373,37 @@ class SupportAssistantServiceTest {
     }
 
     @Test
+    void aConfirmationCardSurvivesTheEvidenceBudget() {
+        List<AiChatClient.ToolCall> calls = List.of(
+                new AiChatClient.ToolCall("c1", "search_docs", "{}"),
+                new AiChatClient.ToolCall("c2", "search_docs", "{}"),
+                new AiChatClient.ToolCall("c3", "search_docs", "{}"),
+                new AiChatClient.ToolCall("c4", "control_project",
+                        "{\"projectId\":7,\"action\":\"STOP\"}"));
+        when(chat.converseStream(any(), any(), any(), any(), any(), anyInt(), any(), anyLong()))
+                .thenReturn(
+                        new AiChatClient.ToolChatResult(true, "OK", "", calls, "", 1, false),
+                        new AiChatClient.ToolChatResult(true, "OK", "请在卡片上确认", List.of(),
+                                "", 1, false));
+        when(registry.execute(org.mockito.ArgumentMatchers.eq("search_docs"), any(), any()))
+                .thenReturn("x".repeat(8_000));
+        when(registry.execute(org.mockito.ArgumentMatchers.eq("control_project"), any(), any()))
+                .thenReturn("{\"ok\":true,\"token\":\"tok-budget\","
+                        + "\"titleKey\":\"support.action.project.stop\","
+                        + "\"resourceKindKey\":\"support.action.resource.project\","
+                        + "\"resourceName\":\"订单同步\"}");
+        when(registry.isError(any())).thenReturn(false);
+
+        Recorder sink = new Recorder();
+        service().ask(actor, "zh", ask("把订单同步停掉"), sink);
+
+        // Three 8 KB results exhaust the 24 KB evidence budget; the fourth call's card
+        // payload must not be replaced by the generic truncation wrapper.
+        assertThat(sink.events).contains("delta:请在卡片上确认", "action:tok-budget");
+        assertThat(sink.events).doesNotContain("tool:FAILED:control_project");
+    }
+
+    @Test
     void aParameterCardCarriesItsFieldsNoteAndAffectedTasksToTheBrowser() {
         AiChatClient.ToolCall call = new AiChatClient.ToolCall(
                 "c2", "update_connection_params", "{\"connectionId\":3}");

@@ -54,7 +54,7 @@ Jync（捷同）由沐沐开源工坊开发和维护，采用 Apache-2.0 许可�
 ## 游标策略详解
 
 自动解析顺序（项目里显式指定游标列时优先用指定值）：
-1. TIMESTAMP：列名命中 UPDATE_TIME / UPDATED_AT 等且为时间类型，捕获新增与更新，最可靠。
+1. TIMESTAMP：列名命中 UPDATE_TIME / UPDATED_AT / UPDT_TM / UPDATE_TM 等且为时间类型，捕获新增与更新，最可靠；复合主键或非数字主键不影响时间列被选中。常见的建表时间缩写 CREATE_TM / CRT_TM 在第三步作为 IDENTITY 使用。
 2. ROW_SCN：Oracle 表以 WITH ROWDEPENDENCIES 创建时的 ORA_ROWSCN 伪列，没有字段也能捕获更新，
    但每轮 MAX(ORA_ROWSCN) 是全表扫描。
 3. IDENTITY：建表时间列或单列整型主键，只捕获新增，已有行的更新不可见。

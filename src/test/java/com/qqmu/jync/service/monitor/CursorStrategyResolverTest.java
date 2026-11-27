@@ -64,6 +64,36 @@ class CursorStrategyResolverTest {
     }
 
     @Test
+    void anAbbreviatedLastModifiedColumnIsDetectedOnACompositeKeyTable() {
+        // Real schema: composite primary key and UPDT_TM datetime(6). Without the
+        // abbreviation the table fell through to NONE and stopped syncing after the seed.
+        TableMeta t = table(List.of(
+                col("SEQ", Types.INTEGER),
+                col("PUB_DT", Types.TIMESTAMP),
+                col("IND_ID", Types.INTEGER),
+                col("UPDT_TM", Types.TIMESTAMP),
+                col("CREATE_TM", Types.TIMESTAMP)), List.of("PUB_DT", "IND_ID"), 33_900_000L);
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.TIMESTAMP);
+        assertThat(strategy.getColumn()).isEqualTo("UPDT_TM");
+        assertThat(strategy.isMissesUpdates()).isFalse();
+    }
+
+    @Test
+    void anAbbreviatedCreationColumnIsUsedWhenNoUpdateColumnExists() {
+        TableMeta t = table(List.of(
+                col("SEQ", Types.INTEGER),
+                col("CRT_TM", Types.TIMESTAMP)), List.of("SEQ"), 1000L);
+
+        CursorStrategy strategy = resolver.resolve(t, config);
+
+        assertThat(strategy.getKind()).isEqualTo(CursorStrategy.Kind.IDENTITY);
+        assertThat(strategy.getColumn()).isEqualTo("CRT_TM");
+    }
+
+    @Test
     void aCreationTimestampIsUsedButFlaggedAsMissingUpdates() {
         TableMeta t = table(List.of(
                 col("id", Types.INTEGER),

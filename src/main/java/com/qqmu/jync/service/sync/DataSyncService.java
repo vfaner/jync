@@ -1763,6 +1763,7 @@ public class DataSyncService {
         // A keyless single-statement load has no checkpoint: one retry is worth a transient
         // source/proxy reset, but three full scans of a huge table are not.
         int maxAttempts = pkColumns == null ? 2 : 3;
+        Throwable previousFailure = null;
         for (int attempt = 0; attempt < maxAttempts; attempt++) {
             PkCursor sink = pkColumns == null ? null : new PkCursor();
             Connection src = sourceConn;
@@ -1785,6 +1786,16 @@ public class DataSyncService {
                     borrowed = true;
                     tgt = ctx.getConnectionProvider().openWaiting(ctx.getTargetConfig());
                 }
+                if (attempt > 0 && pkColumns == null
+                        && targetHasRows(tgt, ctx, targetTable)) {
+                    // A keyless load has no key for an upsert. If the failed attempt (or the
+                    // driver's close/commit path) already committed rows, replaying the whole
+                    // SELECT as plain INSERTs would duplicate the table. Refuse the retry and
+                    // surface the original failure instead.
+                    throw new SQLException("Keyless full-load retry refused: target "
+                            + targetTable + " already contains rows after a failed attempt;"
+                            + " reset the target before retrying", previousFailure);
+                }
                 // Session-scoped FK toggle for a parallel worker's own connection. The
                 // cycle-wide connection is toggled by SyncEngine, but a worker borrows a
                 // different one, where that SET never applied. Restored in finally so the
@@ -1803,12 +1814,14 @@ public class DataSyncService {
                 if (attempt + 1 >= maxAttempts || !isRetryableCopyFailure(e)) {
                     throw e;
                 }
+                previousFailure = e;
                 log.warn("Full-load chunk of {} failed on attempt {} ({}); retrying on fresh"
                                 + " connections", table.getName(), attempt + 1, e.getMessage());
             } catch (RuntimeException e) {
                 if (attempt + 1 >= maxAttempts || !isRetryableCopyFailure(e)) {
                     throw e;
                 }
+                previousFailure = e;
                 log.warn("Full-load chunk of {} failed on attempt {} ({}); retrying on fresh"
                                 + " connections", table.getName(), attempt + 1, e.getMessage());
             } finally {
@@ -1864,6 +1877,26 @@ public class DataSyncService {
             } catch (SQLException | RuntimeException abort) {
                 log.debug("Aborting the worker connection failed: {}", abort.toString());
             }
+        }
+    }
+
+    /**
+     * Whether a keyless target already holds rows. A keyless load cannot upsert, so a retry
+     * is only safe when the failed attempt left the target empty. An unreadable target is
+     * treated as non-empty: refusing the retry is safer than silently duplicating data.
+     */
+    private boolean targetHasRows(Connection target, SyncContext ctx, String targetTable) {
+        String sql = "SELECT 1 FROM "
+                + ctx.getTargetDialect().qualify(ctx.getTargetSchema(), targetTable);
+        try (Statement st = target.createStatement()) {
+            st.setMaxRows(1);
+            try (ResultSet rows = st.executeQuery(sql)) {
+                return rows.next();
+            }
+        } catch (SQLException | RuntimeException e) {
+            log.warn("Cannot prove that keyless target {} is empty before a full-load retry;"
+                    + " refusing the retry: {}", targetTable, e.getMessage());
+            return true;
         }
     }
 
@@ -2328,7 +2361,14 @@ public class DataSyncService {
         } finally {
             if (sourceRead != null) {
                 // Rolls back a read that never reached its commit and restores autocommit.
-                sourceRead.close();
+                // A broken driver can throw unchecked from close(); it must not escape after
+                // the target commit, because the keyless full-load retry would then replay
+                // the already-committed rows as plain INSERT duplicates.
+                try {
+                    sourceRead.close();
+                } catch (RuntimeException e) {
+                    log.debug("Could not close the source read session: {}", e.getMessage());
+                }
             }
             if (identityArmed) {
                 String identityOff = targetDialect.getSetIdentityInsertSql(
@@ -2336,7 +2376,7 @@ public class DataSyncService {
                 if (identityOff != null) {
                     try (Statement idStmt = targetConn.createStatement()) {
                         idStmt.execute(identityOff);
-                    } catch (SQLException e) {
+                    } catch (SQLException | RuntimeException e) {
                         // Session-scoped: a connection returned to the pool could otherwise
                         // stay armed, but the pool hands this connection out per table; log.
                         log.debug("Could not switch IDENTITY_INSERT off for {}: {}",
@@ -2346,7 +2386,8 @@ public class DataSyncService {
             }
             try {
                 targetConn.setAutoCommit(originalAutoCommit);
-            } catch (SQLException e) {
+            } catch (SQLException | RuntimeException e) {
+                // Same post-commit rule: cleanup failure must not look like a failed copy.
                 log.debug("Could not restore autocommit: {}", e.getMessage());
             }
         }

@@ -2,7 +2,9 @@ package com.qqmu.jync.service.ai.support.tools;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,6 +44,10 @@ public class SearchInstanceCodeTool implements SupportTool {
     static final int MAX_RESULTS = 50;
     static final long MAX_ENTRY_BYTES = 1_500_000L;
     static final int MAX_ENTRIES = 12_000;
+
+    private static final Set<String> TEXT_EXTENSIONS = Set.of(
+            "yml", "yaml", "properties", "md", "txt", "html", "htm", "css", "js", "mjs",
+            "json", "xml", "sql", "csv", "svg");
 
     private final Path location;
 
@@ -119,10 +125,82 @@ public class SearchInstanceCodeTool implements SupportTool {
 
     private static Path locateArtifact() {
         try {
-            return Path.of(SearchInstanceCodeTool.class.getProtectionDomain()
-                    .getCodeSource().getLocation().toURI());
+            return artifactPath(SearchInstanceCodeTool.class.getProtectionDomain()
+                    .getCodeSource().getLocation());
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Resolves the code-source URL to a readable jar or classes directory. Under
+     * {@code java -jar}, Spring Boot wraps the location as
+     * {@code jar:file:/path/jync.jar!/BOOT-INF/classes!/} (or the 3.2+ nested
+     * {@code jar:nested:/path/jync.jar/!BOOT-INF/classes!/}), which is not a NIO file URI:
+     * {@code Path.of} rejects it. Strip the wrapper and open the executable jar itself —
+     * {@link #scanJar} knows the {@code BOOT-INF/classes} layout.
+     */
+    static Path artifactPath(URL location) {
+        if (location == null) {
+            return null;
+        }
+        Path artifact = artifactPath(location.toString());
+        if (artifact != null) {
+            return artifact;
+        }
+        try {
+            return Path.of(location.toURI());
         } catch (URISyntaxException | RuntimeException e) {
             return null;
+        }
+    }
+
+    /** Same resolution over the URL text, independent of the JDK's URL protocol handlers. */
+    static Path artifactPath(String text) {
+        if (text == null || !text.startsWith("jar:")) {
+            return null;
+        }
+        Path nested = nestedJarPath(text);
+        if (nested != null && Files.isRegularFile(nested)) {
+            return nested;
+        }
+        int separator = text.indexOf("!/");
+        if (separator > 4) {
+            Path jar = pathOrNull(text.substring(4, separator));
+            if (jar != null && Files.isRegularFile(jar)) {
+                return jar;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Spring Boot 3.2+ uses {@code jar:nested:<file-url>/!<entry>!/}. The outer file URL ends
+     * before the first {@code /!}; a plain {@code jar:file:...!/entry!} ends before {@code !/}.
+     */
+    private static Path nestedJarPath(String text) {
+        String inner = text.substring(4);
+        if (!inner.startsWith("nested:")) {
+            return null;
+        }
+        String nested = inner.substring("nested:".length());
+        int separator = nested.indexOf("/!");
+        if (separator <= 0) {
+            return null;
+        }
+        return pathOrNull(nested.substring(0, separator));
+    }
+
+    private static Path pathOrNull(String value) {
+        try {
+            return Path.of(URI.create(value));
+        } catch (RuntimeException ignored) {
+            // A nested URL can carry a raw path rather than a file: URI.
+            try {
+                return Path.of(value);
+            } catch (RuntimeException notAPath) {
+                return null;
+            }
         }
     }
 
@@ -132,13 +210,36 @@ public class SearchInstanceCodeTool implements SupportTool {
         byte[] needle = query.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.UTF_8);
         int scanned = 0;
         try (JarFile file = new JarFile(jar.toFile())) {
+            // Spring Boot's executable jar keeps application resources and classes under
+            // BOOT-INF/classes. In that layout ignore everything outside it (loader classes
+            // and BOOT-INF/lib dependencies are not this instance's code).
+            boolean bootLayout = file.getEntry("BOOT-INF/classes/") != null
+                    || file.getEntry("BOOT-INF/classes/application.yml") != null
+                    || file.getEntry("BOOT-INF/classes/application.yaml") != null;
+            if (!bootLayout) {
+                // Config can be external-only, so the two well-known entries may be absent
+                // even though the product classes still live under BOOT-INF/classes.
+                Enumeration<JarEntry> probe = file.entries();
+                while (probe.hasMoreElements()) {
+                    if (probe.nextElement().getName().startsWith("BOOT-INF/classes/")) {
+                        bootLayout = true;
+                        break;
+                    }
+                }
+            }
             Enumeration<JarEntry> entries = file.entries();
             while (entries.hasMoreElements()) {
                 JarEntry entry = entries.nextElement();
                 if (entry.isDirectory()) {
                     continue;
                 }
-                String name = entry.getName();
+                String rawName = entry.getName();
+                if (bootLayout && !rawName.startsWith("BOOT-INF/classes/")) {
+                    continue;
+                }
+                String name = bootLayout
+                        ? rawName.substring("BOOT-INF/classes/".length())
+                        : rawName;
                 boolean resource = isResource(name);
                 boolean clazz = isProductClass(name);
                 if (("resources".equals(scope) && !resource)
@@ -206,11 +307,13 @@ public class SearchInstanceCodeTool implements SupportTool {
     private static void scanResource(String name, byte[] bytes, String query, int max,
                                      List<Map<String, Object>> matches, boolean[] truncated) {
         String text = new String(bytes, StandardCharsets.UTF_8);
-        String lower = text.toLowerCase(Locale.ROOT);
-        String needle = query.toLowerCase(Locale.ROOT);
+        String needle = query;
         int from = 0;
         while (matches.size() < max) {
-            int hit = lower.indexOf(needle, from);
+            // Search the original text case-insensitively instead of indexing a lowercased
+            // copy: some characters (U+0130, for example) change length when lowercased,
+            // which made the offset point past the end of the original string.
+            int hit = indexOfIgnoreCase(text, needle, from);
             if (hit < 0) {
                 return;
             }
@@ -225,8 +328,16 @@ public class SearchInstanceCodeTool implements SupportTool {
             if (end < 0) {
                 end = text.length();
             }
+            // Center the excerpt on the hit. Taking the first 600 characters of the line
+            // dropped the keyword entirely on minified JS/CSS and long SQL lines.
+            int snippetStart = Math.max(start, hit - 200);
+            int snippetEnd = Math.min(end, snippetStart + 600);
+            if (snippetEnd < hit + needle.length()) {
+                snippetEnd = Math.min(end, hit + needle.length() + 200);
+                snippetStart = Math.max(start, snippetEnd - 600);
+            }
             matches.add(match(name, "resource", line,
-                    ToolText.safe(text.substring(start, Math.min(end, start + 600)), 600)));
+                    ToolText.safe(text.substring(snippetStart, snippetEnd), 600)));
             from = hit + needle.length();
             if (from <= hit) {
                 return;
@@ -246,7 +357,6 @@ public class SearchInstanceCodeTool implements SupportTool {
             String snippet = printableAround(bytes, hit, needle.length);
             if (snippet != null && !snippet.isBlank()) {
                 matches.add(match(name, "class", null, ToolText.safe(snippet, 600)));
-                truncated[0] = true;
             }
             from = hit + Math.max(1, needle.length);
         }
@@ -263,15 +373,43 @@ public class SearchInstanceCodeTool implements SupportTool {
     }
 
     private static boolean isResource(String name) {
+        if (!isTextPath(name)) {
+            return false;
+        }
         return name.equals("application.yml") || name.equals("application.yaml")
                 || name.startsWith("i18n/") || name.startsWith("ai/")
                 || name.startsWith("templates/") || name.startsWith("static/")
                 || name.startsWith("docs/")
-                || name.endsWith(".properties") && name.startsWith("com/qqmu/jync/");
+                || (name.endsWith(".properties") && name.startsWith("com/qqmu/jync/"));
+    }
+
+    /** Static assets can include fonts and images; scanning those only yields byte noise. */
+    private static boolean isTextPath(String name) {
+        int slash = name.lastIndexOf('/');
+        int dot = name.lastIndexOf('.');
+        if (dot <= slash + 1 || dot == name.length() - 1) {
+            return false;
+        }
+        return TEXT_EXTENSIONS.contains(name.substring(dot + 1).toLowerCase(Locale.ROOT));
     }
 
     private static boolean isProductClass(String name) {
         return name.startsWith("com/qqmu/jync/") && name.endsWith(".class");
+    }
+
+    /** Case-insensitive search over decoded text, preserving offsets in the original string. */
+    private static int indexOfIgnoreCase(String haystack, String needle, int from) {
+        if (needle.isEmpty()) {
+            return -1;
+        }
+        int start = Math.max(0, from);
+        int last = haystack.length() - needle.length();
+        for (int i = start; i <= last; i++) {
+            if (haystack.regionMatches(true, i, needle, 0, needle.length())) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /** Case-insensitive byte search; UTF-8 constants from ASCII and CJK both match. */

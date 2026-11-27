@@ -1,7 +1,7 @@
 package com.qqmu.jync.service.ai.support.tools;
 
-import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -73,11 +73,8 @@ public class ProjectDdlTasksTool implements SupportTool {
         rows.addAll(page(projectId, ChangeLog.RESOLUTION_FAILED));
         rows.removeIf(row -> row.getDetails() == null
                 || !row.getDetails().startsWith(SyncStateWriter.SKIPPED_DDL_PREFIX));
-        rows.sort((a, b) -> {
-            Instant left = a.getOccurredAt();
-            Instant right = b.getOccurredAt();
-            return right == null ? -1 : left == null ? 1 : right.compareTo(left);
-        });
+        rows.sort(Comparator.comparing(ChangeLog::getOccurredAt,
+                Comparator.nullsLast(Comparator.reverseOrder())));
         if (rows.size() > LIMIT) {
             rows = rows.subList(0, LIMIT);
         }

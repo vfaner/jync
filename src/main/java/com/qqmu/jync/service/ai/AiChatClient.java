@@ -813,6 +813,20 @@ public class AiChatClient {
                         appendAnthropicToolResult(blocks, outbound.get(j));
                         j++;
                     }
+                    // A synthesis/nudge instruction is appended immediately after the tool
+                    // results (SupportAssistantService). Anthropic requires roles to
+                    // alternate, so that user text cannot become a second user message:
+                    // fold it into this tool-result user message as a text block.
+                    if (j < outbound.size() && "user".equals(outbound.get(j).role())
+                            && outbound.get(j).toolCalls().isEmpty()) {
+                        String text = outbound.get(j).content();
+                        if (text != null && !text.isEmpty()) {
+                            ObjectNode block = blocks.addObject();
+                            block.put("type", "text");
+                            block.put("text", text);
+                        }
+                        j++;
+                    }
                     i = j - 1;
                 } else {
                     appendAnthropicMessage(messages, turn);

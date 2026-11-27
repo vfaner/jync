@@ -350,7 +350,23 @@ public class LogMinerSession implements AutoCloseable {
                     + "; the source may not be in ARCHIVELOG mode or logs were purged");
         }
 
-        dialect.startMining(source, logfiles, startScn, highWaterScn);
+        try {
+            dialect.startMining(source, logfiles, startScn, highWaterScn);
+        } catch (SQLException | RuntimeException e) {
+            // ADD_LOGFILE may already have succeeded before START_LOGMNR failed; a pooled
+            // connection must not return with LogMiner files still registered (the next
+            // session would duplicate them, and DM keeps the failure state on the session).
+            try {
+                dialect.endMining(source);
+            } catch (RuntimeException cleanupFailure) {
+                // Keep the original archive-gap/ADD_LOGFILE failure: the classifier uses its
+                // text to park the project as PURGED. The pooled connection is discarded by
+                // the consumer if this cleanup left it unusable.
+                log.debug("END_LOGMNR after a failed start also failed: {}",
+                        cleanupFailure.getMessage());
+            }
+            throw e;
+        }
 
         // From here on the mining session is RUNNING. Anything that fails before the caller
         // gets the LogMinerSession object would otherwise leave it running on a connection
@@ -376,7 +392,15 @@ public class LogMinerSession implements AutoCloseable {
                     // the connection is either still usable or about to be discarded
                 }
             }
-            dialect.endMining(source);
+            try {
+                dialect.endMining(source);
+            } catch (RuntimeException cleanupFailure) {
+                // Keep the original archive-gap/ADD_LOGFILE failure: the classifier uses its
+                // text to park the project as PURGED. The pooled connection is discarded by
+                // the consumer if this cleanup left it unusable.
+                log.debug("END_LOGMNR after a failed start also failed: {}",
+                        cleanupFailure.getMessage());
+            }
             throw e;
         }
     }

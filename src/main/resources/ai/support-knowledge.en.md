@@ -63,8 +63,10 @@ full-table compare for small tables (sync.full-compare-max-rows=20000); else one
 ## Cursor strategies explained
 
 Auto-resolution (an explicit cursor wins):
-1. TIMESTAMP: name matches UPDATE_TIME / UPDATED_AT and type is temporal; sees inserts and
-   updates.
+1. TIMESTAMP: name matches UPDATE_TIME / UPDATED_AT / UPDT_TM / UPDATE_TM and type is
+   temporal; sees inserts and updates. A composite or non-numeric primary key does not prevent
+   a timestamp column from being selected. Creation abbreviations CREATE_TM / CRT_TM are used
+   by the IDENTITY step below.
 2. ROW_SCN: Oracle ORA_ROWSCN on a WITH ROWDEPENDENCIES table; no column, but a full scan
    each cycle.
 3. IDENTITY: creation timestamp or single integral primary key; inserts only.
