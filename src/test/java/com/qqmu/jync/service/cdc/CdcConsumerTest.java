@@ -175,6 +175,8 @@ class CdcConsumerTest {
         Connection target = mock(Connection.class);
         when(target.getAutoCommit()).thenReturn(true);
         PreparedStatement ps = mock(PreparedStatement.class);
+        ResultSet rs = mock(ResultSet.class);
+        when(ps.executeQuery()).thenReturn(rs);
         when(target.prepareStatement(anyString())).thenReturn(ps);
         SyncContext ctx = SyncContext.builder()
                 .project(project)

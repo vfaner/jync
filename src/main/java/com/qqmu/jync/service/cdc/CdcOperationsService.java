@@ -873,7 +873,11 @@ public class CdcOperationsService {
                 projectId, project.getName());
         cdcManager.ensureStopped(projectId);
         positionStore.delete(projectId);
-        stateWriter.clearCursor(projectId);
+        // A rebuild starts from a fresh anchor. Old chunk checkpoints describe ranges
+        // copied under the previous anchor; leaving them would let a resume skip rows that
+        // changed in between. Clear progress and checkpoints together, before the new
+        // anchor is written (recordBaselineAnchor writes first and resets second).
+        stateWriter.resetProject(projectId);
         // Re-read AFTER the stop: the row may have been disabled while the join waited.
         Project fresh = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));

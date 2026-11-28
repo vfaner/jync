@@ -109,6 +109,19 @@ class ExternalBaselineVerificationServiceTest {
     }
 
     @Test
+    void aChangeLogFailureDoesNotOverwriteASuccessfulStatus() {
+        SyncContext ctx = context();
+        when(contextFactory.build(project, "baseline-verify", null)).thenReturn(ctx);
+        when(changeLogRepository.save(any(ChangeLog.class)))
+                .thenThrow(new RuntimeException("change log unavailable"));
+
+        service.verifyNow(1L);
+
+        verify(positionStore).markExternalBaselineVerification(eq(1L),
+                eq(CdcPosition.VERIFY_OK), eq(0), any(), any());
+    }
+
+    @Test
     void recordsMismatchWhenTheTargetTableIsMissing() throws Exception {
         try (Statement st = target.createStatement()) {
             st.execute("DROP TABLE ORDERS");

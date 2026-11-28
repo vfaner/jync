@@ -449,16 +449,6 @@ public class SyncStateWriter {
     }
 
     /**
-     * Drops full-load chunk checkpoints without touching progress rows. An external baseline
-     * replaces the target's contents, so any checkpoint left by an interrupted Jync load
-     * describes rows that are no longer the ones the next targeted reload would skip.
-     */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void clearFullLoadCheckpoints(Long projectId) {
-        checkpointRepository.deleteByProjectId(projectId);
-    }
-
-    /**
      * Advances the last-applied timestamp and cumulative row count of every table in one
      * CDC change window, in one transaction. The window logger already has the per-table
      * counts; issuing one REQUIRES_NEW transaction per table made a busy stream pay a
@@ -497,14 +487,6 @@ public class SyncStateWriter {
             progress.setLastSyncTime(at);
         }
         progressRepository.saveAll(rows);
-    }
-
-    /** Single-table convenience used by callers that do not already have a window batch. */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void recordCdcTableProgress(Long projectId, String table, long rows, Instant at) {
-        if (rows > 0) {
-            recordCdcTableProgressBatch(projectId, Map.of(table, rows), at);
-        }
     }
 
     /**

@@ -403,7 +403,7 @@ class CdcOperationsServiceTest {
         InOrder sequence = inOrder(cdcManager, positionStore, stateWriter, taskStore);
         sequence.verify(cdcManager).ensureStopped(1L);
         sequence.verify(positionStore).delete(1L);
-        sequence.verify(stateWriter).clearCursor(1L);
+        sequence.verify(stateWriter).resetProject(1L);
         sequence.verify(taskStore).markCdcRunning(1L);
         sequence.verify(cdcManager).ensureStarted(same(fresh));
 
@@ -437,7 +437,7 @@ class CdcOperationsServiceTest {
         // 破坏性的一半已经生效:位点删除、游标清空、帽子已摘,这些不能回滚也不能假装没发生
         verify(cdcManager).ensureStopped(1L);
         verify(positionStore).delete(1L);
-        verify(stateWriter).clearCursor(1L);
+        verify(stateWriter).resetProject(1L);
         verify(taskStore).markCdcRunning(1L);
 
         ArgumentCaptor<ChangeLog> changeLog = ArgumentCaptor.forClass(ChangeLog.class);
@@ -462,7 +462,7 @@ class CdcOperationsServiceTest {
 
         verify(cdcManager).ensureStopped(1L);
         verify(positionStore, never()).delete(1L);
-        verify(stateWriter, never()).clearCursor(1L);
+        verify(stateWriter, never()).resetProject(1L);
         verify(taskStore).markCdcRunning(1L);
         verify(cdcManager).ensureStarted(same(fresh));
     }
@@ -496,7 +496,7 @@ class CdcOperationsServiceTest {
         InOrder sequence = inOrder(cdcManager, positionStore, stateWriter, taskStore);
         sequence.verify(cdcManager).ensureStopped(1L);
         sequence.verify(positionStore).delete(1L);
-        sequence.verify(stateWriter).clearCursor(1L);
+        sequence.verify(stateWriter).resetProject(1L);
         sequence.verify(taskStore).markStoppedClearingResult(1L); // 摘帽、清旧错误文本,不置 RUNNING
         verify(taskStore, never()).markCdcRunning(1L);
         verify(cdcManager, never()).ensureStarted(any());

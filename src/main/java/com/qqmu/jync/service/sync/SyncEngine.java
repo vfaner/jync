@@ -127,13 +127,6 @@ public class SyncEngine {
      */
     private final Set<String> warnedDeletionSkips = ConcurrentHashMap.newKeySet();
 
-    /** Schema-wide row estimates for small-table-first ordering, refreshed every five minutes. */
-    private final Map<String, CachedSchemaStats> schemaStats = new ConcurrentHashMap<>();
-    private static final long SCHEMA_STATS_TTL_MS = 5 * 60_000L;
-
-    private record CachedSchemaStats(Map<String, MetadataReader.TableStat> stats, long at) {
-    }
-
     @Autowired
     public SyncEngine(DataSourceManager dataSourceManager,
                       ChangeDetector changeDetector,
@@ -460,13 +453,9 @@ public class SyncEngine {
                 && (everyEstimate || properties.isSmallTablesFirst())
                 && ctx.getSourceReader().reportsTableStats()) {
             schemaStats = schemaStatsFor(sourceConn, ctx);
-            Map<String, MetadataReader.TableStat> byName = new java.util.HashMap<>();
-            for (Map.Entry<String, MetadataReader.TableStat> entry : schemaStats.entrySet()) {
-                byName.put(entry.getKey().toUpperCase(java.util.Locale.ROOT), entry.getValue());
-            }
             for (TableMeta table : meta.getTables()) {
                 MetadataReader.TableStat stat =
-                        byName.get(table.getName().toUpperCase(java.util.Locale.ROOT));
+                        schemaStats.get(table.getName().toUpperCase(java.util.Locale.ROOT));
                 if (stat != null && stat.rows() != null) {
                     table.setApproximateRowCount(stat.rows());
                 }
@@ -490,17 +479,10 @@ public class SyncEngine {
 
     private Map<String, MetadataReader.TableStat> schemaStatsFor(Connection sourceConn,
                                                                   SyncContext ctx) {
-        String key = ctx.projectId() + "|" + ctx.getSourceSchema();
-        long now = System.currentTimeMillis();
-        CachedSchemaStats cached = schemaStats.get(key);
-        if (cached != null && now - cached.at < SCHEMA_STATS_TTL_MS) {
-            return cached.stats;
-        }
         Map<String, MetadataReader.TableStat> stats =
-                ctx.getSourceReader().estimateTableStats(sourceConn, ctx.getSourceSchema());
-        stats = stats == null ? Map.of() : stats;
-        schemaStats.put(key, new CachedSchemaStats(stats, now));
-        return stats;
+                dataSync.schemaTableStats(sourceConn, ctx);
+        // Hand-built engine tests may use a DataSyncService mock with no stub.
+        return stats == null ? Map.of() : stats;
     }
 
     /**
@@ -1656,6 +1638,19 @@ public class SyncEngine {
                     stateWriter.recordLog(ctx.projectId(), ObjectType.DATA, table.getName(),
                             ChangeType.DELETE, deleted + " row(s) removed to match source",
                             true, 0, deleted);
+                    // This branch returns before the common advanceCursor call. Without this
+                    // one, a skip-only table applies deletes forever while 上次同步 stays
+                    // frozen on the previous timestamp. Same optimistic-lock recovery as the
+                    // common path: the row can be written by a concurrent reset/import.
+                    try {
+                        stateWriter.advanceCursor(progress, tableResult, strategy);
+                    } catch (OptimisticLockingFailureException e) {
+                        log.warn("Cursor row for {} was written concurrently; re-reading before"
+                                + " advancing: {}", table.getName(), e.getMessage());
+                        progress = stateWriter.loadOrCreateProgress(ctx.projectId(),
+                                table.getName());
+                        stateWriter.advanceCursor(progress, tableResult, strategy);
+                    }
                 }
             }
             return;
@@ -2116,7 +2111,6 @@ public class SyncEngine {
         verifiedTables.removeIf(key -> key.startsWith(prefix));
         warnedOversizedFullCompare.removeIf(key -> key.startsWith(prefix));
         warnedDeletionSkips.removeIf(key -> key.startsWith(prefix));
-        schemaStats.keySet().removeIf(key -> key.startsWith(prefix));
         structureSync.evictProject(projectId);
         dataSync.evictProject(projectId);
         if (contentAudit != null) {

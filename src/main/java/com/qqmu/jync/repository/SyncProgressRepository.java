@@ -27,7 +27,8 @@ public interface SyncProgressRepository extends JpaRepository<SyncProgress, Long
     @Query("select new com.qqmu.jync.dto.ProgressStatusRow(p.objectName, p.initialLoadDone, "
             + "p.rowsSyncedTotal, p.lastSyncTime, p.cursorStrategy, p.cursorColumn, "
             + "p.resumableLoad, p.fullLoadWithoutCursor, p.fullLoadTotalRows, "
-            + "p.fullLoadCompletedAt) from SyncProgress p "
+            + "p.fullLoadCompletedAt, case when p.lastSyncValue is null then false else true end) "
+            + "from SyncProgress p "
             + "where p.projectId = :projectId and p.objectType = :objectType")
     List<ProgressStatusRow> findStatusRowsByProjectId(@Param("projectId") Long projectId,
                                                       @Param("objectType") ObjectType objectType);

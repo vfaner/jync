@@ -176,6 +176,7 @@ public class SyncTaskRunner {
             return Outcome.noProject();
         }
         taskStore.ensureTask(maybeProject.get());
+        Outcome outcome;
         try (SyncLockService.LockHandle lock = lockService.tryAcquire(projectId)) {
             if (lock == null) {
                 return Outcome.busy();
@@ -189,9 +190,16 @@ public class SyncTaskRunner {
             if (Boolean.TRUE.equals(current.getEnabled())) {
                 throw new IllegalStateException("error.table.reload.stopFirst");
             }
-            SyncResult result = execute(current, lock, Set.of(tableName));
-            return Outcome.executed(result);
+            outcome = Outcome.executed(execute(current, lock, Set.of(tableName)));
+        } catch (RuntimeException e) {
+            // This is a lock holder like runOnce/runClaimedRerun: a queued 立即同步 that
+            // arrived while the reload held the lock must not be stranded when it throws.
+            startQueuedRerun(projectId);
+            throw e;
         }
+        // Drain after the lock is released, same ordering rule as the other two holders.
+        startQueuedRerun(projectId);
+        return outcome;
     }
 
     /**

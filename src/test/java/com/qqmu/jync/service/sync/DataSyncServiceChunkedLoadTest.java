@@ -108,6 +108,23 @@ class DataSyncServiceChunkedLoadTest {
     }
 
     @Test
+    void aClassicFallbackClearsStaleCheckpointsAndTheResumePromise() throws SQLException {
+        createItems(2);
+        DataSyncService service = service(0);
+        when(checkpoints.findByProjectIdAndTableName(7L, "ITEMS"))
+                .thenReturn(List.of(new ChunkCheckpoint(7L, "ITEMS", 0, 0, "[1]", 1,
+                        ChunkCheckpoint.STATUS_CHUNK)));
+
+        DataSyncService.TableSyncResult result = service.syncTable(
+                source, target, itemsMeta(), IDENTITY, new SyncProgress(), ctx);
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(result.isInitialLoad()).isTrue();
+        assertThat(result.getResumableLoad()).isFalse();
+        verify(checkpoints).deleteByProjectIdAndTableName(7L, "ITEMS");
+    }
+
+    @Test
     void aStoredBoundaryResumesAfterTheLastCompletedChunk() throws SQLException {
         createItems(5);
         // Simulate the state a crash left behind: chunks 0 and 1 (ids 1-4) already committed
@@ -298,7 +315,9 @@ class DataSyncServiceChunkedLoadTest {
 
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
         assertThat(count("LOGS")).isEqualTo(5);
-        verifyNoInteractions(checkpoints);
+        // A classic load checks for stale checkpoints but has none to delete here.
+        verify(checkpoints).findByProjectIdAndTableName(7L, "LOGS");
+        verify(checkpoints, never()).deleteByProjectIdAndTableName(7L, "LOGS");
         // Task book A1: a PK-less table's streamed load cannot resume, and the UI must say so
         // explicitly instead of leaving the user to discover it after an interruption.
         assertThat(result.getResumableLoad()).isFalse();
@@ -315,10 +334,10 @@ class DataSyncServiceChunkedLoadTest {
         assertThat(result.isSuccess()).as(result.getError()).isTrue();
         assertThat(count("ITEMS")).isEqualTo(5);
         assertThat(result.getNewCursorValue()).isEqualTo("5");
-        verifyNoInteractions(checkpoints);
-        // Chunking is a global switch here: with it off the resume question was never asked,
-        // so no per-table claim is recorded either way.
-        assertThat(result.getResumableLoad()).isNull();
+        verify(checkpoints).findByProjectIdAndTableName(7L, "ITEMS");
+        verify(checkpoints, never()).deleteByProjectIdAndTableName(7L, "ITEMS");
+        // A classic streamed load cannot resume, so the panel must not keep a stale promise.
+        assertThat(result.getResumableLoad()).isFalse();
     }
 
     /**

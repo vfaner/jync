@@ -86,6 +86,13 @@ public class ExternalBaselineVerificationService {
             return;
         }
         try {
+            // Do not mark RUNNING for a row that has no external baseline: verifyNow would
+            // return immediately, leaving the card frozen on "verifying" forever.
+            CdcPosition position = positionStore.find(projectId).orElse(null);
+            if (position == null || !position.hasExternalBaseline()) {
+                active.remove(projectId);
+                return;
+            }
             positionStore.markExternalBaselineVerification(projectId,
                     CdcPosition.VERIFY_RUNNING, null, null, Instant.now());
         } catch (RuntimeException e) {
@@ -103,6 +110,14 @@ public class ExternalBaselineVerificationService {
                 } catch (RuntimeException e) {
                     log.warn("External baseline verification for project {} failed: {}",
                             projectId, e.toString());
+                    try {
+                        finish(projectId, CdcPosition.VERIFY_ERROR, 1,
+                                "verification failed: " + messageOf(e), null);
+                    } catch (RuntimeException nested) {
+                        // The metadata store is the thing that failed; nothing more to do.
+                        log.warn("Could not record the failed external baseline verification"
+                                + " for project {}: {}", projectId, nested.toString());
+                    }
                 } finally {
                     active.remove(projectId);
                 }
@@ -275,12 +290,19 @@ public class ExternalBaselineVerificationService {
         String recorded = text;
         positionStore.markExternalBaselineVerification(projectId, status,
                 issues, recorded, Instant.now());
-        projectRepository.findById(projectId).ifPresent(project ->
-                changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
-                        project.getName(),
-                        CdcPosition.VERIFY_OK.equals(status)
-                                ? ChangeType.INFO : ChangeType.ERROR,
-                        "external baseline structure verification: " + recorded)));
+        // The status is the contract the card reads. A diagnostic-log failure must not
+        // bubble out and make the async catch rewrite a successful OK/MISMATCH as ERROR.
+        try {
+            projectRepository.findById(projectId).ifPresent(project ->
+                    changeLogRepository.save(ChangeLog.of(projectId, ObjectType.PROJECT,
+                            project.getName(),
+                            CdcPosition.VERIFY_OK.equals(status)
+                                    ? ChangeType.INFO : ChangeType.ERROR,
+                            "external baseline structure verification: " + recorded)));
+        } catch (RuntimeException e) {
+            log.warn("Could not write the external baseline verification log for project"
+                    + " {}: {}", projectId, e.toString());
+        }
     }
 
     private static String messageOf(Throwable error) {

@@ -105,7 +105,7 @@ final class CdcWritePlanCache {
                 kept, pkColumns, types, false, declarations);
         List<String> bindOrder = List.copyOf(dialect.upsertBindOrder(kept, pkColumns));
         return new UpsertPlan(binding.getTargetTable(), kept, pkColumns, types,
-                sql, bindOrder, false, null, List.of());
+                sql, bindOrder, false, null, List.of(), false);
     }
 
     /**
@@ -115,8 +115,12 @@ final class CdcWritePlanCache {
     private UpsertPlan emulated(GenericSqlDialect generic, CdcTableBinding binding,
                                 List<String> columns, List<String> pkColumns,
                                 Map<String, Integer> types) {
+        // CDC transactions are replayed at-least-once after a reconnect; without the
+        // "really differs" guard every replayed row rewrites identical values and can
+        // file another audit entry. The polling writer uses the same guard for its
+        // safety-margin replay.
         String updateSql = generic.getUpdateByPkSql(ctx.getTargetSchema(),
-                binding.getTargetTable(), columns, pkColumns);
+                binding.getTargetTable(), columns, pkColumns, true);
         String insertSql = generic.getUpsertSql(ctx.getTargetSchema(),
                 binding.getTargetTable(), columns, List.of(), types);
         List<String> updateBindOrder = List.of();
@@ -129,10 +133,19 @@ final class CdcWritePlanCache {
                 }
             }
             order.addAll(pkColumns);
+            // The "really differs" condition compares each incoming value three times.
+            for (String column : columns) {
+                if (!CollectionUtil.containsIgnoreCase(pkColumns, column)) {
+                    order.add(column);
+                    order.add(column);
+                    order.add(column);
+                }
+            }
             updateBindOrder = List.copyOf(order);
         }
         return new UpsertPlan(binding.getTargetTable(), columns, pkColumns, types,
-                insertSql, List.of(), true, updateSql, updateBindOrder);
+                insertSql, List.of(), true, updateSql, updateBindOrder,
+                updateSql != null);
     }
 
     private DeletePlan buildDeletePlan(CdcTableBinding binding) {
@@ -164,10 +177,13 @@ final class CdcWritePlanCache {
         /** Update-by-key statement of the emulated path; null for key-only tables. */
         final String updateSql;
         final List<String> updateBindOrder;
+        /** The UPDATE carries the "really differs" predicate, so zero rows may mean no-op. */
+        final boolean guardUnchanged;
 
         private UpsertPlan(String targetTable, List<String> columns, List<String> pkColumns,
                            Map<String, Integer> types, String sql, List<String> bindOrder,
-                           boolean emulated, String updateSql, List<String> updateBindOrder) {
+                           boolean emulated, String updateSql, List<String> updateBindOrder,
+                           boolean guardUnchanged) {
             this.targetTable = targetTable;
             this.columns = columns;
             this.pkColumns = pkColumns;
@@ -177,6 +193,7 @@ final class CdcWritePlanCache {
             this.emulated = emulated;
             this.updateSql = updateSql;
             this.updateBindOrder = updateBindOrder;
+            this.guardUnchanged = guardUnchanged;
         }
     }
 

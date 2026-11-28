@@ -5,10 +5,12 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.qqmu.jync.dto.meta.ColumnMeta;
 import com.qqmu.jync.dto.meta.TableMeta;
@@ -60,6 +62,8 @@ public final class CdcTableBinding {
      * column of every row.
      */
     private volatile List<CdcRowMapper.ColumnPlan> columnPlans;
+    /** PK membership in {@link #columnPlans()} order, cached for the per-row key decoder. */
+    private volatile boolean[] pkColumnFlags;
 
     private CdcTableBinding(String database, String table, TableMeta meta, String targetTable,
                             Map<String, String> charsetByUpperColumn,
@@ -110,6 +114,31 @@ public final class CdcTableBinding {
 
     public List<String> pkNames() {
         return meta.getPrimaryKeys();
+    }
+
+    /**
+     * Whether each column is part of the primary key, aligned with {@link #columnPlans()}.
+     * The key decoder runs for every UPDATE before-image and DELETE row; a Set built from
+     * the PK names on each call was pure allocation on the CDC hot path.
+     */
+    public boolean[] pkColumnFlags() {
+        boolean[] flags = pkColumnFlags;
+        if (flags == null) {
+            Set<String> pk = new HashSet<>();
+            for (String name : pkNames()) {
+                if (name != null) {
+                    pk.add(name.toUpperCase(Locale.ROOT));
+                }
+            }
+            List<CdcRowMapper.ColumnPlan> plans = columnPlans();
+            flags = new boolean[plans.size()];
+            for (int i = 0; i < flags.length; i++) {
+                String name = plans.get(i).name();
+                flags[i] = name != null && pk.contains(name.toUpperCase(Locale.ROOT));
+            }
+            pkColumnFlags = flags;
+        }
+        return flags;
     }
 
     /** Source JDBC type per column; immutable and cached. */

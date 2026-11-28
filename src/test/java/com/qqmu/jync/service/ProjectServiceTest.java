@@ -1761,6 +1761,67 @@ class ProjectServiceTest {
     }
 
     @Test
+    void aReloadOverAnExternallySeededTableIsNotStillShownAsExternal() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(true);
+        SyncConfig cdc = new SyncConfig();
+        cdc.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        cdc.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        com.qqmu.jync.model.CdcPosition position = new com.qqmu.jync.model.CdcPosition();
+        position.setProjectId(1L);
+        position.setBaselineDone(true);
+        position.setExternalBaselineTableNames(Set.of("ORDERS"));
+        ProgressStatusRow reloading = new ProgressStatusRow("ORDERS", false, 0L, null,
+                "TIMESTAMP", "UPDATED_AT", true, false);
+        SyncTask running = new SyncTask();
+        running.setLockOwner("node-a");
+        running.setLockExpiresAt(java.time.Instant.now().plusSeconds(60));
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.of(running));
+        when(positionStore.find(1L)).thenReturn(Optional.of(position));
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(reloading));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of(
+                new ChunkCheckpointStatusRow("ORDERS", 0, 0, 50,
+                        com.qqmu.jync.model.ChunkCheckpoint.STATUS_CHUNK,
+                        java.time.Instant.now())));
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, cdc).get(0);
+
+        assertThat(status.externalBaseline()).isFalse();
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
+        assertThat(status.rowsCopied()).isEqualTo(50L);
+        assertThat(status.rowsSyncedTotal()).isEqualTo(50L);
+    }
+
+    @Test
+    void aClassicReloadOfAnExternallySeededTableIsNotStillShownAsExternal() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(false);
+        SyncConfig cdc = new SyncConfig();
+        cdc.setCaptureStrategy(com.qqmu.jync.model.CaptureStrategy.BINLOG_CDC);
+        cdc.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        com.qqmu.jync.model.CdcPosition position = new com.qqmu.jync.model.CdcPosition();
+        position.setProjectId(1L);
+        position.setBaselineDone(true);
+        position.setExternalBaselineTableNames(Set.of("ORDERS"));
+        ProgressStatusRow reloading = new ProgressStatusRow("ORDERS", false, 0L, null,
+                "TIMESTAMP", "UPDATED_AT", true, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(positionStore.find(1L)).thenReturn(Optional.of(position));
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(reloading));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, cdc).get(0);
+
+        assertThat(status.externalBaseline()).isFalse();
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.INCOMPLETE);
+    }
+
+    @Test
     void anAllTablesConfigUsesTheAdoptedExternalScopeForItsTableList() {
         Project project = project(1L);
         project.setOwnerUsername("admin");
@@ -1895,6 +1956,29 @@ class ProjectServiceTest {
 
         assertThat(status.state()).isEqualTo(ProjectService.SyncState.IN_PROGRESS);
         assertThat(status.fullLoadPercent()).isEqualTo(25);
+    }
+
+    @Test
+    void aTableWhoseCursorWasClearedIsNotReportedAsCompletedAtOneHundred() {
+        Project project = project(1L);
+        project.setOwnerUsername("admin");
+        project.setEnabled(false);
+        SyncConfig config = new SyncConfig();
+        config.setTables(new java.util.LinkedHashSet<>(java.util.List.of("ORDERS")));
+        // clearCursor: initialLoadDone stays true, the cursor is null, and the table is
+        // waiting for the reload the audit/cursor change requested.
+        ProgressStatusRow cleared = new ProgressStatusRow("ORDERS", true, 100L, null,
+                "TIMESTAMP", "UPDATED_AT", true, false, null, null, false);
+        when(projectRepository.findById(1L)).thenReturn(Optional.of(project));
+        when(taskStore.find(1L)).thenReturn(Optional.empty());
+        when(progressRepository.findStatusRowsByProjectId(1L, com.qqmu.jync.model.ObjectType.TABLE))
+                .thenReturn(java.util.List.of(cleared));
+        when(checkpointRepository.findStatusRowsByProjectId(1L)).thenReturn(java.util.List.of());
+
+        ProjectService.TableSyncStatus status = service.findTableSyncStatuses(1L, config).get(0);
+
+        assertThat(status.state()).isEqualTo(ProjectService.SyncState.INCOMPLETE);
+        assertThat(status.fullLoadPercent()).isNull();
     }
 
     @Test

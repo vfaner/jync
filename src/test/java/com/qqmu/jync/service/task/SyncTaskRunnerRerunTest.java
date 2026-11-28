@@ -43,6 +43,7 @@ class SyncTaskRunnerRerunTest {
     private SyncTaskStore taskStore;
     private SyncLockStore lockStore;
     private ProjectRepository projectRepository;
+    private SyncContextFactory contextFactory;
     private SyncTaskRunner runner;
     private final AtomicInteger cycles = new AtomicInteger();
     private CountDownLatch cycleEntered;
@@ -50,7 +51,7 @@ class SyncTaskRunnerRerunTest {
     @BeforeEach
     void setUp() {
         projectRepository = mock(ProjectRepository.class);
-        SyncContextFactory contextFactory = mock(SyncContextFactory.class);
+        contextFactory = mock(SyncContextFactory.class);
         syncEngine = mock(SyncEngine.class);
         lockStore = mock(SyncLockStore.class);
         taskStore = mock(SyncTaskStore.class);
@@ -195,6 +196,50 @@ class SyncTaskRunnerRerunTest {
         } finally {
             local.shutdownRerunExecutor();
         }
+    }
+
+    @Test
+    void aClickDuringATableReloadIsDrainedByTheReloadHolder() throws Exception {
+        // A table reload is another lock holder. A manual "sync now" that arrives while it
+        // runs is queued; the reload must drain it after releasing the lock, exactly like
+        // runOnce and runClaimedRerun. The project is enabled only after the reload's first
+        // cycle so the queued manual request is not discarded by the stopped-project guard.
+        cycleEntered = new CountDownLatch(1);
+        when(contextFactory.build(any(), anyString(), any(), any())).thenReturn(
+                com.qqmu.jync.service.sync.SyncContext.builder()
+                        .config(new com.qqmu.jync.dto.SyncConfig()).build());
+        AtomicInteger phase = new AtomicInteger();
+        when(syncEngine.runCycle(any())).thenAnswer(invocation -> {
+            cycles.incrementAndGet();
+            phase.incrementAndGet();
+            cycleEntered.countDown();
+            Thread.sleep(300);
+            return new SyncResult();
+        });
+        Project disabled = new Project();
+        disabled.setId(1L);
+        disabled.setName("p");
+        disabled.setEnabled(false);
+        Project enabled = new Project();
+        enabled.setId(1L);
+        enabled.setName("p");
+        enabled.setEnabled(true);
+        when(projectRepository.findById(1L)).thenAnswer(
+                invocation -> Optional.of(phase.get() == 0 ? disabled : enabled));
+
+        AtomicReference<SyncTaskRunner.Outcome> reload = new AtomicReference<>();
+        Thread reloadThread = new Thread(
+                () -> reload.set(runner.runTableReload(1L, "ORDERS")));
+        reloadThread.start();
+        assertThat(cycleEntered.await(3, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(runner.runOnce(1L).kind())
+                .isEqualTo(SyncTaskRunner.Outcome.Kind.QUEUED);
+
+        reloadThread.join(5000);
+        assertThat(reload.get().kind()).isEqualTo(SyncTaskRunner.Outcome.Kind.EXECUTED);
+        awaitCycles(2);
+        awaitQueueDrained();
     }
 
     @Test

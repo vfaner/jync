@@ -131,6 +131,34 @@ class SyncEngineDeletionCountWiringTest {
                 .isEqualTo(1L);
     }
 
+    @Test
+    @DisplayName("a skipped row load that only applied deletes still advances the table")
+    void aSkippedRowLoadWithDeletesStillAdvancesTheTable() throws SQLException {
+        try (Connection c = DriverManager.getConnection(SOURCE_URL, "sa", "")) {
+            exec(c, "DELETE FROM BIG");
+        }
+        SyncProgress skip = new SyncProgress();
+        skip.setInitialLoadDone(true);
+        skip.setFullLoadWithoutCursor(true);
+        skip.setLastSyncValue(null);
+        skip.setCursorStrategy("IDENTITY");
+        skip.setCursorColumn("id");
+        when(stateWriter.loadOrCreateProgress(anyLong(), anyString())).thenReturn(skip);
+
+        engine.runCycle(ctx());
+
+        ArgumentCaptor<DataSyncService.TableSyncResult> passed =
+                ArgumentCaptor.forClass(DataSyncService.TableSyncResult.class);
+        verify(stateWriter).advanceCursor(any(SyncProgress.class), passed.capture(), any());
+        assertThat(passed.getValue().getRowsDeleted()).isEqualTo(2L);
+    }
+
+    private static void exec(Connection connection, String sql) throws SQLException {
+        try (Statement st = connection.createStatement()) {
+            st.execute(sql);
+        }
+    }
+
     private SyncContext ctx() {
         SyncConfig config = new SyncConfig();
         config.getTables().add("BIG");

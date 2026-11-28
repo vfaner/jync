@@ -13,6 +13,7 @@ import java.util.TreeSet;
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.lob.LobBinder;
 import com.qqmu.jync.service.sync.ColumnCleanser;
+import com.qqmu.jync.service.sync.EmulatedUpsert;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.sync.SyncContext;
 import com.qqmu.jync.service.sync.UniqueViolations;
@@ -384,89 +385,42 @@ public final class CdcEventApplier {
      */
     private void applyEmulatedUpserts(Connection targetConn, CdcWritePlanCache.UpsertPlan plan,
                                       List<Map<String, Object>> rows) throws SQLException {
+        GenericSqlDialect generic = (GenericSqlDialect) ctx.getTargetDialect();
+        String existsSql = plan.pkColumns.isEmpty() ? null
+                : generic.getSelectByPkSql(
+                        ctx.getTargetSchema(), plan.targetTable, plan.pkColumns);
         try (PreparedStatement insert = targetConn.prepareStatement(plan.sql);
              PreparedStatement update = plan.updateSql == null ? null
-                     : targetConn.prepareStatement(plan.updateSql)) {
+                     : targetConn.prepareStatement(plan.updateSql);
+             PreparedStatement exists = targetConn.prepareStatement(existsSql)) {
             JdbcUtil.applyQueryTimeout(insert, queryTimeoutSeconds);
             JdbcUtil.applyQueryTimeout(update, queryTimeoutSeconds);
+            JdbcUtil.applyQueryTimeout(exists, queryTimeoutSeconds);
             for (Map<String, Object> row : rows) {
                 // Each statement binds its own temporary LOBs; the row may bind twice
                 // (update then insert, or update again after a unique violation).
                 LobBinder.Tracker lobTracker = LobBinder.newTracker();
                 try {
-                    int updated = 0;
-                    if (update != null) {
-                        JdbcRowMapper.bind(update, row, plan.updateBindOrder, plan.types,
-                                ctx.getTargetDialect(), lobTracker);
-                        updated = update.executeUpdate();
-                    }
-                    if (updated > 0) {
-                        continue;
-                    }
-                    JdbcRowMapper.bind(insert, row, plan.columns, plan.types,
-                            ctx.getTargetDialect(), lobTracker);
-                    try {
-                        insert.executeUpdate();
-                    } catch (SQLException e) {
-                        if (UniqueViolations.isUniqueViolation(e) && update != null) {
-                            // A concurrent writer may have inserted the same key between our
-                            // UPDATE and INSERT. Retrying the update converges without failing —
-                            // but only if it actually reaches a row. Zero affected rows means
-                            // the conflicting row carries a DIFFERENT key (another unique index,
-                            // or a vendor 23000 that was not a duplicate at all); swallowing it
-                            // would drop the change while the position still advances.
-                            JdbcRowMapper.bind(update, row, plan.updateBindOrder, plan.types,
-                                    ctx.getTargetDialect(), lobTracker);
-                            if (update.executeUpdate() == 0) {
-                                // Drivers that report CHANGED rows answer 0 when the row
-                                // already holds exactly these values (an overlapping
-                                // baseline replay, or an update to the same content).
-                                // Existence decides: present = no-op, absent = a different
-                                // unique constraint rejected the insert and it must surface.
-                                if (rowExists(targetConn, row, plan)) {
-                                    log.debug("Row already present with identical values in {};"
-                                            + " re-delivery is a no-op", plan.targetTable);
-                                    continue;
+                    EmulatedUpsert.Outcome outcome = EmulatedUpsert.apply(insert, update, exists,
+                            plan.guardUnchanged, (statement, kind) -> {
+                                switch (kind) {
+                                    case EXISTS -> JdbcRowMapper.bind(statement, row,
+                                            plan.pkColumns, plan.types, ctx.getTargetDialect());
+                                    case UPDATE -> JdbcRowMapper.bind(statement, row,
+                                            plan.updateBindOrder, plan.types,
+                                            ctx.getTargetDialect(), lobTracker);
+                                    case INSERT -> JdbcRowMapper.bind(statement, row,
+                                            plan.columns, plan.types,
+                                            ctx.getTargetDialect(), lobTracker);
                                 }
-                                throw e;
-                            }
-                        } else if (UniqueViolations.isUniqueViolation(e)) {
-                            // Key-only table — update is null exactly when every column is part
-                            // of the key. There is no UPDATE whose row count could decide
-                            // anything, so existence is checked directly: a row already holding
-                            // this key is identical to the one rejected and re-delivery is a
-                            // no-op, while an absent key means some other constraint rejected
-                            // the row and it must surface.
-                            if (!rowExists(targetConn, row, plan)) {
-                                throw e;
-                            }
-                            log.debug("Row already present in key-only table {}; re-delivery"
-                                    + " is a no-op", plan.targetTable);
-                        } else {
-                            throw e;
-                        }
+                            });
+                    if (outcome == EmulatedUpsert.Outcome.NOOP) {
+                        log.debug("Row already present in {}; re-delivery is a no-op",
+                                plan.targetTable);
                     }
                 } finally {
                     lobTracker.releaseAll();
                 }
-            }
-        }
-    }
-
-    /**
-     * Whether the target already holds the row with this primary key. Only reached from the
-     * key-only conflict path, so the extra statement costs nothing on the normal flow.
-     */
-    private boolean rowExists(Connection targetConn, Map<String, Object> row,
-                              CdcWritePlanCache.UpsertPlan plan) throws SQLException {
-        GenericSqlDialect generic = (GenericSqlDialect) ctx.getTargetDialect();
-        String sql = generic.getSelectByPkSql(
-                ctx.getTargetSchema(), plan.targetTable, plan.pkColumns);
-        try (PreparedStatement ps = targetConn.prepareStatement(sql)) {
-            JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
-            JdbcRowMapper.bind(ps, row, plan.pkColumns, plan.types, ctx.getTargetDialect());
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
             }
         }
     }

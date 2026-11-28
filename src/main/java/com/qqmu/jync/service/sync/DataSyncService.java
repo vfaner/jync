@@ -566,6 +566,18 @@ public class DataSyncService {
         if (strategy.getKind() == CursorStrategy.Kind.FULL_COMPARE) {
             result.newCursorValue = CursorStrategy.FULL_COMPARE_ROWCOUNT_PREFIX + stats.read;
         }
+        if (result.initialLoad) {
+            // Chunking may have been disabled or fallen back for this attempt. A checkpoint
+            // left by an earlier interrupted attempt no longer describes this successful
+            // classic load; keeping it makes the status panel say "in progress" forever.
+            // Ask before deleting so an ordinary first load does not issue a no-op DELETE.
+            if (checkpoints != null && !checkpoints
+                    .findByProjectIdAndTableName(ctx.projectId(), table.getName()).isEmpty()) {
+                checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
+            }
+            // A classic streamed load has no resume point by definition.
+            result.resumableLoad = false;
+        }
         return result;
     }
 
@@ -2089,11 +2101,16 @@ public class DataSyncService {
         return stat == null || stat.rows() == null || stat.rows() <= 0 ? null : stat.rows();
     }
 
-    private MetadataReader.TableStat tableStat(TableMeta table, Connection sourceConn,
-                                               SyncContext ctx) {
+    /**
+     * Schema-wide statistics keyed by UPPER-CASE table name. Both the polling engine's
+     * small-table ordering and this service's chunk sizing read the same catalog snapshot;
+     * keeping the cache here avoids a second query and a second TTL with the same key.
+     */
+    Map<String, MetadataReader.TableStat> schemaTableStats(Connection sourceConn,
+                                                            SyncContext ctx) {
         MetadataReader reader = ctx.getSourceReader();
         if (reader == null || sourceConn == null || !reader.reportsTableStats()) {
-            return null;
+            return Map.of();
         }
         String key = ctx.projectId() + "|" + ctx.getSourceSchema();
         long now = System.currentTimeMillis();
@@ -2101,15 +2118,26 @@ public class DataSyncService {
         if (cached == null || now - cached.at > TABLE_STATS_TTL_MS) {
             Map<String, MetadataReader.TableStat> stats =
                     reader.estimateTableStats(sourceConn, ctx.getSourceSchema());
-            cached = new CachedTableStats(stats == null ? Map.of() : stats, now);
+            Map<String, MetadataReader.TableStat> byUpperName = new java.util.HashMap<>();
+            if (stats != null) {
+                stats.forEach((name, stat) -> {
+                    if (name != null) {
+                        byUpperName.put(name.toUpperCase(java.util.Locale.ROOT), stat);
+                    }
+                });
+            }
+            cached = new CachedTableStats(byUpperName, now);
             tableStats.put(key, cached);
         }
-        for (Map.Entry<String, MetadataReader.TableStat> entry : cached.stats.entrySet()) {
-            if (entry.getKey().equalsIgnoreCase(table.getName())) {
-                return entry.getValue();
-            }
-        }
-        return null;
+        return cached.stats;
+    }
+
+    private MetadataReader.TableStat tableStat(TableMeta table, Connection sourceConn,
+                                               SyncContext ctx) {
+        // The index is built once per schema; a 700-table load otherwise walked every
+        // statistics entry with equalsIgnoreCase for every table.
+        return schemaTableStats(sourceConn, ctx)
+                .get(table.getName().toUpperCase(java.util.Locale.ROOT));
     }
 
     /** Conservative width estimate used only to size an initial-load chunk. */
@@ -2935,17 +2963,15 @@ public class DataSyncService {
         }
 
         WriteStats stats = new WriteStats();
-        // The existence probe runs once per replayed-but-unchanged row, which a cursor
-        // window's safety margin can make every row of the window on every cycle. Prepared
-        // once here, like the UPDATE and INSERT, instead of once per probe.
-        String existsSql = guardUnchanged
-                ? dialect.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns)
-                : null;
+        // The existence probe is reached from the guarded replay path and from every
+        // key-only conflict, and it is prepared once per copy pass rather than per row.
+        // A keyless table has neither a key predicate nor a key conflict to resolve.
+        String existsSql = pkColumns.isEmpty() ? null
+                : dialect.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns);
         try (PreparedStatement insert = targetConn.prepareStatement(insertSql);
              PreparedStatement update = updateSql == null ? null
                      : targetConn.prepareStatement(updateSql);
-             PreparedStatement exists = existsSql == null ? null
-                     : targetConn.prepareStatement(existsSql)) {
+             PreparedStatement exists = targetConn.prepareStatement(existsSql)) {
             JdbcUtil.applyQueryTimeout(insert, properties.getQueryTimeoutSeconds());
             JdbcUtil.applyQueryTimeout(update, properties.getQueryTimeoutSeconds());
             JdbcUtil.applyQueryTimeout(exists, properties.getQueryTimeoutSeconds());
@@ -2992,75 +3018,21 @@ public class DataSyncService {
                 com.qqmu.jync.service.lob.LobBinder.Tracker lobTracker =
                         com.qqmu.jync.service.lob.LobBinder.newTracker();
                 try {
-                    int updated = 0;
-                    if (update != null) {
-                        JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn,
-                                ctx.getTargetDialect(), lobTracker);
-                        updated = update.executeUpdate();
-                    }
-                    // With the guard on, zero affected rows is ambiguous: the key may be
-                    // absent, or the row may already hold these exact values — the cursor's
-                    // safety margin replays a window's newest rows every cycle. Only an absent
-                    // key needs the INSERT; the replay must stay a no-op, or the change log
-                    // files the same edit again on every poll.
-                    if (updated == 0 && guardUnchanged
-                            && rowExists(exists, targetConn, dialect, targetTable, pkColumns,
-                                    row, typeByColumn, ctx)) {
-                        log.debug("Row already holds these values in {}; replayed, not written",
-                                targetTable);
-                    } else if (updated == 0) {
-                        JdbcRowMapper.bind(insert, row, columns, typeByColumn,
-                                ctx.getTargetDialect(), lobTracker);
-                        try {
-                            // This path issues the INSERT and the UPDATE as separate
-                            // statements, so it knows which one happened without the target
-                            // having to say.
-                            if (insert.executeUpdate() != 0) {
-                                stats.inserted++;
-                            }
-                        } catch (SQLException e) {
-                            if (UniqueViolations.isUniqueViolation(e) && update != null) {
-                                // A concurrent writer may have inserted the same key between
-                                // our UPDATE and INSERT. Retrying the update converges without
-                                // failing — but only if it actually reaches a row. Otherwise
-                                // the conflicting row carries a DIFFERENT key (another unique
-                                // index, or a vendor 23000 that was not a duplicate at all);
-                                // swallowing it would drop the row with no error and no
-                                // statistic.
-                                // With the guard on, zero is again ambiguous: the concurrent
-                                // row may hold these exact values, in which case the replay is
-                                // a no-op rather than a failure. The existence probe separates
-                                // that from a conflict on some other key.
-                                JdbcRowMapper.bind(update, row, updateBindOrder, typeByColumn,
-                                        ctx.getTargetDialect(), lobTracker);
-                                if (update.executeUpdate() != 0) {
-                                    stats.updated++;
-                                } else if (guardUnchanged && rowExists(exists, targetConn,
-                                        dialect, targetTable, pkColumns, row,
-                                        typeByColumn, ctx)) {
-                                    log.debug("Row already holds these values in {};"
-                                            + " replayed, not written", targetTable);
-                                } else {
-                                    throw e;
+                    EmulatedUpsert.Outcome outcome = EmulatedUpsert.apply(
+                            insert, update, exists, guardUnchanged, (statement, kind) -> {
+                                switch (kind) {
+                                    case EXISTS -> JdbcRowMapper.bind(statement, row, pkColumns,
+                                            typeByColumn, ctx.getTargetDialect());
+                                    case UPDATE -> JdbcRowMapper.bind(statement, row,
+                                            updateBindOrder, typeByColumn,
+                                            ctx.getTargetDialect(), lobTracker);
+                                    case INSERT -> JdbcRowMapper.bind(statement, row, columns,
+                                            typeByColumn, ctx.getTargetDialect(), lobTracker);
                                 }
-                            } else if (UniqueViolations.isUniqueViolation(e)) {
-                                // Key-only table — update is null exactly when every column
-                                // is part of the key, so there is no UPDATE whose row count
-                                // could decide. Existence is checked directly: a row already
-                                // holding this key is identical to the one rejected, making
-                                // re-delivery a no-op. An absent key means some other
-                                // constraint rejected the row, and that must surface.
-                                if (!rowExists(exists, targetConn, dialect,
-                                        targetTable, pkColumns, row, typeByColumn, ctx)) {
-                                    throw e;
-                                }
-                                log.debug("Row already present in key-only table {};"
-                                        + " re-delivery is a no-op", targetTable);
-                            } else {
-                                throw e;
-                            }
-                        }
-                    } else {
+                            });
+                    if (outcome == EmulatedUpsert.Outcome.INSERTED) {
+                        stats.inserted++;
+                    } else if (outcome == EmulatedUpsert.Outcome.UPDATED) {
                         stats.updated++;
                     }
                 } finally {
@@ -3081,37 +3053,6 @@ public class DataSyncService {
             }
         }
         return stats;
-    }
-
-    /**
-     * Whether the target already holds the row with this primary key. Reached only when a
-     * replayed row's UPDATE matched nothing and the guard is on, or on the key-only conflict
-     * path; {@code prepared} is the statement the caller prepared once per copy pass.
-     */
-    private boolean rowExists(PreparedStatement prepared, Connection conn,
-                              SqlDialect dialect, String targetTable,
-                              List<String> pkColumns, Map<String, Object> row,
-                              Map<String, Integer> typeByColumn, SyncContext ctx)
-            throws SQLException {
-        if (prepared == null) {
-            // Only reachable on the key-only conflict path, where the caller did not ask for
-            // the probe statement up front; that path is a one-off, not a per-row loop.
-            String sql = dialect.getSelectByPkSql(ctx.getTargetSchema(), targetTable, pkColumns);
-            try (PreparedStatement ps = conn.prepareStatement(sql)) {
-                JdbcUtil.applyQueryTimeout(ps, properties.getQueryTimeoutSeconds());
-                return probe(ps, pkColumns, row, typeByColumn, ctx);
-            }
-        }
-        return probe(prepared, pkColumns, row, typeByColumn, ctx);
-    }
-
-    private static boolean probe(PreparedStatement ps, List<String> pkColumns,
-                                 Map<String, Object> row, Map<String, Integer> typeByColumn,
-                                 SyncContext ctx) throws SQLException {
-        JdbcRowMapper.bind(ps, row, pkColumns, typeByColumn, ctx.getTargetDialect());
-        try (ResultSet rs = ps.executeQuery()) {
-            return rs.next();
-        }
     }
 
     /** Mutable single-slot holder: primary-key values of the last row a copy pass read. */
@@ -3152,12 +3093,12 @@ public class DataSyncService {
      * the replayed partial page is absorbed by the idempotent upserts.
      *
      * <p>Skips itself (returns false, caller keeps the classic path) when chunking is switched
-     * off, no checkpoint repository is wired, or a keyless table cannot be walked by OFFSET
-     * (see {@link #keylessChunkedLoad}). On success it fills the
-     * result exactly like the classic full load does — row counts, the safety-lagged cursor for
-     * keyed incremental strategies, the {@code fc:} fingerprint for FULL_COMPARE — and clears
-     * the table's checkpoints, which only ever describe an in-flight load. Note that after a
-     * resumed load {@code rowsWritten} counts this pass's rows, not the whole table's.
+     * off, no checkpoint repository is wired, or the table has no primary key. On success it
+     * fills the result exactly like the classic full load does — row counts, the safety-lagged
+     * cursor for keyed incremental strategies, the {@code fc:} fingerprint for FULL_COMPARE —
+     * and clears the table's checkpoints, which only ever describe an in-flight load. Note
+     * that after a resumed load {@code rowsWritten} counts this pass's rows, not the whole
+     * table's; {@code rowsCopied} also carries the resumed prefix.
      */
     private boolean chunkedInitialLoad(Connection sourceConn, Connection targetConn,
                                        TableMeta table, String targetTable,
@@ -3421,8 +3362,9 @@ public class DataSyncService {
             long[] bounds = readPkBounds(sourceConn, table, pk, strategy, upperBound, ctx);
             if (bounds == null) {
                 // Empty table (within the watermark bound): finalize like the sequential
-                // path finalizes an empty load.
-                return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
+                // path, preserving any prefix an interrupted attempt already copied.
+                return finalizeEmptyLoad(table, strategy, watermark, ctx, result,
+                        copiedRows(saved));
             }
             List<KeyRange> resumed = resumeRangeLayout(saved, table, bounds[1]);
             if (resumed != null) {
@@ -3463,7 +3405,8 @@ public class DataSyncService {
                             insertFirst);
                 }
                 if (boundaries.isEmpty()) {
-                    return finalizeEmptyLoad(table, strategy, watermark, ctx, result);
+                    return finalizeEmptyLoad(table, strategy, watermark, ctx, result,
+                            copiedRows(saved));
                 }
                 ranges = sampledRanges(boundaries);
                 if (ranges.size() <= 1) {
@@ -3706,9 +3649,11 @@ public class DataSyncService {
 
     /** Finalizes a full load whose source set turned out to be empty. */
     private boolean finalizeEmptyLoad(TableMeta table, CursorStrategy strategy, String watermark,
-                                      SyncContext ctx, TableSyncResult result) {
+                                      SyncContext ctx, TableSyncResult result,
+                                      long alreadyCopied) {
         checkpoints.deleteByProjectIdAndTableName(ctx.projectId(), table.getName());
         result.rowsWritten = 0;
+        result.rowsCopied = alreadyCopied;
         result.newCursorValue = fullLoadCursorTail(table, strategy, watermark, 0);
         return true;
     }
@@ -3941,16 +3886,25 @@ public class DataSyncService {
         }
     }
 
-    /** Rows already committed by the checkpointed chunks of an interrupted load. */
+    /**
+     * Rows already committed by the checkpointed chunks of an interrupted load. Keyed
+     * chunks record one page each, so they sum; a keyless chunk records the cumulative
+     * OFFSET, so taking the latest value avoids counting the earlier pages twice. A table
+     * is walked by exactly one of the two models; should a stale mixed set ever appear,
+     * taking the larger side is safer than adding both and inflating the lifetime count.
+     */
     private static long copiedRows(List<ChunkCheckpoint> checkpoints) {
-        long rows = 0;
+        long keyed = 0;
+        long keyless = 0;
         for (ChunkCheckpoint checkpoint : checkpoints) {
-            if (ChunkCheckpoint.STATUS_CHUNK.equals(checkpoint.getStatus())
-                    || ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(checkpoint.getStatus())) {
-                rows += checkpoint.getRowsCopied() == null ? 0 : checkpoint.getRowsCopied();
+            int rows = checkpoint.getRowsCopied() == null ? 0 : checkpoint.getRowsCopied();
+            if (ChunkCheckpoint.STATUS_KEYLESS_CHUNK.equals(checkpoint.getStatus())) {
+                keyless = Math.max(keyless, rows);
+            } else if (ChunkCheckpoint.STATUS_CHUNK.equals(checkpoint.getStatus())) {
+                keyed += rows;
             }
         }
-        return rows;
+        return Math.max(keyed, keyless);
     }
 
     /**

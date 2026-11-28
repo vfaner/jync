@@ -7,11 +7,9 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.sql.Types;
 import java.time.Instant;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 import com.github.shyiko.mysql.binlog.event.deserialization.json.JsonBinary;
 import com.qqmu.jync.dto.meta.ColumnMeta;
@@ -86,11 +84,11 @@ public final class CdcRowMapper {
                     "binlog row has " + binlogRow.length + " cells but metadata has "
                             + plans.size() + " columns (stale binding after DDL?)");
         }
-        Set<String> pk = new HashSet<>(binding.pkNames());
+        boolean[] pkFlags = binding.pkColumnFlags();
         Map<String, Object> row = new LinkedHashMap<>();
         for (int i = 0; i < binlogRow.length; i++) {
-            ColumnPlan plan = plans.get(i);
-            if (pk.contains(plan.name())) {
+            if (pkFlags[i]) {
+                ColumnPlan plan = plans.get(i);
                 row.put(plan.name(), mapValue(binlogRow[i], plan, stats));
             }
         }

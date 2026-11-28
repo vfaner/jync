@@ -859,8 +859,10 @@ public class ProjectController {
         // Every visible value being exactly 100% makes the column constant noise; only keep
         // it when at least one row still has something to say (a live or partial load).
         model.addAttribute("fullLoadAllDone", !tableStatuses.isEmpty()
-                && tableStatuses.stream().allMatch(status -> status.fullLoadPercent() != null
-                        && status.fullLoadPercent() == 100));
+                && tableStatuses.stream().allMatch(status ->
+                        status.state() == ProjectService.SyncState.COMPLETED
+                                && status.fullLoadPercent() != null
+                                && status.fullLoadPercent() == 100));
         model.addAttribute("tableStatusCompleted", tableStatuses.stream()
                 .filter(status -> status.state() == ProjectService.SyncState.COMPLETED).count());
         model.addAttribute("tableStatusInProgress", tableStatuses.stream()

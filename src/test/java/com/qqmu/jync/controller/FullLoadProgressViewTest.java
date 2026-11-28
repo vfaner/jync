@@ -206,6 +206,22 @@ class FullLoadProgressViewTest {
         assertThat(html).contains("100%");
     }
 
+    @Test
+    void anUnfinishedLoadAtOneHundredPercentDoesNotHideTheColumn() throws Exception {
+        stubDetail(Map.of("ITEMS", ProjectService.FullLoadProgress.of(List.of(
+                checkpoint(0, 0, ChunkCheckpoint.STATUS_CHUNK)))));
+        when(projectService.findTableSyncStatuses(eq(1L), any(), any())).thenReturn(List.of(
+                new ProjectService.TableSyncStatus("ITEMS", ProjectService.SyncState.IN_PROGRESS,
+                        0L, null, 300L, java.time.Instant.now(), null, null, null, null,
+                        ProjectService.IncrementalState.NOT_STARTED, null, null, false, 100,
+                        null)));
+
+        String html = render();
+
+        assertThat(html).contains("class=\"num\" data-role=\"progress-full\"");
+        assertThat(html).doesNotContain("class=\"num is-hidden\" data-role=\"progress-full\"");
+    }
+
     /**
      * 停在中途的全量仍有可续传的进度，列必须保留；这一列也随轮询出现/消失，不用刷新页面。
      */
@@ -222,7 +238,6 @@ class FullLoadProgressViewTest {
         String html = render();
 
         assertThat(html).contains("class=\"num\" data-role=\"progress-full\"");
-        assertThat(html).contains("data-full-load-pending=\"true\"");
         assertThat(html).contains("badge badge-info");
         assertThat(html).contains("~22%");
     }

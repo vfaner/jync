@@ -14,7 +14,8 @@ public record ProgressStatusRow(String objectName, Boolean initialLoadDone,
                                 Long rowsSyncedTotal, Instant lastSyncTime,
                                 String cursorStrategy, String cursorColumn,
                                 Boolean resumableLoad, Boolean fullLoadWithoutCursor,
-                                Long fullLoadTotalRows, Instant fullLoadCompletedAt) {
+                                Long fullLoadTotalRows, Instant fullLoadCompletedAt,
+                                Boolean cursorPresent) {
 
     /** Compatibility constructor for callers/tests that do not carry the estimate. */
     public ProgressStatusRow(String objectName, Boolean initialLoadDone,
@@ -23,6 +24,17 @@ public record ProgressStatusRow(String objectName, Boolean initialLoadDone,
                              Boolean resumableLoad, Boolean fullLoadWithoutCursor) {
         this(objectName, initialLoadDone, rowsSyncedTotal, lastSyncTime,
                 cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor, null,
-                null);
+                null, null);
+    }
+
+    /** Compatibility constructor for callers/tests that do not carry the cursor flag. */
+    public ProgressStatusRow(String objectName, Boolean initialLoadDone,
+                             Long rowsSyncedTotal, Instant lastSyncTime,
+                             String cursorStrategy, String cursorColumn,
+                             Boolean resumableLoad, Boolean fullLoadWithoutCursor,
+                             Long fullLoadTotalRows, Instant fullLoadCompletedAt) {
+        this(objectName, initialLoadDone, rowsSyncedTotal, lastSyncTime,
+                cursorStrategy, cursorColumn, resumableLoad, fullLoadWithoutCursor,
+                fullLoadTotalRows, fullLoadCompletedAt, null);
     }
 }

@@ -221,10 +221,6 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
     @Override
     public void run() {
         long projectId = project.getId();
-        taskStore.markCdcRunning(projectId);
-        if (targetRepair != null) {
-            targetRepair.resetAttempts(projectId);
-        }
         // Pair the stop line with a start line so restarts do not read as a crash loop.
         try {
             stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
@@ -234,6 +230,12 @@ public final class SqlServerCdcConsumer implements ManagedCdcConsumer {
                     projectId, e.getMessage());
         }
         try {
+            // Inside the try so a failed task-store write still reaches the finally that
+            // releases the daemon lease.
+            taskStore.markCdcRunning(projectId);
+            if (targetRepair != null) {
+                targetRepair.resetAttempts(projectId);
+            }
             CdcPosition position = positionStore.find(projectId).orElse(null);
             if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {
                 baselineService.runBaseline(ctx, lock::renew);

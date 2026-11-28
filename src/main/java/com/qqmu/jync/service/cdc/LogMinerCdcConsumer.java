@@ -185,12 +185,6 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
     @Override
     public void run() {
         long projectId = project.getId();
-        taskStore.markCdcRunning(projectId);
-        // A fresh consumer run starts a fresh repair budget: the cause a previous run could
-        // not clear deserves another look now that a human restarted the project.
-        if (targetRepair != null) {
-            targetRepair.resetAttempts(projectId);
-        }
         // Pair the stop line with a start line so restarts do not read as a crash loop.
         try {
             stateWriter.recordLog(projectId, ObjectType.PROJECT, project.getName(),
@@ -200,6 +194,14 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                     projectId, e.getMessage());
         }
         try {
+            // Inside the try: a metadata-store failure here must reach the finally that
+            // closes the daemon lease, exactly like the baseline below.
+            taskStore.markCdcRunning(projectId);
+            // A fresh consumer run starts a fresh repair budget: the cause a previous run
+            // could not clear deserves another look now that a human restarted the project.
+            if (targetRepair != null) {
+                targetRepair.resetAttempts(projectId);
+            }
             CdcPosition position = positionStore.find(projectId).orElse(null);
             if (position == null || !Boolean.TRUE.equals(position.isBaselineDone())) {
                 baselineService.runBaseline(ctx, lock::renew);

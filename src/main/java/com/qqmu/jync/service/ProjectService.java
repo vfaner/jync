@@ -2496,16 +2496,27 @@ public class ProjectService {
             ProgressStatusRow progress = progressByName.get(key);
             FullLoadProgress load = loadsByUpper.get(key);
             // An external dump seeded these tables, so "no progress row" is not "not
-            // started". The scope is explicit: an all-tables marker only covers a table
-            // with no progress row, so a table added after the dump is not claimed as
-            // already loaded. Once Jync reloads the table itself, its progress row marks the
-            // load as done and the ordinary state takes over.
-            boolean externalBaseline = !baselinePending && cdcPosition != null
+            // started". Any progress row means Jync has touched this table since the dump;
+            // from then on its normal initial/load state is the truth. In particular a
+            // manual reload clears initialLoadDone before its first (or only) chunk, and a
+            // classic/keyless reload may never create a checkpoint at all — do not keep
+            // painting that table as externally seeded and complete while it is rewritten.
+            boolean externalBaseline = load == null && !baselinePending && cdcPosition != null
                     && cdcPosition.externalBaselineCovers(name)
-                    && (cdcPosition.externalBaselineIsAllTables()
-                        ? progress == null
-                        : progress == null
-                                || !Boolean.TRUE.equals(progress.initialLoadDone()));
+                    && progress == null;
+            // clearCursor deliberately keeps initialLoadDone (it must not re-arm truncate),
+            // but nulls the cursor to request a full reload. Without this flag the table
+            // would still read COMPLETED/100% after a failed audit repair even though the
+            // audit just proved rows are missing. null means "projection did not say".
+            boolean reloadPending = !externalBaseline && load == null && progress != null
+                    && Boolean.TRUE.equals(progress.initialLoadDone())
+                    && Boolean.FALSE.equals(progress.cursorPresent())
+                    // false is the marker clearCursor writes; a null from a legacy row
+                    // must not be mistaken for a requested reload.
+                    && Boolean.FALSE.equals(progress.fullLoadWithoutCursor())
+                    && progress.cursorStrategy() != null
+                    && !"NONE".equalsIgnoreCase(progress.cursorStrategy())
+                    && !"FULL_COMPARE".equalsIgnoreCase(progress.cursorStrategy());
             SyncState state;
             if (externalBaseline) {
                 state = SyncState.COMPLETED;
@@ -2515,7 +2526,9 @@ public class ProjectService {
                 // INCOMPLETE, not a phantom running load.
                 state = working ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
             } else if (progress != null && Boolean.TRUE.equals(progress.initialLoadDone())) {
-                state = SyncState.COMPLETED;
+                state = reloadPending
+                        ? (working ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE)
+                        : SyncState.COMPLETED;
             } else if (progress != null) {
                 state = working ? SyncState.IN_PROGRESS : SyncState.INCOMPLETE;
             } else {

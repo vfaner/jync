@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 
 import com.qqmu.jync.config.SyncProperties;
 import com.qqmu.jync.dto.SyncConfig;
@@ -570,6 +572,16 @@ class CdcConsumerManagerTest {
     // 旧代码在注册表为空时直接 return,不留下任何「正在停机」的痕迹:同一瞬间落在
     // ensureStarted 里的调用(UI 启动、巡检 tick、策略切换)仍会拿租约、建连、起线程,
     // 而 ContextClosedEvent 已经跑完 —— 这个消费者会带着租约活到 JVM 退出。
+
+    /** Removing this annotation silently disables the whole shutdown path. */
+    @Test
+    void shutdownIsWiredToTheContextClosedEvent() throws Exception {
+        EventListener listener = CdcConsumerManager.class.getMethod("onShutdown")
+                .getAnnotation(EventListener.class);
+
+        assertThat(listener).isNotNull();
+        assertThat(listener.value()).contains(ContextClosedEvent.class);
+    }
 
     @Test
     void ensureStartedIsIgnoredOnceShutdownHasBegun() {

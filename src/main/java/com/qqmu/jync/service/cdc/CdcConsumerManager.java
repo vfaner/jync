@@ -651,18 +651,24 @@ public class CdcConsumerManager {
      */
     @EventListener(ContextClosedEvent.class)
     public void onShutdown() {
-        // Before the empty-registry early return: that path must still leave the bar up, or
-        // a start racing the shutdown takes a lease no one will release until the JVM dies.
-        shuttingDown = true;
-        if (registry.isEmpty()) {
+        // Take the snapshot under the same monitor ensureStarted uses to register. The flag
+        // and the empty-registry check used to be separate reads: a start that passed the
+        // flag check could register after shutdown looked at an empty map, leaving a live
+        // consumer with no supervisor.
+        Map<Long, Registration> consumers;
+        synchronized (this) {
+            shuttingDown = true;
+            consumers = new java.util.LinkedHashMap<>(registry);
+        }
+        if (consumers.isEmpty()) {
             return;
         }
-        log.info("Shutting down {} CDC consumer(s)", registry.size());
-        for (Registration registration : registry.values()) {
+        log.info("Shutting down {} CDC consumer(s)", consumers.size());
+        for (Registration registration : consumers.values()) {
             registration.consumer.requestStop();                 // 先全部发停,再逐个等
         }
         long deadline = System.currentTimeMillis() + properties.getShutdownWaitMs();
-        for (Map.Entry<Long, Registration> entry : registry.entrySet()) {
+        for (Map.Entry<Long, Registration> entry : consumers.entrySet()) {
             Thread thread = entry.getValue().thread;
             try {
                 long remaining = deadline - System.currentTimeMillis();

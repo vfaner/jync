@@ -10,7 +10,6 @@
 <div id="full-load-card" th:fragment="data"
      th:attr="data-refresh-url=@{/projects/{id}/full-load-card(id=${project.id})},
               data-full-load-active=${tableStatusInProgress > 0},
-              data-full-load-pending=${fullLoadTableCount != null and fullLoadTableCount > 0},
               data-project-active=${project.enabled and tableStatuses != null and !#lists.isEmpty(tableStatuses)},
               data-status-refresh-ms=${tableStatuses != null and tableStatuses.size() > 200 ? 10000 : 5000}">
     <div id="progress-summary-data" hidden th:if="${statusFragmentData}">

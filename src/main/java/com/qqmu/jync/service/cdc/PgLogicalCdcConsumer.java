@@ -59,6 +59,9 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
     /** Parse strike-out: same threshold as the LogMiner / binlog consumers. */
     static final int MAX_PARSE_FAILURES = 5;
 
+    /** Apply strike-out; kept separate from the parse limit so tuning one does not move both. */
+    static final int MAX_APPLY_FAILURES = 5;
+
     /**
      * How many times one drain cycle re-peeks a transaction truncated by the row budget. Each
      * peek restarts at confirmed_flush, so a server that always truncates at max_changes would
@@ -1224,7 +1227,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
 
     /** F-10:> 5 consecutive failing drain cycles with no applied transaction between. */
     private boolean applyStrikeOut() {
-        return applyFailures.get() > MAX_PARSE_FAILURES;
+        return applyFailures.get() > MAX_APPLY_FAILURES;
     }
 
     private void fatalStop(long projectId, Throwable failure, CdcFailureClassifier.Kind kind) {

@@ -197,6 +197,13 @@ class CdcWritePlanCacheTest {
         }
 
         @Override
+        public String getUpdateByPkSql(String schema, String table, List<String> columns,
+                                       List<String> pkColumns, boolean guardUnchanged) {
+            updateStatements++;
+            return super.getUpdateByPkSql(schema, table, columns, pkColumns, guardUnchanged);
+        }
+
+        @Override
         public String getDeleteByPkSql(String schema, String table, List<String> pkColumns) {
             deleteStatements++;
             return super.getDeleteByPkSql(schema, table, pkColumns);

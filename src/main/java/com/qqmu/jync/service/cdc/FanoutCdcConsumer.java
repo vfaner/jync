@@ -2,6 +2,7 @@ package com.qqmu.jync.service.cdc;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import com.github.shyiko.mysql.binlog.BinaryLogClient;
@@ -56,6 +57,8 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
     private final LazyLobSpillStore lobSpillStore = new LazyLobSpillStore();
     private final AtomicInteger handlerFailures = new AtomicInteger();
     private final AtomicReference<Throwable> lastFailure = new AtomicReference<>();
+    /** R3b dwell gate, matching the single-target consumer: 0 means this attempt never connected. */
+    private final AtomicLong connectedAtNs = new AtomicLong();
 
     public FanoutCdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,
                              BinlogClientFactory clientFactory, CdcPositionStore positionStore,
@@ -135,10 +138,29 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 taskStore.recordCdcFailure(projectId, detail);
             }
         } finally {
-            registry.remove(projectId, runtime);
-            if (runtime != null) {
-                runtime.close();
+            try {
+                registry.remove(projectId, runtime);
+                if (runtime != null) {
+                    runtime.close();
+                }
+            } finally {
+                // Same contract as every other engine: release the daemon lease even when
+                // the prelude failed before the first stream. An open handle renews the DB
+                // lease and holds the per-project semaphore forever, so a stop would wedge
+                // the project until this JVM restarts. Nested finally so a throwing
+                // runtime.close() cannot skip it.
+                lock.close();
             }
+        }
+    }
+
+    /**
+     * Moves the shared anchor past a CREATE TABLE before the reconnect. Package-private so
+     * the new-table path has a direct test without requiring a live binlog.
+     */
+    void advancePastNewTable(String file, long position, BinaryLogClient current) {
+        if (file != null && position > 0) {
+            positionStore.advance(project.getId(), file, position, current.getGtidSet());
         }
     }
 
@@ -257,6 +279,11 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                                     + " auto-sync keeps streaming without it", db, table);
                             return;
                         }
+                        // Move the shared anchor past this DDL before reconnecting. If the
+                        // reconciler decides not to add the table (already known, transient
+                        // metadata failure), the reconnect must not replay the same CREATE
+                        // and disconnect again forever.
+                        advancePastNewTable(file, position, current);
                         rebaselineRequested = true;
                         log.info("Fan-out capture saw CREATE TABLE {}.{}; reconnecting to"
                                 + " re-baseline", db, table);
@@ -280,6 +307,10 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 public void onConnect(BinaryLogClient client) {
                     stats.setConnected(true);
                     stats.markStarted();
+                    // A successful reconnect clears the panel's stale error; the R3b dwell
+                    // gate below decides whether the backoff may also reset.
+                    stats.setLastError(null);
+                    connectedAtNs.set(System.nanoTime());
                 }
 
                 @Override
@@ -301,6 +332,7 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                 }
             });
             try {
+                connectedAtNs.set(0L);
                 current.connect(properties.getCdc().getConnectTimeoutMs());
                 // connect(timeout) only waits for the handshake; the stream lives in the
                 // client's own thread. Keep this consumer parked here until a disconnect or
@@ -342,6 +374,15 @@ public final class FanoutCdcConsumer implements ManagedCdcConsumer {
                     throw new IllegalStateException("fan-out capture stopped: "
                             + CdcFailureClassifier.describe(failure), failure);
                 }
+            }
+            // Same R3b rule as the single-target consumer: only a connection that actually
+            // lived long enough may reset the escalation. Otherwise an accept-then-kick
+            // server would turn into a 1-second hot loop forever.
+            long connectedAt = connectedAtNs.get();
+            long dwellMs = connectedAt == 0L
+                    ? 0L : (System.nanoTime() - connectedAt) / 1_000_000L;
+            if (CdcConsumer.shouldResetBackoff(dwellMs)) {
+                backoff.reset();
             }
             long delay = backoff.nextDelayMs();
             if (failure == null) {

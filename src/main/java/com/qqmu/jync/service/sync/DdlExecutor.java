@@ -125,7 +125,11 @@ public class DdlExecutor {
         }
     }
 
-    /** Runs a statement whose failure never matters, e.g. toggling constraint checks. */
+    /**
+     * Runs a best-effort statement such as a constraint toggle. Failure is non-fatal, but
+     * it is not silent: continuing with foreign keys still enforced turns the real cause
+     * into an unrelated parent/child ordering error later in the load.
+     */
     public void executeQuietly(String sql) {
         if (sql == null || sql.isBlank()) {
             return;
@@ -133,7 +137,7 @@ public class DdlExecutor {
         try (Statement st = connection.createStatement()) {
             st.execute(sql);
         } catch (SQLException e) {
-            log.debug("Optional statement failed ({}): {}", abbreviate(sql), e.getMessage());
+            log.warn("Best-effort statement failed ({}): {}", abbreviate(sql), e.getMessage());
         }
     }
 
