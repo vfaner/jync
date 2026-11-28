@@ -53,9 +53,11 @@ public class UpdateSystemParamsTool implements SupportTool {
                 + "sync.min-adaptive-chunk-size (100-100000), sync.max-retries (0-10), "
                 + "sync.fanout.max-targets (2-100, total targets per one-source-many-targets "
                 + "project, primary included). "
-                + "Applies to subsequent sync rounds; other nodes converge within about 30 "
-                + "seconds. Security, TLS, credentials, retention, comparison limits, pool "
-                + "sizes and thread counts are not editable. Nothing is written until Confirm.";
+                + "sync.batch-size takes effect for the next batch of a running CDC consumer on "
+                + "this node and the next polling round; other nodes converge within about 30 "
+                + "seconds. Other keys apply to subsequent sync rounds. Security, TLS, "
+                + "credentials, retention, comparison limits, pool sizes and thread counts are "
+                + "not editable. Nothing is written until Confirm.";
     }
 
     public Map<String, Object> parameters() {

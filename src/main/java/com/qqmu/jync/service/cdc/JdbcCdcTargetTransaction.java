@@ -38,7 +38,15 @@ public final class JdbcCdcTargetTransaction implements CdcTargetTransaction {
     public JdbcCdcTargetTransaction(SyncContext ctx, CdcRuntimeStats stats,
                                     int queryTimeoutSeconds, CdcWritePlanCache plans)
             throws SQLException {
-        this.applier = new CdcEventApplier(ctx, stats, queryTimeoutSeconds, plans);
+        this(ctx, stats, queryTimeoutSeconds, plans, null);
+    }
+
+    public JdbcCdcTargetTransaction(SyncContext ctx, CdcRuntimeStats stats,
+                                    int queryTimeoutSeconds, CdcWritePlanCache plans,
+                                    java.util.function.IntSupplier batchSize)
+            throws SQLException {
+        this.applier = new CdcEventApplier(ctx, stats, queryTimeoutSeconds, plans, true,
+                batchSize);
         Connection opened = ctx.getConnectionProvider().open(ctx.getTargetConfig());
         boolean original = true;
         try {

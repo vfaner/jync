@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.IntSupplier;
 
 import com.qqmu.jync.service.cdc.CdcRuntimeStats;
 import com.qqmu.jync.service.cdc.JdbcFanoutApplier;
@@ -41,6 +42,8 @@ public final class FanoutRuntime implements AutoCloseable {
     private final FanoutPositionStore positionStore;
     private final com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair;
     private final int queryTimeoutSeconds;
+    /** Live sync.batch-size for every target worker of this run. */
+    private final IntSupplier batchSize;
     private final CdcRuntimeStats stats;
     private final Map<Long, Integer> restartAttempts = new ConcurrentHashMap<>();
     /**
@@ -71,6 +74,17 @@ public final class FanoutRuntime implements AutoCloseable {
                          com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
                          int queryTimeoutSeconds, EventTransport transport)
             throws Exception {
+        this(sourceCtx, targets, stats, structureSync, progressStore, positionStore,
+                targetRepair, queryTimeoutSeconds, transport, null);
+    }
+
+    public FanoutRuntime(SyncContext sourceCtx, List<FanoutBaselineService.Target> targets,
+                         CdcRuntimeStats stats, StructureSyncService structureSync,
+                         FanoutProgressStore progressStore, FanoutPositionStore positionStore,
+                         com.qqmu.jync.service.cdc.CdcTargetRepairService targetRepair,
+                         int queryTimeoutSeconds, EventTransport transport,
+                         IntSupplier batchSize)
+            throws Exception {
         this.sourceCtx = sourceCtx;
         this.targets = List.copyOf(targets);
         this.bindings = new FanoutBindingResolver(sourceCtx);
@@ -80,13 +94,14 @@ public final class FanoutRuntime implements AutoCloseable {
         this.stats = stats;
         this.targetRepair = targetRepair;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
+        this.batchSize = batchSize;
         this.baselineService = new FanoutBaselineService(structureSync);
     }
 
     /** One target's write path, with the missing-table repair shared by every target. */
     private EventApplier applierFor(FanoutBaselineService.Target target) {
         EventApplier applier = new JdbcFanoutApplier(target.context(), stats, bindings,
-                queryTimeoutSeconds);
+                queryTimeoutSeconds, batchSize);
         return targetRepair == null ? applier
                 : new RepairingEventApplier(applier, targetRepair, target.context(),
                         sourceCtx::getConfig);

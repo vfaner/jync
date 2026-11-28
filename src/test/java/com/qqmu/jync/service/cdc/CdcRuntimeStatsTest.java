@@ -224,6 +224,27 @@ class CdcRuntimeStatsTest {
     }
 
     @Test
+    void batchLatencyAndPositionAgeAreExposedForTheStatusPanel() {
+        AtomicLong clock = new AtomicLong(1_700_000_000_000L);
+        CdcRuntimeStats stats = new CdcRuntimeStats(clock::get);
+        stats.setConnected(true);
+        stats.recordApplyBatch(80_000_000L, 100);
+        stats.recordApplyBatch(120_000_000L, 300);
+
+        assertThat(stats.lastBatchMillis()).isEqualTo(120L);
+        assertThat(stats.averageBatchMillis()).isEqualTo(100L);
+        assertThat(stats.maxBatchMillis()).isEqualTo(120L);
+        assertThat(stats.lastBatchRows()).isEqualTo(300);
+        assertThat(stats.batchRowsPerSecond()).isGreaterThan(0.0);
+
+        stats.recordPosition("mysql-bin.000001", 42L, null);
+        clock.addAndGet(15_000L);
+        assertThat(stats.positionAgeSeconds()).isEqualTo(15L);
+        assertThat(stats.snapshot()).containsKeys("lastBatchMillis",
+                "averageBatchMillis", "maxBatchMillis", "positionAgeSeconds");
+    }
+
+    @Test
     void aFanoutTransactionCountsItsTableMetricsOnlyOnce() {
         CdcRuntimeStats stats = new CdcRuntimeStats();
         assertThat(stats.claimFanoutTableMetric("tx-1", "orders", true)).isTrue();

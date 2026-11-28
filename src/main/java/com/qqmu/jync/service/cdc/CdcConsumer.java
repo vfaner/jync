@@ -158,7 +158,7 @@ public final class CdcConsumer implements ManagedCdcConsumer {
                        CdcRuntimeStats stats, SyncProperties properties) {
         this(project, lock, ctx, clientFactory, positionStore, baselineService, taskStore,
                 stateWriter, dataSourceManager, stats, properties,
-                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds(), properties::getBatchSize));
     }
 
     public CdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,

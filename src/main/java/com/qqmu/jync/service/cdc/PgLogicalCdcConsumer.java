@@ -186,7 +186,7 @@ public final class PgLogicalCdcConsumer implements ManagedCdcConsumer {
                                 CdcRuntimeStats stats, SyncProperties properties) {
         this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
                 dataSourceManager, stats, properties,
-                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds(), properties::getBatchSize));
     }
 
     public PgLogicalCdcConsumer(Project project, SyncLockService.LockHandle lock,

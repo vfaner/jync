@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
+import java.util.function.IntSupplier;
 
 import com.qqmu.jync.service.converter.GenericSqlDialect;
 import com.qqmu.jync.service.lob.LobBinder;
@@ -60,6 +61,12 @@ public final class CdcEventApplier {
     /** False for fan-out targets: the shared capture stats count a transaction once. */
     private final boolean countTableMetrics;
 
+    /**
+     * Read for every JDBC batch, not captured once: the system settings page and the AI
+     * assistant update {@code sync.batch-size} while a CDC consumer keeps running.
+     */
+    private final IntSupplier batchSize;
+
     /** No-timeout convenience overload; existing call sites keep their behavior. */
     public CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats) {
         this(ctx, stats, 0);
@@ -76,11 +83,24 @@ public final class CdcEventApplier {
 
     CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats, int queryTimeoutSeconds,
                     CdcWritePlanCache plans, boolean countTableMetrics) {
+        this(ctx, stats, queryTimeoutSeconds, plans, countTableMetrics, ctx::getBatchSize);
+    }
+
+    CdcEventApplier(SyncContext ctx, CdcRuntimeStats stats, int queryTimeoutSeconds,
+                    CdcWritePlanCache plans, boolean countTableMetrics,
+                    IntSupplier batchSize) {
         this.ctx = ctx;
         this.stats = stats;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.plans = plans;
         this.countTableMetrics = countTableMetrics;
+        this.batchSize = batchSize == null ? ctx::getBatchSize : batchSize;
+    }
+
+    /** The live batch budget; a non-positive supplier value falls back to the run context. */
+    private int currentBatchSize() {
+        int value = batchSize.getAsInt();
+        return value > 0 ? value : ctx.getBatchSize();
     }
 
     public void applyUpserts(Connection targetConn, CdcTableBinding binding,
@@ -91,6 +111,7 @@ public final class CdcEventApplier {
         cleanse(binding, rows);
         List<String> columns = projectColumns(targetConn, binding);
         CdcWritePlanCache.UpsertPlan plan = plans.upsertPlan(binding, columns);
+        long started = System.nanoTime();
         try {
             write(targetConn, plan, rows);
         } catch (SQLException e) {
@@ -118,6 +139,8 @@ public final class CdcEventApplier {
             // mismatch: the transaction is replayed (the position does not move), and the
             // projection above makes the replay succeed.
             throw new SQLException("cdc schema mismatch: " + e.getMessage(), e);
+        } finally {
+            stats.recordApplyBatch(System.nanoTime() - started, rows.size());
         }
         if (countTableMetrics) {
             // Per-table accumulation also feeds the global rows-applied total.
@@ -300,13 +323,14 @@ public final class CdcEventApplier {
         // delete would look for a row the target does not hold.
         cleanse(binding, rows);
         CdcWritePlanCache.DeletePlan plan = plans.deletePlan(binding);
+        long started = System.nanoTime();
         try (PreparedStatement ps = targetConn.prepareStatement(plan.sql)) {
             JdbcUtil.applyQueryTimeout(ps, queryTimeoutSeconds);
             int inBatch = 0;
             for (Map<String, Object> row : rows) {
                 JdbcRowMapper.bind(ps, row, plan.pkColumns, plan.types, ctx.getTargetDialect());
                 ps.addBatch();
-                if (++inBatch >= ctx.getBatchSize()) {
+                if (++inBatch >= currentBatchSize()) {
                     ps.executeBatch();
                     inBatch = 0;
                 }
@@ -321,6 +345,8 @@ public final class CdcEventApplier {
                 throw targetTableMissing(binding, e);
             }
             throw e;
+        } finally {
+            stats.recordApplyBatch(System.nanoTime() - started, rows.size());
         }
         if (countTableMetrics) {
             stats.addTableDeletes(binding.getTable(), rows.size());
@@ -362,7 +388,7 @@ public final class CdcEventApplier {
                 JdbcRowMapper.bind(ps, row, plan.bindOrder, plan.types,
                         ctx.getTargetDialect(), lobTracker);
                 ps.addBatch();
-                if (++inBatch >= ctx.getBatchSize()) {
+                if (++inBatch >= currentBatchSize()) {
                     ps.executeBatch();
                     lobTracker.releaseAll();
                     inBatch = 0;

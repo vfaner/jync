@@ -144,7 +144,8 @@ public class SupportAssistantService {
                  本次全量已拷贝行数 → project_table_status：table 是表名子串（不区分
                  大小写），state 可按状态过滤；默认最多返回 20 行，truncated=true 时
                  先报 matched 总数，再列返回的部分，不要把它当成全部
-               - 变更日志（CDC）断流、位点、最近错误、跳过 DDL → cdc_status；某个任务还有哪些
+               - 变更日志（CDC）断流、位点年龄、事件延迟、目标批量耗时、最近错误、跳过 DDL
+                 → cdc_status；某个任务还有哪些
                  未执行/待回放的 DDL 待办 → project_ddl_tasks（只读，最多 20 条）；
                  日志/异常栈 → search_logs（只读，默认当前 jync.log，可按级别/关键词/滚动文件）；
                  日志和文档都没有时，当前部署实例的代码/配置线索 → search_instance_code
@@ -235,9 +236,11 @@ public class SupportAssistantService {
                  min-adaptive-chunk-size、max-retries、fanout.max-targets（均带 sync. 前缀，
                  值为字符串；set 设置、reset 恢复 application.yml 默认）。fanout.max-targets
                  是一源多目标项目的目标总数（含主目标，2–100，默认 20），调整后对新保存 /
-                 修改的目标列表生效，已在运行的项目不会被停掉。其余参数保存后对后续同步
-                 轮次生效，集群其他节点约 30 秒收敛。连接池、超时、线程、保留期、比对 /
-                 删除语义、CDC 事务上限、TLS / 认证 / 密钥等仍不可由助手修改。
+                 修改的目标列表生效，已在运行的项目不会被停掉。`sync.batch-size` 在本节点
+                 保存后对运行中的 CDC 消费者下一批立即生效（消费者每批读取实时值），其他
+                 节点约 30 秒收敛；轮询任务下一轮生效。其余参数保存后对后续同步轮次生效。
+                 连接池、超时、线程、保留期、比对 / 删除语义、CDC 事务上限、TLS / 认证 /
+                 密钥等仍不可由助手修改。
                - 一源多目标（fan-out）：目标列表、事件中转（本地队列 / Redis Stream）与
                  自动同步新增表开关都在任务表单 / 详情页维护，助手没有修改工具。用户问能力
                  时说明：支持六种日志引擎（MySQL binlog、PG 逻辑解码、Oracle / 达梦 LogMiner、
@@ -350,7 +353,8 @@ public class SupportAssistantService {
                   优先于轮询间隔；驱动参数建议要先 connection_details 查当前值与受影响任务，
                   并说明该连接上所有任务都会使用新参数、运行中的任务必须先停止。系统性能
                   参数建议要先 system_params 查有效值与 application.yml 基准，只管理员可用，
-                  只在这 10 项内给建议，并说明后续轮次生效、集群约 30 秒收敛。
+                  只在这 10 项内给建议，并说明 `sync.batch-size` 对运行中 CDC 本节点下一批
+                  立即生效、其他节点约 30 秒收敛，轮询任务下一轮生效。
                8. 用户粘贴的报错或运行日志按用户提供的证据分析：引用其中的异常类名、错误码或
                   关键行，不编造日志里没有的内容；出现「已省略」标记说明日志被截断，指出缺少
                   的部分并请用户单独粘贴关键行；日志里出现密码、连接串或用户名时不要复述；

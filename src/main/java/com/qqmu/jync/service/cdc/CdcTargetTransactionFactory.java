@@ -4,6 +4,7 @@ import java.sql.SQLException;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.IntSupplier;
 
 import com.qqmu.jync.model.Project;
 import com.qqmu.jync.model.SyncTargetKind;
@@ -30,6 +31,8 @@ public class CdcTargetTransactionFactory {
     private final int queryTimeoutSeconds;
     private final RedisTargetService redisTargets;
     private final RedisProjectionWriter redisWriter;
+    /** Live {@code sync.batch-size}; the system settings page may change it while running. */
+    private final IntSupplier batchSize;
     /**
      * "database.table" -> column names seen by earlier transactions of this run, HASH mode only.
      * Transaction-scoped state could never see a layout change (a DDL cannot run inside one
@@ -52,13 +55,18 @@ public class CdcTargetTransactionFactory {
     private final com.qqmu.jync.service.fanout.FanoutRuntimeRegistry fanoutRuntimes;
 
     public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds) {
-        this(stats, queryTimeoutSeconds, null, null, null);
+        this(stats, queryTimeoutSeconds, null, null, null, null);
+    }
+
+    public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds,
+                                       IntSupplier batchSize) {
+        this(stats, queryTimeoutSeconds, null, null, null, batchSize);
     }
 
     public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds,
                                        RedisTargetService redisTargets,
                                        RedisProjectionWriter redisWriter) {
-        this(stats, queryTimeoutSeconds, redisTargets, redisWriter, null);
+        this(stats, queryTimeoutSeconds, redisTargets, redisWriter, null, null);
     }
 
     public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds,
@@ -66,11 +74,21 @@ public class CdcTargetTransactionFactory {
                                        RedisProjectionWriter redisWriter,
                                        com.qqmu.jync.service.fanout.FanoutRuntimeRegistry
                                                fanoutRuntimes) {
+        this(stats, queryTimeoutSeconds, redisTargets, redisWriter, fanoutRuntimes, null);
+    }
+
+    public CdcTargetTransactionFactory(CdcRuntimeStats stats, int queryTimeoutSeconds,
+                                       RedisTargetService redisTargets,
+                                       RedisProjectionWriter redisWriter,
+                                       com.qqmu.jync.service.fanout.FanoutRuntimeRegistry
+                                               fanoutRuntimes,
+                                       IntSupplier batchSize) {
         this.stats = stats;
         this.queryTimeoutSeconds = queryTimeoutSeconds;
         this.redisTargets = redisTargets;
         this.redisWriter = redisWriter;
         this.fanoutRuntimes = fanoutRuntimes;
+        this.batchSize = batchSize;
     }
 
     public CdcTargetTransaction open(Project project, SyncContext ctx) throws SQLException {
@@ -88,7 +106,8 @@ public class CdcTargetTransactionFactory {
             return new RedisCdcTargetTransaction(ctx, redisTargets, redisWriter, stats,
                     hashColumnsByTable);
         }
-        return new JdbcCdcTargetTransaction(ctx, stats, queryTimeoutSeconds, writePlans(ctx));
+        return new JdbcCdcTargetTransaction(ctx, stats, queryTimeoutSeconds, writePlans(ctx),
+                batchSize);
     }
 
     /**

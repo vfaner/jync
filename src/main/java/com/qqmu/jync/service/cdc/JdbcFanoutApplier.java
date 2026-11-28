@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.IntSupplier;
 
 import com.qqmu.jync.service.fanout.CdcBindingResolver;
 import com.qqmu.jync.service.fanout.ChangeEvent;
@@ -37,6 +38,12 @@ public final class JdbcFanoutApplier implements EventApplier {
 
     public JdbcFanoutApplier(SyncContext targetCtx, CdcRuntimeStats stats,
                              CdcBindingResolver bindings, int queryTimeoutSeconds) {
+        this(targetCtx, stats, bindings, queryTimeoutSeconds, null);
+    }
+
+    public JdbcFanoutApplier(SyncContext targetCtx, CdcRuntimeStats stats,
+                             CdcBindingResolver bindings, int queryTimeoutSeconds,
+                             IntSupplier batchSize) {
         this.targetCtx = targetCtx;
         this.bindings = bindings;
         this.stats = stats;
@@ -44,7 +51,7 @@ public final class JdbcFanoutApplier implements EventApplier {
         // instead of parking this target's worker (and its backlog) indefinitely. Table
         // counters are claimed once after commit: every target applies the same transaction.
         this.applier = new CdcEventApplier(targetCtx, stats, queryTimeoutSeconds,
-                new CdcWritePlanCache(targetCtx), false);
+                new CdcWritePlanCache(targetCtx), false, batchSize);
     }
 
     @Override

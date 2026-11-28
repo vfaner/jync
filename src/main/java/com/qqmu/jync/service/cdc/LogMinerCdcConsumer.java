@@ -143,7 +143,7 @@ public final class LogMinerCdcConsumer implements ManagedCdcConsumer {
                                LogMinerSessionFactory sessionFactory) {
         this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
                 dataSourceManager, stats, properties, sessionFactory,
-                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds(), properties::getBatchSize));
     }
 
     public LogMinerCdcConsumer(Project project, SyncLockService.LockHandle lock,

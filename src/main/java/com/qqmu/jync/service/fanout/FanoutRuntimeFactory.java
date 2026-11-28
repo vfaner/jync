@@ -123,6 +123,7 @@ public class FanoutRuntimeFactory {
         // Every target gets the same missing-table repair as a single-target consumer; the
         // service's attempt budget is per project, which is shared by all targets.
         return new FanoutRuntime(sourceCtx, targets, stats, structureSync, progressStore,
-                positionStore, targetRepair, properties.getQueryTimeoutSeconds(), transport);
+                positionStore, targetRepair, properties.getQueryTimeoutSeconds(), transport,
+                properties::getBatchSize);
     }
 }

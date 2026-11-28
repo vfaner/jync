@@ -112,6 +112,9 @@
                          th:attr="data-tip=${#temporals.format(cdcPosition.updatedAt, 'yyyy-MM-dd HH:mm:ss')}"
                          th:text="#{cdc.status.position.updated} + ' '
                                   + ${#temporals.format(cdcPosition.updatedAt, 'MM-dd HH:mm:ss')}">updated</div>
+                    <div class="small muted"
+                         th:if="${cdcPositionAgeSeconds != null}"
+                         th:text="#{cdc.status.position.age(${cdcPositionAgeSeconds})}">age</div>
                 </dd>
             </div>
             <th:block th:if="${stats != null}">
@@ -126,6 +129,15 @@
                 <div class="kv">
                     <dt th:text="#{cdc.status.throughput}">Throughput</dt>
                     <dd th:text="#{cdc.status.throughput.value(${stats.eventsPerSecond})}">0 rows/s</dd>
+                </div>
+                <div class="kv" th:if="${stats.lagSeconds != null and stats.lagSeconds >= 0}">
+                    <dt th:text="#{cdc.status.lag}">Event lag</dt>
+                    <dd th:text="#{cdc.status.lag.value(${stats.lagSeconds})}">0 s</dd>
+                </div>
+                <div class="kv" th:if="${stats.batchCount != null and stats.batchCount > 0}">
+                    <dt th:text="#{cdc.status.batch}">Target batch</dt>
+                    <dd th:text="#{cdc.status.batch.value(${stats.lastBatchMillis},
+                              ${stats.averageBatchMillis}, ${stats.maxBatchMillis})}">0 ms</dd>
                 </div>
                 <div class="kv">
                     <dt th:text="#{cdc.status.rows}">Rows applied</dt>

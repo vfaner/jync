@@ -154,7 +154,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
         this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
                 dataSourceManager, stats, properties, clientFactory, lifecycle,
                 JdbcYStreamServiceOps::new,
-                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds(), properties::getBatchSize));
     }
 
     YStreamCdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,
@@ -166,7 +166,7 @@ public final class YStreamCdcConsumer implements ManagedCdcConsumer {
                        YStreamServiceOpsFactory opsFactory) {
         this(project, lock, ctx, positionStore, baselineService, taskStore, stateWriter,
                 dataSourceManager, stats, properties, clientFactory, lifecycle, opsFactory,
-                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds()));
+                new CdcTargetTransactionFactory(stats, properties.getQueryTimeoutSeconds(), properties::getBatchSize));
     }
 
     YStreamCdcConsumer(Project project, SyncLockService.LockHandle lock, SyncContext ctx,

@@ -417,7 +417,7 @@ public class CdcConsumerManager {
         // the project it hands out publishing transactions instead of direct writes.
         CdcTargetTransactionFactory targetTransactions = new CdcTargetTransactionFactory(
                 stats, properties.getQueryTimeoutSeconds(), redisTargets, redisProjectionWriter,
-                fanoutRuntimes);
+                fanoutRuntimes, properties::getBatchSize);
         ManagedCdcConsumer engine = engineConsumer(project, lock, ctx, strategy, stats,
                 targetTransactions);
         if (fanout && strategy.isLogCdc()) {

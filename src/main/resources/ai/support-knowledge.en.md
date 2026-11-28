@@ -248,7 +248,9 @@ executes once when a worker becomes free.
 
 ## Incremental and CDC batching
 
-- sync.batch-size: default 500, JDBC batch rows for incremental polling and CDC replay.
+- sync.batch-size: default 500, JDBC batch rows for incremental polling and CDC replay. A
+  running CDC consumer on the node where the setting is saved reads the new value for its next
+  batch; other nodes converge within about 30 seconds, and polling uses it on the next round.
 - sync.fetch-size: default 1000, result-set batch for incremental reads.
 - sync.cdc.logminer.batch-size: default 10000, rows per LogMiner batch.
 - Idle sleep: LogMiner and SQL Server default 1000ms, PostgreSQL 500ms, minimum 50ms; MySQL binlog

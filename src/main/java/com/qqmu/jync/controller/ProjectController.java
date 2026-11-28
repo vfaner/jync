@@ -780,6 +780,7 @@ public class ProjectController {
         }
         model.addAttribute("cdcPosition", cdcPosition);
         model.addAttribute("cdcStats", cdcStats);
+        model.addAttribute("cdcPositionAgeSeconds", positionAgeSeconds(cdcPosition));
         model.addAttribute("cdcBaselinePending", cdcActive
                 && (cdcPosition == null || !Boolean.TRUE.equals(cdcPosition.isBaselineDone())));
         model.addAttribute("externalScopeBackfillEligible",
@@ -1086,6 +1087,15 @@ public class ProjectController {
                 && cdcOperationsService.hasLegacyExternalBaselineEvidence(project.getId());
     }
 
+    /** Age of the persisted position, including when the consumer lives on another node. */
+    private static Long positionAgeSeconds(CdcPosition position) {
+        if (position == null || position.getUpdatedAt() == null) {
+            return null;
+        }
+        return Math.max(0L, java.time.Duration.between(
+                position.getUpdatedAt(), java.time.Instant.now()).getSeconds());
+    }
+
     @GetMapping("/{id}/cdc-card")
     public String cdcCardFragment(@PathVariable Long id, Model model) {
         boolean cdcActive = false;
@@ -1108,6 +1118,7 @@ public class ProjectController {
         model.addAttribute("cdcActive", cdcActive);
         model.addAttribute("cdcPosition", cdcPosition);
         model.addAttribute("cdcStats", cdcStats);
+        model.addAttribute("cdcPositionAgeSeconds", positionAgeSeconds(cdcPosition));
         model.addAttribute("cdcBaselinePending", cdcActive
                 && (cdcPosition == null || !Boolean.TRUE.equals(cdcPosition.isBaselineDone())));
         model.addAttribute("externalScopeBackfillEligible",

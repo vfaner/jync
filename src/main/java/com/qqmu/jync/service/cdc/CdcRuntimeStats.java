@@ -168,6 +168,16 @@ public final class CdcRuntimeStats {
      */
     private volatile long connectedAtMillis = -1L;
     private volatile long startedAtMillis;
+    /** Last completed table batch apply duration; -1 before the first batch. */
+    private volatile long lastBatchNanos = -1L;
+    private volatile int lastBatchRows;
+    private final AtomicLong batchCount = new AtomicLong();
+    private final AtomicLong batchRows = new AtomicLong();
+    private final AtomicLong batchNanos = new AtomicLong();
+    private final AtomicLong maxBatchNanos = new AtomicLong();
+    private volatile long lastBatchAtMillis = -1L;
+    /** Last time the applied position moved; -1 before the first recorded position. */
+    private volatile long positionAtMillis = -1L;
 
     /**
      * Per target table, the source columns the projection had to leave out because the
@@ -555,6 +565,68 @@ public final class CdcRuntimeStats {
         this.positionFile = file;
         this.positionPos = pos;
         this.gtidSet = gtidSet;
+        this.positionAtMillis = clockMillis.getAsLong();
+    }
+
+    /**
+     * Records the wall time of one table's apply pass (upserts or deletes) inside a source
+     * transaction. The value is deliberately per-table rather than per-row: it exposes how
+     * long the target takes for a batch, which is the signal for adjusting
+     * {@code sync.batch-size} or investigating a slow target.
+     */
+    public void recordApplyBatch(long nanos, int rows) {
+        if (nanos < 0L) {
+            return;
+        }
+        long bounded = Math.max(0L, nanos);
+        this.lastBatchNanos = bounded;
+        this.lastBatchRows = Math.max(0, rows);
+        this.lastBatchAtMillis = clockMillis.getAsLong();
+        this.batchCount.incrementAndGet();
+        this.batchRows.addAndGet(Math.max(0, rows));
+        this.batchNanos.addAndGet(bounded);
+        maxBatchNanos.accumulateAndGet(bounded, Math::max);
+    }
+
+    /** Rows per second over the batch window, or 0 before any batch. */
+    public double batchRowsPerSecond() {
+        long nanos = batchNanos.get();
+        return nanos <= 0L ? 0.0 : batchRows.get() * 1_000_000_000.0 / nanos;
+    }
+
+    public long lastBatchMillis() {
+        return lastBatchNanos < 0L ? -1L : lastBatchNanos / 1_000_000L;
+    }
+
+    public long averageBatchMillis() {
+        long count = batchCount.get();
+        return count == 0L ? -1L : batchNanos.get() / count / 1_000_000L;
+    }
+
+    public long maxBatchMillis() {
+        long max = maxBatchNanos.get();
+        return max == 0L ? -1L : max / 1_000_000L;
+    }
+
+    public int lastBatchRows() {
+        return lastBatchRows;
+    }
+
+    public long batchCount() {
+        return batchCount.get();
+    }
+
+    public long positionAgeSeconds() {
+        long at = positionAtMillis;
+        if (!connected || at <= 0L) {
+            return -1L;
+        }
+        return Math.max(0L, (clockMillis.getAsLong() - at) / 1000L);
+    }
+
+    public Instant lastBatchAt() {
+        long at = lastBatchAtMillis;
+        return at > 0L ? Instant.ofEpochMilli(at) : null;
     }
 
     public String getPositionFile() {
@@ -572,6 +644,7 @@ public final class CdcRuntimeStats {
     /** LogMiner: record the current SCN watermark shown on the status panel. */
     public void recordPositionScn(long scn) {
         this.positionScn = scn;
+        this.positionAtMillis = clockMillis.getAsLong();
     }
 
     public Long getPositionScn() {
@@ -624,6 +697,7 @@ public final class CdcRuntimeStats {
     /** PG/SQLServer: record the current LSN watermark shown on the status panel. */
     public void recordPositionLsn(String lsn) {
         this.positionLsn = lsn;
+        this.positionAtMillis = clockMillis.getAsLong();
     }
 
     public String getPositionLsn() {
@@ -731,8 +805,16 @@ public final class CdcRuntimeStats {
         snapshot.put("retainedWalLabel", getRetainedWalLabel());
         snapshot.put("retainedWalHigh", retainedWalHigh);
         snapshot.put("lagSeconds", lagSeconds());
+        snapshot.put("positionAgeSeconds", positionAgeSeconds());
         snapshot.put("lastEventAt", getLastEventAt());
         snapshot.put("eventsPerSecond", eventsPerSecond());
+        snapshot.put("batchCount", batchCount());
+        snapshot.put("lastBatchMillis", lastBatchMillis());
+        snapshot.put("averageBatchMillis", averageBatchMillis());
+        snapshot.put("maxBatchMillis", maxBatchMillis());
+        snapshot.put("lastBatchRows", lastBatchRows());
+        snapshot.put("batchRowsPerSecond", batchRowsPerSecond());
+        snapshot.put("lastBatchAt", lastBatchAt());
         snapshot.put("rowsApplied", getRowsApplied());
         snapshot.put("skippedDdl", skippedDdl.get());
         snapshot.put("prunedColumns", prunedColumns.get());

@@ -72,9 +72,9 @@ public class CdcStatusTool implements SupportTool {
 
     public String description() {
         return "Read one project's log-CDC state: capture strategy, whether the consumer runs "
-                + "on this node, its connection, last error, position and skip counters "
-                + "(skipped DDL, pruned columns, missing LOBs). projectId comes from "
-                + "list_projects. Read-only and cheap.";
+                + "on this node, its connection, last error, persisted position age, event lag, "
+                + "target batch latency, and skip counters (skipped DDL, pruned columns, missing "
+                + "LOBs). projectId comes from list_projects. Read-only and cheap.";
     }
 
     public Map<String, Object> parameters() {
@@ -124,6 +124,9 @@ public class CdcStatusTool implements SupportTool {
             p.put("externalBaselineVerifyIssues", position.getExternalBaselineVerifyIssues());
             p.put("externalBaselineVerifiedAt", instant(position.getExternalBaselineVerifiedAt()));
             p.put("updatedAt", instant(position.getUpdatedAt()));
+            p.put("ageSeconds", position.getUpdatedAt() == null ? null
+                    : Math.max(0L, java.time.Duration.between(
+                            position.getUpdatedAt(), Instant.now()).getSeconds()));
             out.put("position", p);
         }
         addFanout(project, config, out);
