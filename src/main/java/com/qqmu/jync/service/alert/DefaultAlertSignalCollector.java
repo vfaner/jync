@@ -19,6 +19,8 @@ import org.springframework.context.MessageSource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import com.qqmu.jync.config.SyncProperties;
+
 import com.qqmu.jync.model.AlertCategory;
 import com.qqmu.jync.model.CaptureStrategy;
 import com.qqmu.jync.model.ChangeLog;
@@ -76,11 +78,17 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
     private final MessageSource messages;
     private final Clock clock;
 
+    /** Optional so hand-built tests keep their constructor; production injects the thresholds. */
+    @Autowired(required = false)
+    private SyncProperties properties;
+
     /**
      * Per-node streak counters. They are deliberately in memory: a node that restarts re-earns
      * the streak, which is cheaper than persisting a count that only gates noise.
      */
     private final Map<Long, Integer> disconnectStreak = new ConcurrentHashMap<>();
+    /** Consecutive one-minute observations of a live but materially lagging CDC stream. */
+    private final Map<Long, Integer> cdcLagStreak = new ConcurrentHashMap<>();
     private final Map<Long, Integer> healthFailureStreak = new ConcurrentHashMap<>();
     private final Set<Long> confirmedUnhealthy = ConcurrentHashMap.newKeySet();
     private final Map<Long, String> healthNames = new ConcurrentHashMap<>();
@@ -314,6 +322,41 @@ public class DefaultAlertSignalCollector implements AlertSignalCollector {
                     "alert.detail.pgSlotBacklog",
                     new Object[]{stats.getRetainedWalLabel(),
                             stats.getRetainedWalBytes()}, now));
+        }
+        collectCdcLag(project, stats, parked, now, events);
+    }
+
+    /**
+     * A live CDC consumer can be connected while its applied position falls behind. Require
+     * three consecutive one-minute observations, and require recent event activity for the
+     * position-age half of the rule: an idle source legitimately does not advance its
+     * position, and alerting on that would train operators to ignore the alert.
+     */
+    private void collectCdcLag(Project project, CdcRuntimeStats stats, boolean parked,
+                               Instant now, List<AlertEvent> events) {
+        if (parked || !stats.isConnected()) {
+            reset(cdcLagStreak, project.getId());
+            return;
+        }
+        long lagWarn = properties == null ? 120L : properties.getCdc().getLagWarnSeconds();
+        long stallWarn = properties == null ? 300L
+                : properties.getCdc().getPositionStallWarnSeconds();
+        long lag = stats.lagSeconds();
+        long positionAge = stats.positionAgeSeconds();
+        Instant lastEvent = stats.getLastEventAt();
+        boolean recentActivity = lastEvent != null
+                && Duration.between(lastEvent, now).getSeconds() <= stallWarn;
+        boolean lagging = (lagWarn > 0L && lag >= lagWarn)
+                || (stallWarn > 0L && positionAge >= stallWarn && recentActivity);
+        if (!lagging) {
+            reset(cdcLagStreak, project.getId());
+            return;
+        }
+        int streak = cdcLagStreak.merge(project.getId(), 1, Integer::sum);
+        if (streak >= 3) {
+            events.add(new AlertEvent(AlertCategory.CDC_LAG, project.getId(),
+                    project.getName(), "", "alert.detail.cdcLag",
+                    new Object[]{lag, positionAge}, now));
         }
     }
 

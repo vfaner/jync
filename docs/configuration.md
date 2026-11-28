@@ -145,6 +145,8 @@ MySQL 源连接由程序自动追加 `netTimeoutForStreamingResults=0`（URL 或
 | `sync.cdc.mssql.max-rows-per-cycle` | `100000` | SQL Server CDC 单周期折叠行数上限，在事务边界停下；`0` 不限 |
 | `sync.cdc.mssql.idle-poll-ms` | `1000` | SQL Server CDC 真空闲休眠 |
 | `sync.cdc.change-window-ms` | `10000` | CDC 变更日志按表聚合窗口；`0` 关闭 |
+| `sync.cdc.lag-warn-seconds` | `120` | 连续三次告警评估中事件延迟超过此值时触发 CDC 消费滞后告警；`0` 关闭该维度 |
+| `sync.cdc.position-stall-warn-seconds` | `300` | 最近仍有事件活动、但位点超过此时间未推进时触发告警；空闲源不会触发；`0` 关闭 |
 | `sync.cdc.target-table-repair-enabled` | `true` | 回放发现目标表被删时，只重建并重灌这张（这几张）表，位点不动 |
 | `sync.cdc.target-table-repair-max-attempts` | `3` | 连续修复仍缺表的上限，达到即停车；任何成功事务都会重置计数 |
 

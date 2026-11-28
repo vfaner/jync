@@ -20,6 +20,12 @@ public enum AlertCategory {
     /** A CDC consumer is parked after a fatal failure, or has been disconnected for a while. */
     CDC_STOPPED("alert.category.cdcStopped"),
 
+    /**
+     * A live CDC consumer is connected but the applied position or event timestamp is
+     * materially behind. Unlike {@link #CDC_STOPPED}, the stream is moving (or trying to).
+     */
+    CDC_LAG("alert.category.cdcLag"),
+
     /** The row-count audit found the target short of rows and started a repair. */
     DATA_DRIFT("alert.category.dataDrift"),
 

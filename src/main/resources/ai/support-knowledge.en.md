@@ -938,9 +938,9 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   retention, supplemental logging, replication or mining privileges, server-id collisions) and list
   every failing item. It opens the source database, runs at most twice per conversation, and needs
   edit rights on the project — the same right as the page's self-check button.
-- It lists the alert conditions active right now (sync failure, stuck polling, CDC stopped, drift,
-  unhealthy connection, PG slot backlog, skipped DDL) and ETL task state: enabled, last run time,
-  success and result line.
+- It lists the alert conditions active right now (sync failure, stuck polling, CDC stopped, CDC
+  lagging, drift, unhealthy connection, PG slot backlog, skipped DDL) and ETL task state: enabled,
+  last run time, success and result line.
 - It diagnoses one ETL task (diagnose_etl_task): enabled, cron validity, in-flight state, both
   connections, the latest result and the last 20 runs with row counts and timestamps — separating
   "running fine with no new data" from "failing all night". A non-null batchId marks a batch member

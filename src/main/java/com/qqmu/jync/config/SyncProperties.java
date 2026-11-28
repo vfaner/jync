@@ -470,6 +470,17 @@ public class SyncProperties {
          * Set to 0 to disable aggregated change logging.
          */
         private long changeWindowMs = 10_000L;
+        /**
+         * Alert threshold for the newest applied event's source timestamp. Three consecutive
+         * one-minute alert evaluations above this value raise CDC_LAG.
+         */
+        private long lagWarnSeconds = 120L;
+        /**
+         * Alert threshold for time since the applied position last moved. It is combined
+         * with recent event activity so an idle source (which legitimately has no position
+         * movement) does not raise a false alarm.
+         */
+        private long positionStallWarnSeconds = 300L;
         /** Handshake timeout for BinaryLogClient.connect(). */
         private long connectTimeoutMs = 10_000L;
         /**

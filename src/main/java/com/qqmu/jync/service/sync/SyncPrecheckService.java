@@ -417,6 +417,30 @@ public class SyncPrecheckService {
         if (strategy == CaptureStrategy.BINLOG_CDC) {
             checkBinlogLayout(ctx, sourceMeta, checks);
         }
+        checkKeylessCdcTables(ctx, sourceMeta, checks);
+    }
+
+    /**
+     * Keyless tables are not a CDC capability gap the stream can recover from: they can only
+     * be seeded during a baseline, and a non-empty target makes even that seed unsafe. Say it
+     * before the operator starts a large baseline, not only after the per-table skip appears
+     * in the change log.
+     */
+    private void checkKeylessCdcTables(SyncContext ctx, DatabaseMeta sourceMeta,
+                                       List<PrecheckReport.Check> checks) {
+        List<String> keyless = new ArrayList<>();
+        for (TableMeta table : sourceMeta.getTables()) {
+            if (ctx.getConfig().includesTable(table.getName()) && !table.hasPrimaryKey()) {
+                keyless.add(table.getName());
+            }
+        }
+        if (keyless.isEmpty()) {
+            return;
+        }
+        String detail = String.join(", ", keyless);
+        checks.add(new PrecheckReport.Check("precheck.cdc.keylessTables",
+                PrecheckReport.Severity.WARN, "CDC", ctx.projectName(),
+                "precheck.cdc.keylessTables", detail));
     }
 
     private void checkBinlogLayout(SyncContext ctx, DatabaseMeta sourceMeta,

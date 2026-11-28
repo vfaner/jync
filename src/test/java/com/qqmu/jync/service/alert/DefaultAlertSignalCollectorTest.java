@@ -302,6 +302,32 @@ class DefaultAlertSignalCollectorTest {
     }
 
     @Test
+    void aLiveLaggingCdcStreamIsReportedAfterThreeObservations() {
+        when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, "orders")));
+        when(cdcManager.strategyOf(any())).thenReturn(CaptureStrategy.BINLOG_CDC);
+        CdcRuntimeStats stats = new CdcRuntimeStats();
+        stats.setConnected(true);
+        // Simulate an event from before this connection? No: it must be after the connection
+        // to count as current lag. Move the connection start back, then apply an older event.
+        org.springframework.test.util.ReflectionTestUtils.setField(stats, "connectedAtMillis",
+                System.currentTimeMillis() - 300_000L);
+        stats.touchEvent(System.currentTimeMillis() - 200_000L);
+        when(cdcManager.statsFor(1L)).thenReturn(stats);
+
+        assertThat(collect()).noneMatch(
+                e -> e.category() == com.qqmu.jync.model.AlertCategory.CDC_LAG);
+        clock.advance(Duration.ofMinutes(1));
+        assertThat(collect()).noneMatch(
+                e -> e.category() == com.qqmu.jync.model.AlertCategory.CDC_LAG);
+        clock.advance(Duration.ofMinutes(1));
+
+        AlertEvent event = only(collect(),
+                com.qqmu.jync.model.AlertCategory.CDC_LAG);
+        assertThat(event.detailKey()).isEqualTo("alert.detail.cdcLag");
+        assertThat(((Number) event.detailArgs()[0]).longValue()).isGreaterThan(120L);
+    }
+
+    @Test
     void aHighPgSlotBacklogIsReported() {
         when(projectRepository.findByEnabledTrue()).thenReturn(List.of(project(1L, "orders")));
         when(cdcManager.strategyOf(any())).thenReturn(CaptureStrategy.PG_LOGICAL_CDC);
