@@ -50,14 +50,19 @@ public class ProjectTableStatusTool implements SupportTool {
     }
 
     public String description() {
-        return "Per-table sync state of one project: COMPLETED (initial full load done), "
-                + "IN_PROGRESS (full load has checkpoints, loading or resumable), INCOMPLETE "
-                + "(progress exists but the initial load never finished), NOT_STARTED (selected "
-                + "but no progress yet), incrementalState (RUNNING/PAUSED/ERROR/LIMITED/"
-                + "WAITING), plus rows changed, last sync time, the current full-load rows "
-                + "copied, and externalBaseline (the table was seeded by an adopted external "
-                + "dump, not a Jync full load). Optional table (case-insensitive substring) and state "
-                + "filters. Cheap metadata read. projectId comes from list_projects.";
+        return "Per-table sync state of one project: COMPLETED (initial full load done; "
+                + "fullLoadPercent is 100 unless externalBaseline), IN_PROGRESS (full load "
+                + "running/resumable, or a cleared cursor is waiting for its full reload), "
+                + "INCOMPLETE (the initial load never finished, or a cleared cursor is awaiting "
+                + "the next reload; a polling task may show this between cycles), NOT_STARTED "
+                + "(selected but no progress yet), incrementalState (RUNNING/PAUSED/ERROR/"
+                + "LIMITED/WAITING), plus rowsSyncedTotal (full load counts rows copied; "
+                + "incremental cycles count actual changes), lastSyncTime (for an active full "
+                + "load this is the newest committed checkpoint), the current full-load rows "
+                + "copied and percentage, and externalBaseline (the table was seeded by an "
+                + "adopted external dump, not a Jync full load). Optional table "
+                + "(case-insensitive substring) and state filters. Cheap metadata read. "
+                + "projectId comes from list_projects.";
     }
 
     public Map<String, Object> parameters() {
@@ -182,7 +187,7 @@ public class ProjectTableStatusTool implements SupportTool {
         out.put("cursorStrategy", row.cursorStrategy());
         out.put("cursorColumn", row.cursorColumn());
         out.put("resumableLoad", row.resumableLoad());
-        out.put("rowsChangedTotal", row.rowsSyncedTotal());
+        out.put("rowsSyncedTotal", row.rowsSyncedTotal());
         out.put("lastSyncTime", row.lastSyncTime() == null
                 ? null : row.lastSyncTime().toString());
         out.put("fullLoadRowsCopied", row.rowsCopied());

@@ -48,9 +48,11 @@ public class ControlProjectTool implements SupportTool {
     public String description() {
         return "Prepare start, stop, a one-off sync, or a CDC baseline rebuild (REBASELINE) "
                 + "for one sync project. Saves nothing and runs nothing: returns a token the "
-                + "user must confirm on a card. REBASELINE clears the position and runs a full "
-                + "load; only suggest it for a parked or expired CDC stream. projectId comes "
-                + "from list_projects. Only projects the caller may edit are accepted.";
+                + "user must confirm on a card. REBASELINE clears the position, table progress "
+                + "and full-load checkpoints; an enabled task restarts with a full load, while "
+                + "a disabled task only resets and needs a later START. Only suggest it for a "
+                + "parked or expired CDC stream. projectId comes from list_projects. Only "
+                + "projects the caller may edit are accepted.";
     }
 
     public Map<String, Object> parameters() {

@@ -776,6 +776,18 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .tip-body.tip-float { position: fixed; top: 0; left: 0; transform: none;
   max-width: calc(100vw - 16px); max-height: 60vh; overflow: hidden; z-index: 1450; }
 .tip-body.tip-float.is-on { opacity: 1; visibility: visible; }
+/* 项目名等纯文本提示：沿用错误详情气泡的白底/圆角/阴影，但改成灰色正文。 */
+.tip-body.tip-float.plain-tip {
+  width: auto; max-width: min(360px, calc(100vw - 16px));
+  background: #fff; color: var(--ink-soft);
+  border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 10px 26px rgba(15, 23, 42, .14);
+}
+[data-theme="dark"] .tip-body.tip-float.plain-tip {
+  background: #1f2937; color: var(--ink-soft);
+  border-color: #4b5563;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, .45);
+}
 /* 变更日志里的错误详情：浅底红字的聊天气泡，默认在错误文字下方居中；下方空间
    不足时由脚本翻到上方，并切换箭头方向。 */
 .tip-body.error-tip {

@@ -618,8 +618,8 @@ class ProjectControllerStrategyTest {
                 .andReturn().getResponse().getContentAsString();
         assertThat(enabledPage).contains(
                 "data-confirm=\"Rebuilding the baseline stops the consumer, clears the"
-                        + " position and reloads the target in full; target data may briefly"
-                        + " lag. Continue?\"");
+                        + " position and table progress, and reloads the target in full;"
+                        + " target data may briefly lag. Continue?\"");
     }
 
     /** The markup strictly inside the baseline group body (up to its own closing div). */

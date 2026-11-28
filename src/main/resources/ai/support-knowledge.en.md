@@ -94,8 +94,12 @@ above that it is skipped.
   full-load progress all update in place - no page reload. Polling pauses while the page is
   hidden and catches up when it comes back.
 - The full-load progress column exists only while a full load is unfinished: loading now, or
-  stopped mid-way with resumable checkpoints. It hides itself once every load completed, and
-  shows "Loading..." before the first checkpoint is written.
+  stopped mid-way with resumable checkpoints. It hides itself once every visible row is at
+  100%; a Jync-completed row shows a green 100%, active rows show an approximate percentage,
+  and an external-baseline row shows "—" (and keeps the column visible); the cell says
+  "Loading..." before the first checkpoint. Lifetime rows synced count rows copied
+  by a full load (even when the target values did not change) and actual changes in later
+  incremental cycles; while a full load runs, last sync is the newest committed checkpoint.
 - The strategy/cursor column shows the resolved strategy badge and cursor column. An em dash
   means the table has no progress row yet, or no usable cursor (incremental state LIMITED).
   A cursor resolved at the end of a full load appears on the next automatic refresh.
@@ -433,13 +437,14 @@ project to be stopped. A failure also returns to the todo. Fan-out stays manual.
 - Rebuild when the position has expired (logs archived or purged), the consumer has been parked by
   repeated failures, or a target table was lost or damaged. Read task state and CDC runtime state
   first, then run the prerequisite self-check to rule out connectivity and privileges.
-- A rebuild stops the consumer, deletes the position, clears every table cursor (the
-  "initial load done" flag stays set, so the target is not truncated by default), lifts the error
-  state, then restarts an enabled task with a full load. A disabled task is only reset; the next
-  start runs the full load.
+- A rebuild stops the consumer, deletes the position, clears every table's progress and
+  full-load checkpoints so it is treated as a first load again, lifts the error state, then
+  restarts an enabled task with a full load. A disabled task is only reset; the next start runs
+  the full load.
 - The full load upserts by primary key: rows still present at the source are inserted or
-  overwritten, and the target is not truncated first. Extra rows already on the target do not
-  disappear because of a rebuild.
+  overwritten, and the target is not truncated by default. If the task explicitly enables
+  "truncate target before initial load", the rebuild's first load will truncate it. Extra rows
+  already on the target do not disappear because of a rebuild.
 - To remove rows the source deleted while the stream was down, enable "sync deletes" before the
   rebuild; enabling it afterwards does not recover the missed deletes. It compares primary keys and
   only deletes, and under log CDC it runs once when the baseline load completes — later deletes are
@@ -465,7 +470,7 @@ project to be stopped. A failure also returns to the todo. Fan-out stays manual.
 - SQL Server: use `SELECT CONVERT(varchar(32), sys.fn_cdc_get_max_lsn(), 1)` (0x prefix, 22 characters). The selected tables must already have CDC capture instances, and the LSN cannot be later than the source's current maximum CDC LSN.
 - Oracle / Dameng: use an SCN (Oracle `SELECT CURRENT_SCN FROM V$DATABASE`; Dameng queries its current SCN). It cannot be earlier than the oldest redo still mineable, nor later than the current SCN.
 - Yashan: use the existing unique YStream service's `RESTART_POSITION`; it must match exactly.
-- Adoption clears the old position, old full-load checkpoints and the ERROR hat; a validation or cleanup failure never marks the baseline done. After adoption `project_table_status` may legitimately show `NOT_STARTED`; do not treat it as "never synced". Use Rebuild baseline to reload. Confirm the target matches the position first: Jync performs no full-load verification.
+- Adoption clears the old position, old full-load checkpoints and the ERROR hat; a validation or cleanup failure never marks the baseline done. Tables covered by the external baseline show `COMPLETED` with `externalBaseline=true` and no cumulative rows or `fullLoadPercent` in `project_table_status`; they are not `NOT_STARTED` and are not "never synced". A legacy all-tables config gets its table list from the external scope. Use Rebuild baseline to reload. Confirm the target matches the position first: Jync performs no full-load verification.
 
 ## When data stops arriving
 
@@ -1022,12 +1027,18 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   strategy, selected-table count, sync data/structure/delete switches, next scheduled run, running
   state, current cycle, last failure and 1-hour metrics.
 - "Has table X finished?" is project_table_status. States: COMPLETED (initial full load done,
-  incremental sync continues), IN_PROGRESS (full-load checkpoints exist; loading or resumable),
-  INCOMPLETE (progress exists but the initial load never finished), NOT_STARTED (selected, no
-  progress yet). Each row carries an incrementalState (RUNNING / PAUSED / ERROR / LIMITED /
-  WAITING, inferred from the project state and the table's cursor capability, not a per-table CDC
-  catch-up proof), cumulative changed rows, last sync time, rows copied by the current full load
-  and the checkpoint update time.
+  incremental sync continues; fullLoadPercent is 100 for a Jync load, absent for an external
+  baseline), IN_PROGRESS (loading/resumable, or a
+  cleared cursor is waiting for its full reload; it may have no fullLoadRowsCopied), INCOMPLETE
+  (the initial load never finished, or a cleared cursor is awaiting the next reload; a polling
+  task may show this between cycles, so do not infer "stopped" without running/lease/schedule),
+  NOT_STARTED
+  (selected, no progress yet). Each row carries an incrementalState (RUNNING / PAUSED / ERROR /
+  LIMITED / WAITING, inferred from the project state and the table's cursor capability, not a
+  per-table CDC catch-up proof), rowsSyncedTotal (lifetime synced rows: full loads count copied
+  rows, incremental cycles count actual changes; not the target's current row count), last sync
+  time (the newest checkpoint while a full load is active), rows copied by the current full load
+  and its percentage, and the checkpoint update time.
 - Filter by table-name substring (case-insensitive) or by state; large projects return per-state
   counts first, and a capped list is marked truncated — report the total, do not present the
   sample as complete.

@@ -29,6 +29,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.qqmu.jync.dto.SyncConfig;
 import com.qqmu.jync.model.AuditAction;
@@ -414,6 +415,22 @@ class CdcOperationsServiceTest {
         assertThat(changeLog.getValue().getChangeType()).isEqualTo(ChangeType.INFO);
         assertThat(changeLog.getValue().getDetails()).contains("baseline rebuilt");
         verify(auditService).record(eq(AuditAction.PROJECT_CDC_REBASELINE), anyString());
+    }
+
+    @Test
+    void rebaselineAlsoClearsPerTargetFanoutProgress() {
+        Project stale = cdcProject("stale");
+        Project fresh = cdcProject("fresh");
+        when(projectRepository.findById(1L))
+                .thenReturn(Optional.of(stale), Optional.of(fresh));
+        com.qqmu.jync.service.fanout.FanoutProgressStore fanoutProgress =
+                org.mockito.Mockito.mock(
+                        com.qqmu.jync.service.fanout.FanoutProgressStore.class);
+        ReflectionTestUtils.setField(service, "fanoutProgressStore", fanoutProgress);
+
+        service.rebaseline(1L);
+
+        verify(fanoutProgress).deleteByProjectId(1L);
     }
 
     /**

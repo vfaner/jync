@@ -47,4 +47,14 @@ public class FanoutProgressStore {
     public void save(FanoutProgress progress) {
         repository.save(progress);
     }
+
+    /**
+     * A rebaseline starts every target from scratch. Leaving fan-out progress behind makes
+     * the detail page keep saying COMPLETED (targetsDone == targetsTotal) while the baseline
+     * is actually rewriting the targets.
+     */
+    @Transactional
+    public void deleteByProjectId(Long projectId) {
+        repository.deleteByProjectId(projectId);
+    }
 }

@@ -76,6 +76,9 @@ public class CdcOperationsService {
     /** Optional for the same reason; production injects it. */
     @Autowired(required = false)
     private AuditEventRepository auditEvents;
+    /** Optional: fan-out progress lives outside sync_progress and must reset on rebaseline. */
+    @Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutProgressStore fanoutProgressStore;
 
     /** Adoption evidence is permanent, but the card polls every 5 seconds; cache briefly. */
     private final java.util.Map<Long, CachedAdoptionEvidence> adoptionEvidence =
@@ -878,6 +881,17 @@ public class CdcOperationsService {
         // changed in between. Clear progress and checkpoints together, before the new
         // anchor is written (recordBaselineAnchor writes first and resets second).
         stateWriter.resetProject(projectId);
+        if (fanoutProgressStore != null) {
+            try {
+                // Fan-out keeps its per-target rows in a separate table; resetProject does
+                // not see them. Otherwise the status page stays COMPLETED while the targets
+                // are being rewritten.
+                fanoutProgressStore.deleteByProjectId(projectId);
+            } catch (RuntimeException e) {
+                log.warn("Could not clear fan-out progress for project {} during rebaseline:"
+                        + " {}", projectId, e.toString());
+            }
+        }
         // Re-read AFTER the stop: the row may have been disabled while the join waited.
         Project fresh = projectRepository.findById(projectId)
                 .orElseThrow(() -> new IllegalArgumentException("error.project.not.found"));

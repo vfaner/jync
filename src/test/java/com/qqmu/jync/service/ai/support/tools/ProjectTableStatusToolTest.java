@@ -74,6 +74,7 @@ class ProjectTableStatusToolTest {
                 .contains("\"table\":\"AUDIT\"")
                 .contains("\"state\":\"NOT_STARTED\"")
                 .contains("\"state\":\"IN_PROGRESS\"")
+                .contains("\"rowsSyncedTotal\":120")
                 .contains("\"fullLoadRowsCopied\":500");
     }
 

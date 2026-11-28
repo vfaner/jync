@@ -46,8 +46,10 @@
                     <tbody>
                     <tr th:each="project : ${projects}" th:with="task=${taskLookup.get(project.id)}">
                         <td>
-                            <!--/* 名称超长省略号截断，悬停 title 看全名（.truncate 复用） */-->
-                            <a class="truncate" style="font-weight:600" th:title="${project.name}"
+                            <!--/* 名称超长省略号截断；用和变更日志同款浮层看全名，而不是
+                                   跟随系统的原生 title。 */-->
+                            <a class="truncate" style="font-weight:600"
+                               th:attr="data-tip=${project.name}, data-tip-style='plain'"
                                th:href="@{/projects/{id}(id=${project.id})}"
                                th:text="${project.name}">Project</a>
                             <div class="small muted truncate" th:if="${project.description}"

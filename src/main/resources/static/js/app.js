@@ -6176,6 +6176,8 @@
       if (!text) { return; }
       var tip = bubbleEl();
       tip.textContent = text;
+      tip.classList.toggle('plain-tip',
+        host.getAttribute('data-tip-style') === 'plain');
       tip.classList.add('is-on');
       var rect = host.getBoundingClientRect();
       var gap = 8;

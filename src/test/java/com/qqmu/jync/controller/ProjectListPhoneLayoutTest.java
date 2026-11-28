@@ -91,6 +91,8 @@ class ProjectListPhoneLayoutTest {
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(html).contains("class=\"tbl tbl-projects\"");
+        assertThat(html).contains("data-tip=\"p1\"")
+                .contains("data-tip-style=\"plain\"");
     }
 
     @Test
