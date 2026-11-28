@@ -18,10 +18,10 @@ import com.qqmu.jync.dto.config.ConfigPackageDtos;
 /**
  * Opens a {@code .jync} package and parses its entries.
  *
- * <p>The envelope is authenticated, so the manifest's hashes are not re-checked here — a package
- * that opens at all is byte-for-byte the one that was sealed. The checks that remain are about the
- * zip: entry names that try to escape, duplicate names, and inflated sizes, because the package is
- * a file someone else produced.
+ * <p>The envelope is authenticated, so a package that opens at all is byte-for-byte the one that
+ * was sealed. The checks that remain are about the zip: entry names that try to escape, duplicate
+ * names, inflated sizes, and a {@code meta.json} that disagrees with the authenticated header —
+ * because the package is a file someone else produced.
  */
 @Component
 public class ConfigPackageReader {
@@ -61,8 +61,14 @@ public class ConfigPackageReader {
         if (meta.schemaVersion() > ConfigPackageFormat.SCHEMA_VERSION) {
             throw new ConfigPackageException("error.config.import.schemaTooNew");
         }
+        // The authenticated header is authoritative; meta.json is only a description. Refuse
+        // a package whose two copies disagree rather than silently importing (or skipping)
+        // state based on whichever one the caller happened to read.
+        if (meta.includeState() != opened.includeState()) {
+            throw new ConfigPackageException("error.config.import.badFormat");
+        }
 
-        ConfigPackageDtos.State state = meta.includeState()
+        ConfigPackageDtos.State state = opened.includeState()
                 ? new ConfigPackageDtos.State(
                         parse(entries, "state/sync-progress.json",
                                 new TypeReference<List<ConfigPackageDtos.SyncProgressDto>>() {

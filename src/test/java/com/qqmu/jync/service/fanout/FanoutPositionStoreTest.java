@@ -59,4 +59,18 @@ class FanoutPositionStoreTest {
         assertThat(existing.getLsn()).isEqualTo("0/16B6C50");
         assertThat(existing.getScn()).isEqualTo(123L);
     }
+
+    @Test
+    void deletingOneTargetLeavesTheOtherTargetsRowsAlone() {
+        store.delete(1L, 9L);
+
+        verify(repository).deleteByProjectIdAndTargetDbId(1L, 9L);
+    }
+
+    @Test
+    void deletingTheProjectDropsEveryTargetsRow() {
+        store.deleteByProjectId(1L);
+
+        verify(repository).deleteByProjectId(1L);
+    }
 }

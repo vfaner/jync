@@ -15,5 +15,8 @@ public interface FanoutPositionRepository extends JpaRepository<FanoutPosition, 
     List<FanoutPosition> findByProjectId(Long projectId);
 
     @Transactional
+    void deleteByProjectIdAndTargetDbId(Long projectId, Long targetDbId);
+
+    @Transactional
     void deleteByProjectId(Long projectId);
 }

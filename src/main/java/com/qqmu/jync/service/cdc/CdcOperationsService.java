@@ -79,6 +79,9 @@ public class CdcOperationsService {
     /** Optional: fan-out progress lives outside sync_progress and must reset on rebaseline. */
     @Autowired(required = false)
     private com.qqmu.jync.service.fanout.FanoutProgressStore fanoutProgressStore;
+    /** Optional: per-target resume points must not survive a rebuilt baseline. */
+    @Autowired(required = false)
+    private com.qqmu.jync.service.fanout.FanoutPositionStore fanoutPositionStore;
 
     /** Adoption evidence is permanent, but the card polls every 5 seconds; cache briefly. */
     private final java.util.Map<Long, CachedAdoptionEvidence> adoptionEvidence =
@@ -889,6 +892,17 @@ public class CdcOperationsService {
                 fanoutProgressStore.deleteByProjectId(projectId);
             } catch (RuntimeException e) {
                 log.warn("Could not clear fan-out progress for project {} during rebaseline:"
+                        + " {}", projectId, e.toString());
+            }
+        }
+        if (fanoutPositionStore != null) {
+            try {
+                // The shared anchor was just dropped. Old per-target positions describe the
+                // previous baseline and would otherwise stay visible until each target's
+                // next commit.
+                fanoutPositionStore.deleteByProjectId(projectId);
+            } catch (RuntimeException e) {
+                log.warn("Could not clear fan-out positions for project {} during rebaseline:"
                         + " {}", projectId, e.toString());
             }
         }

@@ -14,8 +14,8 @@ package com.qqmu.jync.service.config;
  *
  * <p>The first six bytes stay in the clear so a later version can recognise its own files without
  * a passphrase, and are fed to the cipher as additional authenticated data so the flags cannot be
- * edited in place. Everything else — including the zip's entry names and the manifest — is inside
- * the ciphertext.
+ * edited in place. Everything else — including the zip's entry names — is inside the
+ * ciphertext.
  */
 public final class ConfigPackageFormat {
 

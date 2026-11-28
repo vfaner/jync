@@ -31,6 +31,22 @@ public class FanoutPositionStore {
         return repository.findByProjectId(projectId);
     }
 
+    /** Drops one target's resume point when that target leaves the project's fan-out set. */
+    @Transactional
+    public void delete(Long projectId, Long targetDbId) {
+        repository.deleteByProjectIdAndTargetDbId(projectId, targetDbId);
+    }
+
+    /**
+     * Drops every target's resume point. A rebuilt baseline starts from a fresh shared
+     * anchor; the old per-target rows would otherwise be shown until each target's next
+     * commit and can outlive the topology that produced them.
+     */
+    @Transactional
+    public void deleteByProjectId(Long projectId) {
+        repository.deleteByProjectId(projectId);
+    }
+
     @Transactional
     public void advance(Long projectId, Long targetDbId, String file, long pos, String gtidSet,
                         String lsn, Long scn) {

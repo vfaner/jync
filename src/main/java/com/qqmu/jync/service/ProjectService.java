@@ -824,20 +824,22 @@ public class ProjectService {
         }
         project.setSyncConfig(contextFactory.serializeConfig(config));
         Project saved = projectRepository.save(project);
-        cleanupRemovedSpoolTargets(projectId, old, clean);
+        cleanupRemovedFanoutTargets(projectId, old, clean);
         cleanupRedisAfterFanoutChange(projectId, existingTransport, existingRedisTarget,
                 cleanTransport, cleanRedisTarget, old, clean);
         return saved;
     }
 
     /**
-     * A removed target's local spool files are a previous generation's queue. Re-adding the
-     * same connection would otherwise resume from its old offset, replaying stale events
-     * before the fresh baseline rows. Best-effort: a file-system error must not fail the
+     * A removed target's position, progress and local spool files describe a topology that no
+     * longer exists. Re-adding the same connection would otherwise resume from its old spool
+     * offset, replay stale events before the fresh baseline rows, and keep showing rows that
+     * the current target set never produced. The rows are deleted in the same transaction as
+     * the configuration; spool cleanup stays best-effort so a file-system error cannot undo a
      * saved configuration.
      */
-    private void cleanupRemovedSpoolTargets(Long projectId, java.util.List<Long> oldTargets,
-                                            java.util.List<Long> newTargets) {
+    private void cleanupRemovedFanoutTargets(Long projectId, java.util.List<Long> oldTargets,
+                                             java.util.List<Long> newTargets) {
         java.util.Set<Long> removed = new java.util.LinkedHashSet<>(oldTargets);
         removed.removeAll(newTargets);
         if (removed.isEmpty()) {
@@ -846,6 +848,12 @@ public class ProjectService {
         java.nio.file.Path dir = java.nio.file.Path.of("data", "fanout",
                 String.valueOf(projectId));
         for (Long targetId : removed) {
+            if (fanoutPositions != null) {
+                fanoutPositions.deleteByProjectIdAndTargetDbId(projectId, targetId);
+            }
+            if (fanoutProgress != null) {
+                fanoutProgress.deleteByProjectIdAndTargetDbId(projectId, targetId);
+            }
             for (String suffix : List.of(".log", ".offset", ".failed")) {
                 try {
                     java.nio.file.Files.deleteIfExists(dir.resolve(targetId + suffix));

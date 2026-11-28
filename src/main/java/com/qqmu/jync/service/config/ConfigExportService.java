@@ -216,8 +216,6 @@ public class ConfigExportService {
                         syncProperties.getCryptoSalt(), cryptoUtil.isUsingDefaultKey()),
                 counts)));
 
-        entries.put("manifest.json", json(ConfigManifest.of(entries)));
-
         // The reader refuses a package whose entries unpack past the uncompressed cap, so an
         // export that would exceed it must fail here — otherwise the file the page just
         // downloaded can never be imported back.

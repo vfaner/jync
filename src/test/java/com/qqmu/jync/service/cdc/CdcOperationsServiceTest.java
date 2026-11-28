@@ -418,7 +418,7 @@ class CdcOperationsServiceTest {
     }
 
     @Test
-    void rebaselineAlsoClearsPerTargetFanoutProgress() {
+    void rebaselineAlsoClearsPerTargetFanoutState() {
         Project stale = cdcProject("stale");
         Project fresh = cdcProject("fresh");
         when(projectRepository.findById(1L))
@@ -426,11 +426,16 @@ class CdcOperationsServiceTest {
         com.qqmu.jync.service.fanout.FanoutProgressStore fanoutProgress =
                 org.mockito.Mockito.mock(
                         com.qqmu.jync.service.fanout.FanoutProgressStore.class);
+        com.qqmu.jync.service.fanout.FanoutPositionStore fanoutPosition =
+                org.mockito.Mockito.mock(
+                        com.qqmu.jync.service.fanout.FanoutPositionStore.class);
         ReflectionTestUtils.setField(service, "fanoutProgressStore", fanoutProgress);
+        ReflectionTestUtils.setField(service, "fanoutPositionStore", fanoutPosition);
 
         service.rebaseline(1L);
 
         verify(fanoutProgress).deleteByProjectId(1L);
+        verify(fanoutPosition).deleteByProjectId(1L);
     }
 
     /**

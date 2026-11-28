@@ -58,6 +58,7 @@ class ProjectServiceFanoutTest {
     private CdcPositionStore positionStore;
     private SyncProgressRepository progressRepository;
     private com.qqmu.jync.repository.FanoutProgressRepository fanoutProgressRepository;
+    private com.qqmu.jync.repository.FanoutPositionRepository fanoutPositionRepository;
     private ProjectService service;
 
     @BeforeEach
@@ -69,6 +70,7 @@ class ProjectServiceFanoutTest {
         positionStore = mock(CdcPositionStore.class);
         progressRepository = mock(SyncProgressRepository.class);
         fanoutProgressRepository = mock(com.qqmu.jync.repository.FanoutProgressRepository.class);
+        fanoutPositionRepository = mock(com.qqmu.jync.repository.FanoutPositionRepository.class);
         service = new ProjectService(projectRepository, databaseConfigRepository,
                 progressRepository, mock(ChangeLogRepository.class),
                 mock(ChunkCheckpointRepository.class), mock(DataSourceManager.class),
@@ -84,6 +86,8 @@ class ProjectServiceFanoutTest {
         when(contextFactory.serializeConfig(any())).thenReturn("{}");
         org.springframework.test.util.ReflectionTestUtils.setField(service, "fanoutProgress",
                 fanoutProgressRepository);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "fanoutPositions",
+                fanoutPositionRepository);
     }
 
     private static com.qqmu.jync.model.FanoutProgress fanoutRow(long targetId, boolean done) {
@@ -220,6 +224,22 @@ class ProjectServiceFanoutTest {
 
         assertThat(savedConfig().getFanoutTargetDbIds()).isEmpty();
         verify(positionStore).delete(1L);
+        verify(fanoutPositionRepository).deleteByProjectIdAndTargetDbId(1L, 3L);
+        verify(fanoutProgressRepository).deleteByProjectIdAndTargetDbId(1L, 3L);
+    }
+
+    @Test
+    void anUnchangedTargetKeepsItsPositionAndProgress() {
+        project(DatabaseType.MYSQL);
+        SyncConfig config = givenConfig(CaptureStrategy.BINLOG_CDC);
+        config.setFanoutTargetDbIds(new java.util.ArrayList<>(List.of(3L)));
+
+        service.configureFanout(1L, List.of(3L));
+
+        verify(fanoutPositionRepository, never())
+                .deleteByProjectIdAndTargetDbId(anyLong(), anyLong());
+        verify(fanoutProgressRepository, never())
+                .deleteByProjectIdAndTargetDbId(anyLong(), anyLong());
     }
 
     @Test

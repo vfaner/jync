@@ -9,9 +9,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -83,7 +81,6 @@ class ConfigExportServiceTest {
             "config/projects.json",
             "config/redis-targets.json",
             "config/system-settings.json",
-            "manifest.json",
             "meta.json");
 
     private static final List<String> STATE_ENTRIES = List.of(
@@ -228,7 +225,7 @@ class ConfigExportServiceTest {
 
         // The sealed outer bytes carry none of the entry names or field names.
         String sealed = new String(pkg.bytes(), StandardCharsets.ISO_8859_1);
-        assertThat(sealed).doesNotContain("databaseName", "config/database-configs.json", "manifest");
+        assertThat(sealed).doesNotContain("databaseName", "config/database-configs.json");
     }
 
     @Test
@@ -248,27 +245,6 @@ class ConfigExportServiceTest {
                 .isEqualTo(syncProperties.getCryptoSalt());
         assertThat(meta.get("counts").get("databases").asInt()).isEqualTo(1);
         assertThat(meta.get("counts").get("users").asInt()).isEqualTo(1);
-    }
-
-    @Test
-    @DisplayName("the manifest hashes every other entry and not itself")
-    void manifestCoversEveryEntry() throws IOException {
-        databaseConfigs.save(database("orders", "enc:a2V5"));
-
-        Map<String, byte[]> entries = entriesOf(export(false));
-        JsonNode manifest = json(entries, "manifest.json");
-
-        assertThat(manifest.get("entries")).hasSize(entries.size() - 1);
-        Set<String> covered = new TreeSet<>();
-        for (JsonNode item : manifest.get("entries")) {
-            String name = item.get("name").asString();
-            covered.add(name);
-            assertThat(item.get("size").asLong()).isEqualTo(entries.get(name).length);
-            assertThat(item.get("sha256").asString())
-                    .isEqualTo(ConfigPackageWriter.sha256Hex(entries.get(name)));
-        }
-        assertThat(covered).doesNotContain("manifest.json");
-        assertThat(covered).hasSize(CONFIG_ENTRIES.size() - 1);
     }
 
     @Test
