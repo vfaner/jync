@@ -52,12 +52,23 @@ final class EtlTaskValidation {
     }
 
     /**
+     * Same-endpoint guard for the run path. Save/precheck uses {@link #validateConnections},
+     * but a connection edit or config import can bypass it; the runner must re-check before
+     * an OVERWRITE deletes rows from the source it is about to read.
+     */
+    static void rejectSameEndpoint(DatabaseConfig source, DatabaseConfig target) {
+        if (source != null && target != null && sameEndpoint(source, target)) {
+            throw new IllegalArgumentException("error.etl.same.database");
+        }
+    }
+
+    /**
      * Same physical endpoint and schema, ignoring credentials. Different schemas are a
      * legitimate ETL direction (copy one schema into another in the same server), so the
      * schema is part of the identity here; a custom URL is compared verbatim when set.
      */
-    private static boolean sameEndpoint(com.qqmu.jync.model.DatabaseConfig source,
-                                        com.qqmu.jync.model.DatabaseConfig target) {
+    static boolean sameEndpoint(com.qqmu.jync.model.DatabaseConfig source,
+                                com.qqmu.jync.model.DatabaseConfig target) {
         if (source.getType() != target.getType()) {
             return false;
         }

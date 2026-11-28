@@ -35,7 +35,10 @@ import lombok.extern.slf4j.Slf4j;
 public class SsoHeaderAuthenticationFilter extends OncePerRequestFilter {
 
     private static final List<String> SKIPPED_PATHS = List.of(
-            "/login", "/login/local", "/login/oa", "/favicon.ico", "/error");
+            "/login", "/login/local", "/login/oa", "/favicon.ico", "/error",
+            // SecurityConfig leaves this endpoint public; the controller checks its own
+            // bearer token. Header-SSO must not turn a Prometheus scrape into a 403/302.
+            "/api/metrics/prometheus");
     private static final List<String> SKIPPED_PREFIXES = List.of(
             "/sso/", "/css/", "/js/", "/img/", "/vendor/", "/assets/");
 

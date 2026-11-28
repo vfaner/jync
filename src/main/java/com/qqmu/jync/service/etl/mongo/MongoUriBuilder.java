@@ -105,6 +105,7 @@ public final class MongoUriBuilder {
         int question = rest.indexOf('?');
         if (question >= 0) {
             query = rest.substring(question + 1).trim();
+            rejectSecretsInQuery(query);
             rest = rest.substring(0, question);
         }
 
@@ -209,6 +210,33 @@ public final class MongoUriBuilder {
             uri.append('&');
         }
         uri.append(added);
+    }
+
+    /**
+     * The pasted query is kept verbatim, but a secret in it would bypass the encrypted
+     * password field exactly like a userinfo password. Reject the driver's password-shaped
+     * option names; ordinary connection options (authSource, replicaSet, tls, ...) pass.
+     */
+    private static void rejectSecretsInQuery(String query) {
+        if (!StringUtils.hasText(query)) {
+            return;
+        }
+        for (String token : query.split("[&;]")) {
+            int eq = token.indexOf('=');
+            String rawKey = (eq >= 0 ? token.substring(0, eq) : token).trim();
+            String key;
+            try {
+                key = java.net.URLDecoder.decode(rawKey, StandardCharsets.UTF_8)
+                        .toLowerCase(Locale.ROOT);
+            } catch (IllegalArgumentException e) {
+                // Malformed percent escape: the driver would reject it later, so do not
+                // let it smuggle a password-shaped key past this check.
+                throw new IllegalArgumentException("error.mongodb.uri.invalid");
+            }
+            if (key.equals("user") || key.contains("password")) {
+                throw new IllegalArgumentException("error.mongodb.uri.passwordInUrl");
+            }
+        }
     }
 
     private static Map<String, String> parseExtraParams(String extraParams) {

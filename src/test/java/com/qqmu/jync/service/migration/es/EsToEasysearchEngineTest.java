@@ -463,6 +463,20 @@ class EsToEasysearchEngineTest {
     }
 
     @Test
+    void clusterIdentityWinsOverDifferentEndpointSpellings() throws Exception {
+        when(sourceClient.get("/")).thenReturn(json("{\"cluster_uuid\":\"same-id\"}"));
+        when(targetClient.get("/")).thenReturn(json("{\"cluster_uuid\":\"same-id\"}"));
+
+        assertThat(EsToEasysearchEngine.sameCluster(sourceClient, targetClient, source, target))
+                .as("localhost vs 127.0.0.1 must still be recognized as one cluster")
+                .isTrue();
+
+        when(targetClient.get("/")).thenReturn(json("{\"cluster_uuid\":\"other-id\"}"));
+        assertThat(EsToEasysearchEngine.sameCluster(sourceClient, targetClient, source, target))
+                .isFalse();
+    }
+
+    @Test
     void aliasesAreCopiedWhenTheOptionIsOn() throws Exception {
         stubCat("orders");
         stubSourceIndex("orders");

@@ -16,7 +16,6 @@ import com.qqmu.jync.service.sync.ColumnCleanser;
 import com.qqmu.jync.service.sync.EmulatedUpsert;
 import com.qqmu.jync.service.sync.JdbcRowMapper;
 import com.qqmu.jync.service.sync.SyncContext;
-import com.qqmu.jync.service.sync.UniqueViolations;
 import com.qqmu.jync.util.CollectionUtil;
 import com.qqmu.jync.util.JdbcUtil;
 import com.qqmu.jync.util.TargetTableVerifier;

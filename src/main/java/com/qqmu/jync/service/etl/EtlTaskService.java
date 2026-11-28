@@ -412,7 +412,12 @@ public class EtlTaskService {
     }
 
     private static boolean extractionChanged(EtlTask before, EtlTask after) {
-        return !Objects.equals(before.getSourceDbId(), after.getSourceDbId())
+        boolean renamed = !Objects.equals(trim(before.getName()), trim(after.getName()));
+        return (renamed && (usesTaskName(before) || usesTaskName(after)))
+                // ${taskName} is a built-in SQL variable: only a task whose SQL actually
+                // references it changes its row set on rename. A plain rename must not
+                // discard a resume checkpoint or block a running task.
+                || !Objects.equals(before.getSourceDbId(), after.getSourceDbId())
                 || !Objects.equals(before.getTargetDbId(), after.getTargetDbId())
                 // A blank SQL and a missing one are the same absence: a Mongo task stores ""
                 // and its edit form sends null, which must not read as an extraction change.
@@ -427,6 +432,18 @@ public class EtlTaskService {
                 || !Objects.equals(trim(before.getResumeKeyColumn()), trim(after.getResumeKeyColumn()))
                 || !Objects.equals(trim(before.getUpsertKeyColumns()),
                         trim(after.getUpsertKeyColumns()));
+    }
+
+    private static boolean usesTaskName(EtlTask task) {
+        return containsTaskName(task.getSourceSql())
+                || containsTaskName(task.getPreSql())
+                || containsTaskName(task.getPostSql())
+                || containsTaskName(task.getRangeCondition())
+                || containsTaskName(task.getVariables());
+    }
+
+    private static boolean containsTaskName(String value) {
+        return value != null && value.contains("${taskName}");
     }
 
     private static String trim(String value) {

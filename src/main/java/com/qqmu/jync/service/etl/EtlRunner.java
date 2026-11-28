@@ -523,6 +523,14 @@ public class EtlRunner {
             // native Mongo preset can never be the target of a copy.
             throw new EtlProgramException("error.etl.target.readOnly");
         }
+        try {
+            // Connection rows can be edited after save or installed by a config import, so
+            // re-check identity on every run. OVERWRITE would otherwise delete the rows the
+            // extraction is about to read.
+            EtlTaskValidation.rejectSameEndpoint(sourceConfig, targetConfig);
+        } catch (IllegalArgumentException e) {
+            throw new EtlProgramException(e.getMessage());
+        }
         if (sourceConfig != null
                 && sourceConfig.effectiveType() == DatabaseType.MONGODB_NATIVE) {
             validateMongoSource(task);

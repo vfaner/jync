@@ -86,6 +86,17 @@ class HeaderSsoAuthenticationFilterTest {
     }
 
     @Test
+    void thePublicPrometheusEndpointIsNotIntercepted() throws Exception {
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request("/api/metrics/prometheus", "127.0.0.1"),
+                new MockHttpServletResponse(), chain);
+
+        assertThat(chain.getRequest()).isNotNull();
+        verify(configService, never()).load();
+    }
+
+    @Test
     void aTrustedPeerWithTheIdentityHeaderBecomesASession() throws Exception {
         configureSharedSecret();
         MockHttpServletRequest request = request("/", "127.0.0.1");

@@ -148,6 +148,16 @@ class MongoUriBuilderTest {
     }
 
     @Test
+    void aPasswordInTheCustomUriQueryIsRejected() {
+        DatabaseConfig c = config();
+        c.setCustomUrl("mongodb://mongo.internal/shop?password=hunter2&authSource=admin");
+
+        assertThatThrownBy(() -> MongoUriBuilder.build(c, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("error.mongodb.uri.passwordInUrl");
+    }
+
+    @Test
     void aJdbcPrefixedUriIsRejected() {
         DatabaseConfig c = config();
         c.setCustomUrl("jdbc:mongodb://mongo.internal/shop");

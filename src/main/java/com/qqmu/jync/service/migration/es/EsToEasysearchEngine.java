@@ -83,7 +83,7 @@ final class EsToEasysearchEngine {
         // Two connection rows may point at the SAME cluster (a common way to test a copy).
         // With the default SAME naming and OVERWRITE this would delete the source index
         // before a single document is read, and the run would report SUCCESS 0/0.
-        boolean sameEndpoint = sameEndpoint(source, target);
+        boolean sameEndpoint = sameCluster(sourceClient, targetClient, source, target);
         for (EsIndexSupport.IndexSummary summary : indices) {
             String targetIndex;
             try {
@@ -482,6 +482,34 @@ final class EsToEasysearchEngine {
     private static final class Progress {
         long read;
         long written;
+    }
+
+    /**
+     * Cluster identity first: two URLs can name the same cluster (host alias, loopback vs IP,
+     * a load balancer), and deleting the source index under OVERWRITE is unrecoverable. Fall
+     * back to the configured endpoint only when the cluster does not expose an identity.
+     */
+    static boolean sameCluster(SearchHttpClient sourceClient,
+                               SearchHttpClient targetClient,
+                               MigrationConnection source,
+                               MigrationConnection target) {
+        try {
+            String sourceId = clusterUuid(sourceClient);
+            String targetId = clusterUuid(targetClient);
+            if (sourceId != null && targetId != null) {
+                return sourceId.equals(targetId);
+            }
+        } catch (RuntimeException e) {
+            // Root info may be blocked on a hardened cluster; the endpoint comparison is the
+            // conservative fallback, not a license to skip the guard.
+        }
+        return sameEndpoint(source, target);
+    }
+
+    private static String clusterUuid(SearchHttpClient client) {
+        JsonNode root = client.get("/");
+        String uuid = root == null ? null : root.path("cluster_uuid").asText(null);
+        return uuid == null || uuid.isBlank() ? null : uuid;
     }
 
     /** Same endpoint after trimming a trailing slash; host case does not identify a cluster. */

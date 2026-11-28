@@ -254,6 +254,23 @@ class EtlTaskServiceTest {
         verify(checkpointStore, never()).clear(eq(5L));
     }
 
+    @Test
+    void renamingATaskWhoseSqlUsesTaskNameClearsTheCheckpoint() {
+        stubConnections(1L, 2L);
+        EtlTask existing = existing(5L, "SELECT id FROM src WHERE tenant = '${taskName}'");
+        when(taskRepository.findById(5L)).thenReturn(Optional.of(existing));
+        when(taskRepository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        EtlTask edit = form(1L, 2L);
+        edit.setId(5L);
+        edit.setSourceSql("SELECT id FROM src WHERE tenant = '${taskName}'");
+        edit.setName("renamed");
+
+        service.save(edit, AccessGuard.system());
+
+        verify(checkpointStore).clear(5L);
+    }
+
     /**
      * The runner loaded its SQL and resume key when it started; a save that clears the
      * checkpoint mid-run is then overwritten by the old query's next checkpoint, and the
