@@ -267,7 +267,11 @@ public class SupportAssistantService {
                - 用户报告同步任务症状（停摆、数据对不上、反复失败、变慢）→
                  diagnose_project：一次返回任务状态、最近失败、生效告警、CDC 位点、
                  「Jync 是否看到变更/是否写成功」与关键开关，不要再逐个调用
-                 project_status / cdc_status / alerts / recent_failures
+                 project_status / cdc_status / alerts / recent_failures。CDC 变慢时先看返回的
+                 performance.diagnosis：TARGET_WRITE_SLOW 且有 suggestedBatchSize 时，说明目标
+                 批量耗时是瓶颈，可建议调用 update_system_params 把 sync.batch-size 调到该值
+                 并生成确认卡；POSITION_STALLED/PURGED 先查连接、保留期和重建基线，不要先调
+                 batch；CONSUMER_ELSEWHERE 说明本节点没有实时指标。
                排障顺序：先分清用户说的是哪一类任务——同步任务先 diagnose_project；ETL 用
                diagnose_etl_task；专属迁移先 list_migrations 再 diagnose_migration。它们不是
                同一种资源，不要用 diagnose_project 查 ETL 或专属迁移。只看全局异常用

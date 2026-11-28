@@ -324,6 +324,26 @@ class DataSyncServiceChunkedLoadTest {
     }
 
     @Test
+    void aCdcBaselineSkipsAKeylessTableInsteadOfFailingTheWholeBaseline() throws SQLException {
+        exec(source, "CREATE TABLE LOGS (LINE VARCHAR(50))");
+        exec(target, "CREATE TABLE LOGS (LINE VARCHAR(50))");
+        exec(source, "INSERT INTO LOGS VALUES ('a'), ('b')");
+        exec(target, "INSERT INTO LOGS VALUES ('existing')");
+        DataSyncService service = service(2);
+        TableMeta table = new TableMeta();
+        table.setName("LOGS");
+
+        DataSyncService.TableSyncResult result = service.syncTable(source, target, table,
+                CursorStrategy.fullCompare("no usable cursor"), new SyncProgress(),
+                ctx.toBuilder().cdcBaselineRun(true).build());
+
+        assertThat(result.isSuccess()).as(result.getError()).isTrue();
+        assertThat(result.isSkipped()).isTrue();
+        assertThat(result.getSkipReason()).contains("keyless table");
+        assertThat(count("LOGS")).isEqualTo(1);
+    }
+
+    @Test
     void chunkSizeZeroDisablesChunkingEntirely() throws SQLException {
         createItems(5);
         DataSyncService service = service(0);

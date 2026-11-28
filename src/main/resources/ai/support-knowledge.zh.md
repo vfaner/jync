@@ -772,6 +772,10 @@ sync.audit-retention-days，每小时自动清理，设 0 关闭）；系统日�
   取齐任务状态、最近失败、生效告警、CDC 位点与关键开关（captureStrategy、syncDeletes、
   truncateBeforeInitialLoad、fullCompareMaxRows、deleteCompareMaxRows）；同时给出「最近一次
   变更」与「最近一次成功写入」的时间，用来区分没看到变更（读侧）与看到却写失败（写侧）。
+  CDC 还会返回 `performance.diagnosis`：PURGED、CONSUMER_ELSEWHERE、BASELINE_RUNNING、
+  POSITION_STALLED、TARGET_WRITE_SLOW、CATCHING_UP、HEALTHY；TARGET_WRITE_SLOW 且带
+  suggestedBatchSize 时，可建议用 update_system_params 调大 sync.batch-size 并生成确认卡，
+  确认后本节点运行中的 CDC 下一批生效。
 - 回答按「结论 → 依据 → 建议 → 可执行项」组织：可执行项对应运行态操作，以确认卡呈现，
   每张卡是一个可选方案，用户点「确认执行」才会生效；改任务配置、删目标表、重跑外部报表
   作业这类助手不能执行的动作会写成人工步骤，不会伪装成确认卡。

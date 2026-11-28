@@ -129,6 +129,36 @@ class DiagnoseProjectToolTest {
         assertThat(failureArgs.getValue().path("hours").asInt()).isEqualTo(24);
     }
 
+    @Test
+    void flagsATargetWriteBottleneckAndSuggestsABatchIncrease() throws Exception {
+        Project project = project(7L, "orders");
+        when(projects.findById(7L)).thenReturn(Optional.of(project));
+        SyncConfig config = new SyncConfig();
+        config.setCaptureStrategy(CaptureStrategy.BINLOG_CDC);
+        when(projects.loadConfig(project)).thenReturn(config);
+        when(status.execute(any(), eq(ctx))).thenReturn(Map.of("name", "orders",
+                "running", true));
+        when(cdc.execute(any(), eq(ctx))).thenReturn(Map.of(
+                "consumerHeldHere", true,
+                "stats", Map.of("connected", true, "lagSeconds", 120L,
+                        "averageBatchMillis", 500L, "maxBatchMillis", 900L,
+                        "batchRowsPerSecond", 800L),
+                "position", Map.of("baselineDone", true, "ageSeconds", 10L)));
+        when(failures.execute(any(), eq(ctx))).thenReturn(List.of());
+        when(alerts.execute(any(), eq(ctx))).thenReturn(List.of());
+
+        ObjectNode args = mapper.createObjectNode();
+        args.put("projectId", 7L);
+        JsonNode out = run(args);
+
+        assertThat(out.path("performance").path("diagnosis").asString())
+                .isEqualTo("TARGET_WRITE_SLOW");
+        assertThat(out.path("performance").path("suggestedBatchSize").asInt())
+                .isEqualTo(2000);
+        assertThat(out.path("performance").path("suggestedParameter").asString())
+                .isEqualTo("sync.batch-size");
+    }
+
     private static ChangeLog change(String table, ChangeType type, boolean success, Instant at) {
         ChangeLog row = ChangeLog.of(7L, ObjectType.TABLE, table, type, "detail");
         row.setSuccess(success);

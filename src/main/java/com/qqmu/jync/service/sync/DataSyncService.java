@@ -740,6 +740,21 @@ public class DataSyncService {
         }
         String state = empty == null ? "could not be checked for emptiness"
                 : "already holds rows";
+        if (ctx.isCdcBaselineRun()) {
+            // A keyless table cannot be tracked by CDC at all: it is seeded once and then
+            // only live polling/structure work can touch it. Failing the whole baseline
+            // because its target already holds rows makes every reconnect retry the same
+            // full load forever, while keyed tables never start streaming. Skip this table
+            // and let the baseline complete; the CDC card still lists it as unsupported.
+            result.skipped = true;
+            result.deletionSyncStillValid = false;
+            result.skipReason = "CDC baseline skipped keyless table " + table.getName()
+                    + ": the target table " + targetTable + " " + state
+                    + " and CDC cannot address rows without a primary key. Empty the target"
+                    + " or add a primary key to seed it.";
+            log.warn("{}", result.skipReason);
+            return true;
+        }
         result.error = "Full load of keyless table " + table.getName() + " was skipped: the"
                 + " target table " + targetTable + " " + state + ", and without a primary key"
                 + " a full load would insert every source row again as a duplicate. Empty the"

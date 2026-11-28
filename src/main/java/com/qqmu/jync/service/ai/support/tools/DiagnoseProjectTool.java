@@ -74,8 +74,11 @@ public class DiagnoseProjectTool implements SupportTool {
                 + "repeated failures): task state and progress, active alerts, failed rows from "
                 + "the last N hours (default 24, max 168), CDC position and the settings that "
                 + "explain a mismatch (syncDeletes, truncateBeforeInitialLoad, compare limits). "
-                + "Prefer this over calling project_status, cdc_status, alerts and "
-                + "recent_failures one by one. projectId comes from list_projects. Cheap.";
+                + "For CDC it also returns performance.diagnosis (PURGED, CONSUMER_ELSEWHERE, "
+                + "POSITION_STALLED, TARGET_WRITE_SLOW, CATCHING_UP, HEALTHY) and a suggested "
+                + "sync.batch-size when target batches are the bottleneck. Prefer this over "
+                + "calling project_status, cdc_status, alerts and recent_failures one by one. "
+                + "projectId comes from list_projects. Cheap.";
     }
 
     public Map<String, Object> parameters() {
@@ -126,6 +129,7 @@ public class DiagnoseProjectTool implements SupportTool {
                 }
             }
             out.put("cdcState", state.isEmpty() ? null : state);
+            out.put("performance", performance(state));
         }
 
         Object failureResult = failures.execute(failureArgs(projectId, hours), ctx);
@@ -145,6 +149,94 @@ public class DiagnoseProjectTool implements SupportTool {
             out.put("alerts", mine);
         }
         return out;
+    }
+
+    /**
+     * Turns the live CDC counters into a small diagnosis the model can explain. This is
+     * deliberately deterministic: the assistant must not infer "target is slow" from a raw
+     * number without the evidence that batch latency, lag and consumer ownership were all
+     * checked.
+     */
+    private Map<String, Object> performance(Map<String, Object> state) {
+        Map<String, Object> stats = map(state.get("stats"));
+        Map<String, Object> position = map(state.get("position"));
+        boolean held = Boolean.TRUE.equals(state.get("consumerHeldHere"));
+        Long positionAge = number(position.get("ageSeconds"));
+        Long lag = number(stats.get("lagSeconds"));
+        Long averageBatch = number(stats.get("averageBatchMillis"));
+        Long maxBatch = number(stats.get("maxBatchMillis"));
+        Long batchRowsPerSecond = number(stats.get("batchRowsPerSecond"));
+        String lastError = text(stats.get("lastError"));
+        boolean baselineDone = Boolean.TRUE.equals(position.get("baselineDone"));
+
+        String diagnosis;
+        String advice;
+        if (lastError != null && lastError.toUpperCase(java.util.Locale.ROOT)
+                .contains("PURGED")) {
+            diagnosis = "PURGED";
+            advice = "Fix the target/connection, extend source log retention, then rebuild the"
+                    + " baseline; the stored position cannot be replayed.";
+        } else if (!held) {
+            diagnosis = "CONSUMER_ELSEWHERE";
+            advice = "No live consumer on this node. Check which node holds the CDC lease and"
+                    + " whether it is healthy; only that node has live batch/lag metrics.";
+        } else if (!baselineDone) {
+            diagnosis = "BASELINE_RUNNING";
+            advice = "The initial baseline is still running; judge throughput from its full-load"
+                    + " progress, not CDC lag.";
+        } else if (positionAge != null && positionAge > 300) {
+            diagnosis = "POSITION_STALLED";
+            advice = "The applied position has not moved for over five minutes; inspect the"
+                    + " target connection/apply errors before tuning batch size.";
+        } else if (lag != null && lag > 60 && averageBatch != null && averageBatch > 200) {
+            diagnosis = "TARGET_WRITE_SLOW";
+            advice = "Events are behind and target batches are slow. Consider a larger"
+                    + " sync.batch-size, then check target IO/indexes/triggers.";
+        } else if (lag != null && lag > 60) {
+            diagnosis = "CATCHING_UP";
+            advice = "The stream is behind but target batches are fast; inspect source"
+                    + " transaction size, reconnect frequency and target commit wait.";
+        } else if (lag != null && lag >= 0) {
+            diagnosis = "HEALTHY";
+            advice = "CDC is keeping up.";
+        } else {
+            diagnosis = "UNKNOWN";
+            advice = "No live lag sample; rely on position age and recent logs.";
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("diagnosis", diagnosis);
+        out.put("advice", advice);
+        out.put("consumerHeldHere", held);
+        out.put("positionAgeSeconds", positionAge);
+        out.put("eventLagSeconds", lag);
+        out.put("averageBatchMillis", averageBatch);
+        out.put("maxBatchMillis", maxBatch);
+        out.put("batchRowsPerSecond", batchRowsPerSecond);
+        out.put("currentBatchSize", properties.getBatchSize());
+        if ("TARGET_WRITE_SLOW".equals(diagnosis)
+                && properties.getBatchSize() < 2000) {
+            out.put("suggestedBatchSize", 2000);
+            out.put("suggestedParameter", "sync.batch-size");
+        }
+        return out;
+    }
+
+    private static Map<String, Object> map(Object value) {
+        if (!(value instanceof Map<?, ?> source)) {
+            return Map.of();
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        source.forEach((key, item) -> out.put(String.valueOf(key), item));
+        return out;
+    }
+
+    private static Long number(Object value) {
+        return value instanceof Number number ? number.longValue() : null;
+    }
+
+    private static String text(Object value) {
+        return value == null ? null : String.valueOf(value);
     }
 
     private ObjectNode failureArgs(long projectId, int hours) {

@@ -918,7 +918,11 @@ Conversion review lists a task's views, procedures and functions with a mechanic
   diagnose_project call gathers task state, recent failures, active alerts, the CDC position, the
   rebuild-relevant switches (captureStrategy, syncDeletes, truncateBeforeInitialLoad,
   fullCompareMaxRows, deleteCompareMaxRows) and the newest change / newest successful write times —
-  separating "never saw a change" (read side) from "saw it and the write failed" (write side).
+  separating "never saw a change" (read side) from "saw it and the write failed" (write side). For
+  CDC it also returns performance.diagnosis (PURGED, CONSUMER_ELSEWHERE, BASELINE_RUNNING,
+  POSITION_STALLED, TARGET_WRITE_SLOW, CATCHING_UP, HEALTHY); when TARGET_WRITE_SLOW carries a
+  suggestedBatchSize, offer update_system_params to raise sync.batch-size as a confirmation card;
+  it applies to the next CDC batch on this node after confirmation.
 - It searches this installation's own application log (`search_logs`) by keyword, level and
   rolled file — use it to explain an error stack or a failure.
 - It searches the deployed artifact (`search_instance_code`) for configuration and code
