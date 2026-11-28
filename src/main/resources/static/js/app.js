@@ -6175,18 +6175,40 @@
       var text = host.getAttribute('data-tip');
       if (!text) { return; }
       var tip = bubbleEl();
+      var plain = host.getAttribute('data-tip-style') === 'plain';
       tip.textContent = text;
-      tip.classList.toggle('plain-tip',
-        host.getAttribute('data-tip-style') === 'plain');
+      tip.classList.toggle('plain-tip', plain);
+      tip.classList.remove('is-above', 'is-below');
       tip.classList.add('is-on');
       var rect = host.getBoundingClientRect();
-      var gap = 8;
-      var left = rect.right + gap;
-      if (left + tip.offsetWidth > window.innerWidth - gap) {
-        left = Math.max(gap, rect.left - gap - tip.offsetWidth);
+      var gap = plain ? 10 : 8;
+      var left;
+      var top;
+      if (plain) {
+        // Project names open a real bubble below the name. The caret is measured from
+        // the host's centre, then the bubble is clamped inside the viewport; if the
+        // bottom edge would overflow, it flips above and the caret follows.
+        left = rect.left + rect.width / 2 - tip.offsetWidth / 2;
+        left = Math.max(gap, Math.min(left, window.innerWidth - tip.offsetWidth - gap));
+        var above = false;
+        top = rect.bottom + gap;
+        if (top + tip.offsetHeight > window.innerHeight - gap) {
+          top = rect.top - tip.offsetHeight - gap;
+          above = true;
+        }
+        top = Math.max(gap, top);
+        tip.classList.add(above ? 'is-above' : 'is-below');
+        var arrowX = rect.left + rect.width / 2 - left;
+        arrowX = Math.max(14, Math.min(tip.offsetWidth - 14, arrowX));
+        tip.style.setProperty('--tip-arrow-x', arrowX + 'px');
+      } else {
+        left = rect.right + gap;
+        if (left + tip.offsetWidth > window.innerWidth - gap) {
+          left = Math.max(gap, rect.left - gap - tip.offsetWidth);
+        }
+        top = rect.top + (rect.height - tip.offsetHeight) / 2;
+        top = Math.max(gap, Math.min(top, window.innerHeight - tip.offsetHeight - gap));
       }
-      var top = rect.top + (rect.height - tip.offsetHeight) / 2;
-      top = Math.max(gap, Math.min(top, window.innerHeight - tip.offsetHeight - gap));
       tip.style.left = left + 'px';
       tip.style.top = top + 'px';
     }

@@ -48,7 +48,7 @@
                         <td>
                             <!--/* 名称超长省略号截断；用和变更日志同款浮层看全名，而不是
                                    跟随系统的原生 title。 */-->
-                            <a class="truncate" style="font-weight:600"
+                            <a class="truncate project-name" style="font-weight:600"
                                th:attr="data-tip=${project.name}, data-tip-style='plain'"
                                th:href="@{/projects/{id}(id=${project.id})}"
                                th:text="${project.name}">Project</a>

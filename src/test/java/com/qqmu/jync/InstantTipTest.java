@@ -53,6 +53,22 @@ class InstantTipTest {
     }
 
     @Test
+    @DisplayName("项目名气泡在名称下方展开，带尖角和灰色正文")
+    void projectNameTipsSitBelowWithACaret() throws Exception {
+        String body = functionBody(read(JS), "function bindInstantTips(");
+        assertThat(body).as("plain 提示才走下方定位")
+                .contains("data-tip-style", "rect.bottom", "is-above", "is-below")
+                .contains("--tip-arrow-x");
+
+        String css = read(CSS);
+        String rule = cssRule(css, ".tip-body.tip-float.plain-tip {");
+        assertThat(rule).contains("color: #64748b", "overflow: visible");
+        assertThat(css).contains(
+                ".tip-body.tip-float.plain-tip.is-below::after",
+                ".tip-body.tip-float.plain-tip.is-above::after");
+    }
+
+    @Test
     @DisplayName("页面加载时注册，否则 data-tip 只是一段死属性")
     void itIsRegisteredAtStartup() throws Exception {
         assertThat(read(JS)).contains("bindInstantTips();");

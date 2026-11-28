@@ -92,7 +92,9 @@ class ProjectListPhoneLayoutTest {
 
         assertThat(html).contains("class=\"tbl tbl-projects\"");
         assertThat(html).contains("data-tip=\"p1\"")
-                .contains("data-tip-style=\"plain\"");
+                .contains("data-tip-style=\"plain\"")
+                .as("a block-level link would centre the tip under the whole cell")
+                .contains("class=\"truncate project-name\"");
     }
 
     @Test

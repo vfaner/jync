@@ -776,17 +776,50 @@ fieldset.bare { border: 0; padding: 0; margin: 0; min-width: 0; }
 .tip-body.tip-float { position: fixed; top: 0; left: 0; transform: none;
   max-width: calc(100vw - 16px); max-height: 60vh; overflow: hidden; z-index: 1450; }
 .tip-body.tip-float.is-on { opacity: 1; visibility: visible; }
-/* 项目名等纯文本提示：沿用错误详情气泡的白底/圆角/阴影，但改成灰色正文。 */
+/* 项目名等纯文本提示：白底、灰字、圆角阴影，并且在名称下方展开成一个真正的
+   气泡框。尖角用两层三角（外框色 + 填充色）画出来；气泡本身不能裁掉它。 */
 .tip-body.tip-float.plain-tip {
   width: auto; max-width: min(360px, calc(100vw - 16px));
-  background: #fff; color: var(--ink-soft);
+  max-height: none; overflow: visible;
+  background: #fff; color: #64748b;
   border: 1px solid var(--line); border-radius: 12px;
   box-shadow: 0 10px 26px rgba(15, 23, 42, .14);
 }
+.tip-body.tip-float.plain-tip::before,
+.tip-body.tip-float.plain-tip::after {
+  content: ""; position: absolute; left: var(--tip-arrow-x, 50%);
+  transform: translateX(-50%); border: 8px solid transparent;
+  pointer-events: none;
+}
+.tip-body.tip-float.plain-tip::after { border-width: 7px; }
+.tip-body.tip-float.plain-tip.is-below::before {
+  top: -8px; border-top: 0; border-bottom-color: var(--line);
+}
+.tip-body.tip-float.plain-tip.is-below::after {
+  top: -7px; border-top: 0; border-bottom-color: #fff;
+}
+.tip-body.tip-float.plain-tip.is-above::before {
+  bottom: -8px; border-bottom: 0; border-top-color: var(--line);
+}
+.tip-body.tip-float.plain-tip.is-above::after {
+  bottom: -7px; border-bottom: 0; border-top-color: #fff;
+}
 [data-theme="dark"] .tip-body.tip-float.plain-tip {
-  background: #1f2937; color: var(--ink-soft);
+  background: #1f2937; color: #cbd5e1;
   border-color: #4b5563;
   box-shadow: 0 10px 26px rgba(0, 0, 0, .45);
+}
+[data-theme="dark"] .tip-body.tip-float.plain-tip.is-below::before {
+  border-bottom-color: #4b5563;
+}
+[data-theme="dark"] .tip-body.tip-float.plain-tip.is-below::after {
+  border-bottom-color: #1f2937;
+}
+[data-theme="dark"] .tip-body.tip-float.plain-tip.is-above::before {
+  border-top-color: #4b5563;
+}
+[data-theme="dark"] .tip-body.tip-float.plain-tip.is-above::after {
+  border-top-color: #1f2937;
 }
 /* 变更日志里的错误详情：浅底红字的聊天气泡，默认在错误文字下方居中；下方空间
    不足时由脚本翻到上方，并切换箭头方向。 */
@@ -1403,6 +1436,10 @@ table.tbl td .btn-row { flex-wrap: nowrap; margin-bottom: 0; }
 table.tbl td .btn-row > * { margin: 0 0 0 6px; }
 table.tbl td .btn-row > *:first-child { margin-left: 0; }
 table.tbl a.truncate { display: block; }
+/* 项目名用 inline-block 收窄到文字宽度：普通表格链接是整格宽，气泡按整格居中
+   会飘到单元格中间，而不是名称正下方。超长名称仍由 .truncate 的 240px 上限
+   截断，气泡按截断后的可见宽度定位。 */
+table.tbl a.truncate.project-name { display: inline-block; vertical-align: top; }
 .wrap-detail { max-width: 420px; white-space: pre-wrap; word-break: break-word; font-size: 12.5px; }
 /* 变更日志的详情可能是整段错误/堆栈：单元格只显示两行，完整内容在悬停提示里。 */
 .wrap-detail.detail-clamp { display: -webkit-box; -webkit-line-clamp: 2;
