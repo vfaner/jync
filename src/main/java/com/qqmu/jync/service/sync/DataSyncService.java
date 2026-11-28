@@ -3019,7 +3019,8 @@ public class DataSyncService {
                         com.qqmu.jync.service.lob.LobBinder.newTracker();
                 try {
                     EmulatedUpsert.Outcome outcome = EmulatedUpsert.apply(
-                            insert, update, exists, guardUnchanged, (statement, kind) -> {
+                            insert, update, exists, guardUnchanged, guardUnchanged,
+                            (statement, kind) -> {
                                 switch (kind) {
                                     case EXISTS -> JdbcRowMapper.bind(statement, row, pkColumns,
                                             typeByColumn, ctx.getTargetDialect());

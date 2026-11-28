@@ -193,14 +193,7 @@ class CdcWritePlanCacheTest {
         public String getUpdateByPkSql(String schema, String table, List<String> columns,
                                        List<String> pkColumns) {
             updateStatements++;
-            return super.getUpdateByPkSql(schema, table, columns, pkColumns);
-        }
-
-        @Override
-        public String getUpdateByPkSql(String schema, String table, List<String> columns,
-                                       List<String> pkColumns, boolean guardUnchanged) {
-            updateStatements++;
-            return super.getUpdateByPkSql(schema, table, columns, pkColumns, guardUnchanged);
+            return super.getUpdateByPkSql(schema, table, columns, pkColumns, false);
         }
 
         @Override

@@ -402,7 +402,7 @@ public final class CdcEventApplier {
                 LobBinder.Tracker lobTracker = LobBinder.newTracker();
                 try {
                     EmulatedUpsert.Outcome outcome = EmulatedUpsert.apply(insert, update, exists,
-                            plan.guardUnchanged, (statement, kind) -> {
+                            false, true, (statement, kind) -> {
                                 switch (kind) {
                                     case EXISTS -> JdbcRowMapper.bind(statement, row,
                                             plan.pkColumns, plan.types, ctx.getTargetDialect());

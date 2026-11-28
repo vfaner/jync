@@ -34,7 +34,8 @@ public final class EmulatedUpsert {
      */
     public static Outcome apply(PreparedStatement insert, PreparedStatement update,
                                 PreparedStatement exists, boolean guardUnchanged,
-                                Binder binder) throws SQLException {
+                                boolean probeExistsAfterRetry, Binder binder)
+            throws SQLException {
         int updated = 0;
         if (update != null) {
             binder.bind(update, StatementKind.UPDATE);
@@ -61,7 +62,10 @@ public final class EmulatedUpsert {
                 if (update.executeUpdate() != 0) {
                     return Outcome.UPDATED;
                 }
-                if (exists != null && exists(exists, binder)) {
+                // A driver that reports changed rows answers 0 for a re-delivered unchanged
+                // row. Whether that ambiguity applies without the SQL guard is a per-engine
+                // decision (CDC has always probed; polling only does with the guard).
+                if (probeExistsAfterRetry && exists != null && exists(exists, binder)) {
                     return Outcome.NOOP;
                 }
                 throw e;
