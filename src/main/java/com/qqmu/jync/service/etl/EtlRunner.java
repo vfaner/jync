@@ -128,6 +128,15 @@ public class EtlRunner {
             source = sourceFactory.open(sourceConfig, connections);
             stage = Side.TARGET;
             target = connections.open(targetConfig);
+            // The configured host/port can be an alias for the very instance and schema the
+            // source is reading. Ask the databases themselves before OVERWRITE can delete
+            // the rows the extraction is about to fetch.
+            Connection sourceConnection = source instanceof JdbcEtlSource jdbc
+                    ? jdbc.connection() : null;
+            if (EtlDatabaseIdentity.sameDatabase(sourceConnection, target,
+                    sourceConfig, targetConfig)) {
+                throw new EtlProgramException("error.etl.same.database");
+            }
             target.setAutoCommit(false);
 
             String targetName = EtlSqlSupport.qualified(targetConfig, task.getTargetTable());

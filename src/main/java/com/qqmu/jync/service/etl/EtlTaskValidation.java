@@ -84,12 +84,43 @@ final class EtlTaskValidation {
                 && normalized(target.getHost()).isEmpty()) {
             return false;
         }
-        return normalized(source.getHost()).equals(normalized(target.getHost()))
+        return sameHost(source.getHost(), target.getHost())
                 && Objects.equals(source.getPort(), target.getPort())
                 && normalized(source.getDatabaseName()).equals(
                         normalized(target.getDatabaseName()))
                 && normalized(source.getSchemaName()).equals(
                         normalized(target.getSchemaName()));
+    }
+
+    /**
+     * Host aliases are common in connection rows (localhost vs 127.0.0.1, a CNAME, a
+     * container/service name). Compare resolved addresses as a second chance before deciding
+     * two endpoints are different; a DNS failure keeps the conservative string comparison.
+     */
+    private static boolean sameHost(String left, String right) {
+        String a = normalized(left);
+        String b = normalized(right);
+        if (a.equals(b)) {
+            return true;
+        }
+        if (a.isEmpty() || b.isEmpty()) {
+            return false;
+        }
+        try {
+            java.util.Set<String> addressesA = new java.util.LinkedHashSet<>();
+            for (java.net.InetAddress address : java.net.InetAddress.getAllByName(a)) {
+                addressesA.add(address.getHostAddress());
+            }
+            for (java.net.InetAddress address : java.net.InetAddress.getAllByName(b)) {
+                if (addressesA.contains(address.getHostAddress())) {
+                    return true;
+                }
+            }
+        } catch (java.net.UnknownHostException e) {
+            // A name that does not resolve cannot be proven distinct either; fall back to
+            // the normalized text comparison performed by the caller.
+        }
+        return false;
     }
 
     private static String normalized(String value) {

@@ -47,6 +47,11 @@ final class JdbcEtlSource implements EtlSource {
         }
     }
 
+    /** Package-private identity probe hook; the runner owns the source's lifetime. */
+    Connection connection() {
+        return connection;
+    }
+
     @Override
     public EtlSourceCursor query(EtlTask task, EtlCheckpointValue checkpoint) throws SQLException {
         List<String> statements = EtlSqlScript.split(task.getSourceSql(), scriptFamily());
